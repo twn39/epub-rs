@@ -29,14 +29,24 @@ impl EpubArchive<DirProvider> {
 }
 
 impl<P: EpubProvider> EpubArchive<P> {
-    /// Parse the EPUB archive and extract metadata, manifest, and spine
-    pub fn parse(&mut self) -> Result<EpubBook, EpubError> {
-        let rootfile_path = self.parse_container()?;
-        self.parse_opf(&rootfile_path)
+    /// Get all available renditions (rootfiles) in the EPUB container.
+    pub fn get_renditions(&mut self) -> Result<Vec<String>, EpubError> {
+        self.parse_container()
     }
 
-    /// Reads `META-INF/container.xml` to find the path of the primary OPF file
-    fn parse_container(&mut self) -> Result<String, EpubError> {
+    /// Parse the default (first) rendition of the EPUB archive.
+    pub fn parse(&mut self) -> Result<EpubBook, EpubError> {
+        let rootfiles = self.parse_container()?;
+        self.parse_rendition(&rootfiles[0])
+    }
+
+    /// Parse a specific rendition by its OPF path.
+    pub fn parse_rendition(&mut self, opf_path: &str) -> Result<EpubBook, EpubError> {
+        self.parse_opf(opf_path)
+    }
+
+    /// Reads `META-INF/container.xml` to find the paths of the OPF files
+    fn parse_container(&mut self) -> Result<Vec<String>, EpubError> {
         let mut container_file = self
             .provider
             .read_file("META-INF/container.xml")
@@ -48,7 +58,7 @@ impl<P: EpubProvider> EpubArchive<P> {
         let mut reader = Reader::from_str(&buf);
         reader.config_mut().trim_text(true);
 
-        let mut rootfile_path = None;
+        let mut rootfiles = Vec::new();
         let mut event_buf = Vec::new();
 
         loop {
@@ -58,9 +68,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                         for attr in e.attributes() {
                             let attr = attr?;
                             if attr.key.as_ref() == b"full-path" {
-                                rootfile_path =
-                                    Some(String::from_utf8_lossy(&attr.value).into_owned());
-                                break;
+                                rootfiles.push(String::from_utf8_lossy(&attr.value).into_owned());
                             }
                         }
                     }
@@ -71,9 +79,11 @@ impl<P: EpubProvider> EpubArchive<P> {
             event_buf.clear();
         }
 
-        rootfile_path.ok_or_else(|| {
-            EpubError::InvalidFormat("No rootfile full-path found in container.xml".to_string())
-        })
+        if rootfiles.is_empty() {
+            Err(EpubError::InvalidFormat("No rootfile full-path found in container.xml".to_string()))
+        } else {
+            Ok(rootfiles)
+        }
     }
 
     /// Parses the OPF file (usually .opf) to build the domain models

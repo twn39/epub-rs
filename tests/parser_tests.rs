@@ -119,4 +119,52 @@ mod tests {
         // Clean up
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_multiple_renditions() {
+        use epub_rs::parser::EpubArchive;
+        use std::io::Cursor;
+        use std::io::Write;
+
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            
+            zip.start_file("META-INF/container.xml", options).unwrap();
+            zip.write_all(b"<?xml version=\"1.0\"?>
+                <container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">
+                    <rootfiles>
+                        <rootfile full-path=\"OEBPS/book_reflowable.opf\" media-type=\"application/oebps-package+xml\"/>
+                        <rootfile full-path=\"OEBPS/book_fixed.opf\" media-type=\"application/oebps-package+xml\"/>
+                    </rootfiles>
+                </container>").unwrap();
+                
+            zip.start_file("OEBPS/book_reflowable.opf", options).unwrap();
+            zip.write_all(b"<package><metadata><dc:title>Reflowable Version</dc:title></metadata></package>").unwrap();
+            
+            zip.start_file("OEBPS/book_fixed.opf", options).unwrap();
+            zip.write_all(b"<package><metadata><dc:title>Fixed Version</dc:title></metadata></package>").unwrap();
+            
+            zip.finish().unwrap();
+        }
+        
+        buffer.set_position(0);
+        let mut archive = EpubArchive::new(buffer).expect("Failed to read test ZIP");
+        
+        let renditions = archive.get_renditions().expect("Failed to get renditions");
+        assert_eq!(renditions.len(), 2);
+        assert_eq!(renditions[0], "OEBPS/book_reflowable.opf");
+        assert_eq!(renditions[1], "OEBPS/book_fixed.opf");
+        
+        let book1 = archive.parse_rendition(&renditions[0]).expect("Failed to parse first rendition");
+        assert_eq!(book1.metadata.title.as_deref(), Some("Reflowable Version"));
+        
+        let book2 = archive.parse_rendition(&renditions[1]).expect("Failed to parse second rendition");
+        assert_eq!(book2.metadata.title.as_deref(), Some("Fixed Version"));
+        
+        // Calling default parse() should return the first one
+        let default_book = archive.parse().expect("Failed to parse default rendition");
+        assert_eq!(default_book.metadata.title.as_deref(), Some("Reflowable Version"));
+    }
 }
