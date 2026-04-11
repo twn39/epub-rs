@@ -38,14 +38,20 @@ mod tests {
             .version(EpubVersion::V30)
             .metadata(metadata)
             .add_chapter("chapter1", "text/ch1.xhtml", b"Hello".to_vec())
-            .add_resource_with_properties("style", "css/style.css", "text/css", b"".to_vec(), "nav");
+            .add_resource_with_properties(
+                "style",
+                "css/style.css",
+                "text/css",
+                b"".to_vec(),
+                "nav",
+            );
 
         let mut buffer = Cursor::new(Vec::new());
         builder.generate(&mut buffer).unwrap();
-        
+
         let opf_xml = extract_zip_file(&buffer.into_inner(), "OEBPS/content.opf");
         let sanitized_opf = sanitize_xml(&opf_xml);
-        
+
         let expected_opf = r##"<?xml version="1.0" encoding="UTF-8"?>
 <package version="3.0" unique-identifier="pub-id" xmlns="http://www.idpf.org/2007/opf">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -63,7 +69,7 @@ mod tests {
     <itemref idref="chapter1"/>
   </spine>
 </package>"##;
-        
+
         assert_eq!(sanitized_opf.trim(), expected_opf.trim());
     }
 }

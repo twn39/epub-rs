@@ -28,7 +28,7 @@ pub fn generate_idpf_key(identifier: &str) -> Vec<u8> {
 pub fn generate_adobe_key(identifier: &str) -> Vec<u8> {
     // Strip "urn:uuid:" prefix and dashes "-"
     let stripped = identifier.replace("urn:uuid:", "").replace("-", "");
-    
+
     let mut key = Vec::new();
     if stripped.len() == 32 {
         for i in (0..32).step_by(2) {
@@ -37,12 +37,12 @@ pub fn generate_adobe_key(identifier: &str) -> Vec<u8> {
             }
         }
     }
-    
+
     // Fallback if parsing fails, though it shouldn't for a valid UUID
     if key.len() != 16 {
         key = vec![0; 16];
     }
-    
+
     key
 }
 
@@ -57,12 +57,16 @@ pub struct DeobfuscatingReader<'a> {
 
 impl<'a> DeobfuscatingReader<'a> {
     /// Creates a new `DeobfuscatingReader`.
-    pub fn new(inner: Box<dyn Read + 'a>, identifier: &str, algorithm: ObfuscationAlgorithm) -> Self {
+    pub fn new(
+        inner: Box<dyn Read + 'a>,
+        identifier: &str,
+        algorithm: ObfuscationAlgorithm,
+    ) -> Self {
         let (key, obfuscation_length) = match algorithm {
             ObfuscationAlgorithm::Idpf => (generate_idpf_key(identifier), 1040),
             ObfuscationAlgorithm::Adobe => (generate_adobe_key(identifier), 1024),
         };
-        
+
         Self {
             inner,
             key,
@@ -93,7 +97,7 @@ impl<'a> Read for DeobfuscatingReader<'a> {
                 }
             }
         }
-        
+
         self.current_offset += bytes_read;
         Ok(bytes_read)
     }
@@ -117,32 +121,36 @@ mod tests {
     fn test_adobe_key_generation() {
         let key = generate_adobe_key("urn:uuid:550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(key.len(), 16);
-        assert_eq!(key, vec![
-            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4,
-            0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00
-        ]);
+        assert_eq!(
+            key,
+            vec![
+                0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+                0x00, 0x00
+            ]
+        );
     }
 
     #[test]
     fn test_deobfuscating_reader() {
         let identifier = "test-id";
         let key = generate_idpf_key(identifier);
-        
+
         // Create 2000 bytes of data
         let original_data = vec![42u8; 2000];
-        
+
         // Obfuscate the first 1040 bytes
         let mut obfuscated_data = original_data.clone();
         for i in 0..1040 {
             obfuscated_data[i] ^= key[i % 20];
         }
-        
+
         let cursor = Cursor::new(obfuscated_data);
-        let mut reader = DeobfuscatingReader::new(Box::new(cursor), identifier, ObfuscationAlgorithm::Idpf);
-        
+        let mut reader =
+            DeobfuscatingReader::new(Box::new(cursor), identifier, ObfuscationAlgorithm::Idpf);
+
         let mut output = Vec::new();
         reader.read_to_end(&mut output).unwrap();
-        
+
         assert_eq!(output.len(), 2000);
         assert_eq!(output, original_data);
     }

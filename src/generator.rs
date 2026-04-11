@@ -1,14 +1,14 @@
 //! EPUB generator module using Builder pattern.
 use crate::error::EpubError;
 use crate::model::{EpubVersion, Metadata, SpineItem, TocEntry};
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 use quick_xml::escape::escape;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use std::io::{Read, Seek, Write};
-use zip::write::SimpleFileOptions;
+use std::path::Path;
 use zip::CompressionMethod;
 use zip::ZipWriter;
-use std::path::Path;
+use zip::write::SimpleFileOptions;
 
 /// Represents the content of a resource, which can be either fully in-memory or a readable stream.
 pub enum ResourceContent {
@@ -17,17 +17,15 @@ pub enum ResourceContent {
 }
 
 /// Built-in themes for quick, elegant publishing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
     /// No CSS injected automatically.
     #[default]
     None,
-    /// A clean, modern typography stylesheet suitable for novels and articles, 
+    /// A clean, modern typography stylesheet suitable for novels and articles,
     /// with built-in dark mode support (media queries).
     Modern,
 }
-
 
 /// Represents a structural landmark (e.g. cover, titlepage, toc, bodymatter).
 #[derive(Clone, Debug)]
@@ -155,11 +153,7 @@ impl EpubBuilder {
     }
 
     /// Add a physical page mapping entry (for academic/textbook parity).
-    pub fn add_page(
-        mut self,
-        name: impl Into<String>,
-        href: impl Into<String>,
-    ) -> Self {
+    pub fn add_page(mut self, name: impl Into<String>, href: impl Into<String>) -> Self {
         self.page_list.push(PageListEntry {
             name: name.into(),
             href: href.into(),
@@ -266,7 +260,7 @@ impl EpubBuilder {
         let id_str = id.into();
         let content_bytes = content.into();
         let properties = Self::infer_properties(&content_bytes);
-        
+
         self.spine.push(SpineItem::new(id_str.clone()));
         self.resources.push(Resource {
             id: id_str,
@@ -287,8 +281,8 @@ impl EpubBuilder {
         content: impl Into<Vec<u8>>,
     ) -> Self {
         let id_str = id.into();
-        self.spine.push(SpineItem { 
-            idref: id_str.clone(), 
+        self.spine.push(SpineItem {
+            idref: id_str.clone(),
             linear: false,
             layout_override: None,
             page_spread: None,
@@ -322,8 +316,8 @@ impl EpubBuilder {
         self
     }
 
-    /// Add a chapter from an HTML file. Automatically discovers `<img src="...">` and 
-    /// `<link href="style.css">` tags, loads those files from the local disk, adds them to 
+    /// Add a chapter from an HTML file. Automatically discovers `<img src="...">` and
+    /// `<link href="style.css">` tags, loads those files from the local disk, adds them to
     /// the EPUB manifest, and rewrites the HTML to point to the new internal EPUB paths.
     pub fn add_chapter_from_html_file<P: AsRef<Path>>(
         mut self,
@@ -332,43 +326,57 @@ impl EpubBuilder {
     ) -> Result<Self, EpubError> {
         let path = file_path.as_ref();
         let base_dir = path.parent().unwrap_or_else(|| Path::new(""));
-        
+
         let mut html_content = std::fs::read(path).map_err(EpubError::Io)?;
         let filename = path.file_name().unwrap_or_default().to_string_lossy();
         let chapter_href = format!("text/{}", filename);
-        
+
         // Use lol_html to find assets and rewrite links
         use std::cell::RefCell;
         use std::rc::Rc;
         let assets_to_add = Rc::new(RefCell::new(Vec::new()));
-        
+
         let assets_img = Rc::clone(&assets_to_add);
         let assets_link = Rc::clone(&assets_to_add);
-        
+
         // A mapper that records local paths and rewrites to OEBPS internal paths
         let rewritten_html = crate::processor::rewrite_links(&html_content, move |tag, url| {
             // Ignore absolute URLs (http://, https://, data:)
             if url.starts_with("http") || url.starts_with("data:") {
                 return None;
             }
-            
+
             // Clean URL from anchors or query strings (e.g. img.jpg?v=1)
-            let clean_url = url.split('?').next().unwrap_or(url).split('#').next().unwrap_or(url);
-            
+            let clean_url = url
+                .split('?')
+                .next()
+                .unwrap_or(url)
+                .split('#')
+                .next()
+                .unwrap_or(url);
+
             if tag == "img" {
                 let internal_path = format!("images/{}", clean_url);
-                assets_img.borrow_mut().push((clean_url.to_string(), internal_path.clone(), "image/jpeg".to_string())); // Simplified mime
+                assets_img.borrow_mut().push((
+                    clean_url.to_string(),
+                    internal_path.clone(),
+                    "image/jpeg".to_string(),
+                )); // Simplified mime
                 return Some(format!("../{}", internal_path)); // relative to text/ folder
             } else if tag == "link" {
                 let internal_path = format!("styles/{}", clean_url);
-                assets_link.borrow_mut().push((clean_url.to_string(), internal_path.clone(), "text/css".to_string()));
+                assets_link.borrow_mut().push((
+                    clean_url.to_string(),
+                    internal_path.clone(),
+                    "text/css".to_string(),
+                ));
                 return Some(format!("../{}", internal_path));
             }
             None
         })?;
-        
+
         html_content = rewritten_html;
-        
+
         // Consume the assets to add
         let assets = Rc::try_unwrap(assets_to_add).unwrap().into_inner();
         for (local_path, internal_path, mime) in assets {
@@ -377,7 +385,7 @@ impl EpubBuilder {
             if let Ok(bytes) = std::fs::read(absolute_path) {
                 // Generate a safe ID for the asset
                 let asset_id = local_path.replace(['/', '.', '\\'], "_");
-                
+
                 // Add asset to builder
                 self.resources.push(Resource {
                     id: asset_id,
@@ -388,7 +396,7 @@ impl EpubBuilder {
                 });
             }
         }
-        
+
         // Add the rewritten chapter
         self.spine.push(SpineItem::new(id.into()));
         self.resources.push(Resource {
@@ -417,7 +425,7 @@ impl EpubBuilder {
         let mut spine_item = SpineItem::new(id_str.clone());
         spine_item.layout_override = layout;
         spine_item.page_spread = spread;
-        
+
         self.spine.push(spine_item);
         self.resources.push(Resource {
             id: id_str,
@@ -476,7 +484,7 @@ impl EpubBuilder {
         // Auto-generate Navigation documents if we have TOC entries
         let has_toc = !self.toc.is_empty();
         let mut has_ncx = false;
-        
+
         if has_toc {
             // EPUB 3 requires nav.xhtml
             if self.version == EpubVersion::V30 {
@@ -488,7 +496,7 @@ impl EpubBuilder {
                     content: ResourceContent::Bytes(nav_html.into_bytes()),
                     properties: Some("nav".to_string()),
                 });
-                
+
                 // Fallback NCX for backwards compatibility
                 has_ncx = true;
             } else if self.version == EpubVersion::V20 {
@@ -508,12 +516,14 @@ impl EpubBuilder {
         }
 
         // 1. Write `mimetype` (MUST be first, MUST be uncompressed)
-        let options_stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let options_stored =
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
         zip.start_file("mimetype", options_stored)?;
         zip.write_all(b"application/epub+zip")?;
 
         // Standard compression for the rest of the files
-        let options_deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let options_deflated =
+            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
         // 2. Write `META-INF/container.xml`
         zip.start_file("META-INF/container.xml", options_deflated)?;
@@ -536,19 +546,30 @@ impl EpubBuilder {
                 ResourceContent::Bytes(mut bytes) => {
                     // Inject CSS reference if it's an HTML file and theme is enabled
                     if res.media_type == "application/xhtml+xml"
-                        && let Some(css_href) = theme_href {
-                            // Calculate relative path from this HTML file to the styles dir.
-                            // Simplified logic: Count slashes in `res.href` to figure out depth
-                            let depth = res.href.chars().filter(|&c| c == '/').count();
-                            let up_path = "../".repeat(depth);
-                            let relative_css_path = format!("{}{}", up_path, css_href);
-                            
-                            let link_tag = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\" />\n", relative_css_path);
-                            let mut new_html = Vec::new();
-                            if crate::processor::inject_head_content(&bytes[..], &mut new_html, &link_tag).is_ok() && !new_html.is_empty() {
-                                bytes = new_html;
-                            }
+                        && let Some(css_href) = theme_href
+                    {
+                        // Calculate relative path from this HTML file to the styles dir.
+                        // Simplified logic: Count slashes in `res.href` to figure out depth
+                        let depth = res.href.chars().filter(|&c| c == '/').count();
+                        let up_path = "../".repeat(depth);
+                        let relative_css_path = format!("{}{}", up_path, css_href);
+
+                        let link_tag = format!(
+                            "<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\" />\n",
+                            relative_css_path
+                        );
+                        let mut new_html = Vec::new();
+                        if crate::processor::inject_head_content(
+                            &bytes[..],
+                            &mut new_html,
+                            &link_tag,
+                        )
+                        .is_ok()
+                            && !new_html.is_empty()
+                        {
+                            bytes = new_html;
                         }
+                    }
                     zip.write_all(&bytes)?;
                 }
                 ResourceContent::Stream(ref mut stream) => {
@@ -569,12 +590,16 @@ impl EpubBuilder {
 
     /// Generate EPUB 3 `nav.xhtml`
     fn generate_nav_xhtml(&self) -> String {
-        let mut html = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head><title>Navigation</title></head>\n<body>\n<nav epub:type=\"toc\" id=\"toc\">\n<h1>Table of Contents</h1>\n");
+        let mut html = String::from(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head><title>Navigation</title></head>\n<body>\n<nav epub:type=\"toc\" id=\"toc\">\n<h1>Table of Contents</h1>\n",
+        );
         Self::build_nav_list(&self.toc, &mut html);
         html.push_str("</nav>\n");
 
         if !self.landmarks.is_empty() {
-            html.push_str("<nav epub:type=\"landmarks\" id=\"landmarks\">\n<h2>Landmarks</h2>\n<ol>\n");
+            html.push_str(
+                "<nav epub:type=\"landmarks\" id=\"landmarks\">\n<h2>Landmarks</h2>\n<ol>\n",
+            );
             for landmark in &self.landmarks {
                 html.push_str(&format!(
                     "  <li><a epub:type=\"{}\" href=\"{}\">{}</a></li>\n",
@@ -587,7 +612,9 @@ impl EpubBuilder {
         }
 
         if !self.page_list.is_empty() {
-            html.push_str("<nav epub:type=\"page-list\" id=\"page-list\">\n<h2>Page List</h2>\n<ol>\n");
+            html.push_str(
+                "<nav epub:type=\"page-list\" id=\"page-list\">\n<h2>Page List</h2>\n<ol>\n",
+            );
             for page in &self.page_list {
                 html.push_str(&format!(
                     "  <li><a href=\"{}\">{}</a></li>\n",
@@ -603,10 +630,16 @@ impl EpubBuilder {
     }
 
     fn build_nav_list(entries: &[TocEntry], html: &mut String) {
-        if entries.is_empty() { return; }
+        if entries.is_empty() {
+            return;
+        }
         html.push_str("<ol>\n");
         for entry in entries {
-            html.push_str(&format!("  <li><a href=\"{}\">{}</a>", escape(&entry.href), escape(&entry.title)));
+            html.push_str(&format!(
+                "  <li><a href=\"{}\">{}</a>",
+                escape(&entry.href),
+                escape(&entry.title)
+            ));
             if !entry.children.is_empty() {
                 html.push('\n');
                 Self::build_nav_list(&entry.children, html);
@@ -619,14 +652,19 @@ impl EpubBuilder {
     /// Generate EPUB 2 compatible `toc.ncx`
     fn generate_ncx(&self) -> String {
         let title = self.metadata.title.as_deref().unwrap_or("Untitled");
-        
+
         let max_page = self.page_list.len(); // A rough estimate for total/max pages
-        
-        let mut ncx = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"urn:uuid:default-epub-rs-id\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"{}\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"{}\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n", max_page, max_page, escape(title));
-        
+
+        let mut ncx = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"urn:uuid:default-epub-rs-id\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"{}\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"{}\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n",
+            max_page,
+            max_page,
+            escape(title)
+        );
+
         let mut play_order = 0;
         Self::build_ncx_navpoints(&self.toc, &mut ncx, &mut play_order);
-        
+
         ncx.push_str("  </navMap>\n");
 
         if !self.page_list.is_empty() {
@@ -653,11 +691,11 @@ impl EpubBuilder {
                 "    <navPoint id=\"navPoint-{}\" playOrder=\"{}\">\n      <navLabel><text>{}</text></navLabel>\n      <content src=\"{}\"/>\n",
                 current_order, current_order, escape(&entry.title), escape(&entry.href)
             ));
-            
+
             if !entry.children.is_empty() {
                 Self::build_ncx_navpoints(&entry.children, ncx, play_order);
             }
-            
+
             ncx.push_str("    </navPoint>\n");
         }
     }
@@ -669,7 +707,7 @@ impl EpubBuilder {
         // but string scanning is much faster and sufficient for detecting these tags.
         let html_str = String::from_utf8_lossy(content);
         let lower = html_str.to_lowercase();
-        
+
         if lower.contains("<script") {
             props.push("scripted");
         }
@@ -679,7 +717,7 @@ impl EpubBuilder {
         if lower.contains("<math") {
             props.push("mathml");
         }
-        
+
         if props.is_empty() {
             None
         } else {
@@ -831,16 +869,18 @@ impl EpubBuilder {
                 } else if item.layout_override == Some(crate::model::LayoutType::PrePaginated) {
                     properties.push("rendition:layout-pre-paginated");
                 }
-                
+
                 if let Some(spread) = item.page_spread {
                     match spread {
                         crate::model::PageSpread::Left => properties.push("page-spread-left"),
                         crate::model::PageSpread::Right => properties.push("page-spread-right"),
-                        crate::model::PageSpread::Center => properties.push("rendition:page-spread-center"),
+                        crate::model::PageSpread::Center => {
+                            properties.push("rendition:page-spread-center")
+                        }
                         crate::model::PageSpread::None => (),
                     }
                 }
-                
+
                 if !properties.is_empty() {
                     let prop_str = properties.join(" ");
                     itemref.push_attribute(("properties", prop_str.as_str()));
@@ -888,10 +928,15 @@ mod tests {
     #[test]
     fn test_infer_properties() {
         // Pure text/html should yield no properties
-        assert_eq!(EpubBuilder::infer_properties(b"<html><body><h1>Title</h1></body></html>"), None);
+        assert_eq!(
+            EpubBuilder::infer_properties(b"<html><body><h1>Title</h1></body></html>"),
+            None
+        );
 
         // Scripts
-        let script = EpubBuilder::infer_properties(b"<html><head><script src='test.js'></script></head></html>");
+        let script = EpubBuilder::infer_properties(
+            b"<html><head><script src='test.js'></script></head></html>",
+        );
         assert_eq!(script.as_deref(), Some("scripted"));
 
         // Case insensitivity
@@ -903,7 +948,9 @@ mod tests {
         assert_eq!(svg.as_deref(), Some("svg"));
 
         // MathML
-        let math = EpubBuilder::infer_properties(b"<math xmlns='http://www.w3.org/1998/Math/MathML'><mi>x</mi></math>");
+        let math = EpubBuilder::infer_properties(
+            b"<math xmlns='http://www.w3.org/1998/Math/MathML'><mi>x</mi></math>",
+        );
         assert_eq!(math.as_deref(), Some("mathml"));
 
         // Multiple properties
@@ -930,7 +977,9 @@ mod tests {
             .add_chapter("chapter1", "text/ch1.xhtml", b"Hello".to_vec());
 
         let mut buffer = Cursor::new(Vec::new());
-        builder.generate(&mut buffer).expect("Failed to generate EPUB");
+        builder
+            .generate(&mut buffer)
+            .expect("Failed to generate EPUB");
 
         let data = buffer.into_inner();
         let reader = Cursor::new(data);

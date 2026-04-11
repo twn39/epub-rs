@@ -3,8 +3,7 @@
 use std::collections::HashMap;
 
 /// Specifies the version of the EPUB standard to target during generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EpubVersion {
     /// EPUB 2.0 (Compatible with older e-readers, relies on NCX)
     V20,
@@ -12,7 +11,6 @@ pub enum EpubVersion {
     #[default]
     V30,
 }
-
 
 /// The layout rendition type of the EPUB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

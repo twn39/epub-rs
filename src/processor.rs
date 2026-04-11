@@ -1,14 +1,14 @@
 //! HTML content processor using `lol_html`.
 
 use crate::error::EpubError;
-use lol_html::{element, text, HtmlRewriter, Settings};
+use crate::model::ContentElement;
+use crate::model::Position;
+use kuchikiki::NodeRef;
+use kuchikiki::traits::*;
+use lol_html::{HtmlRewriter, Settings, element, text};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
-use crate::model::Position;
-use crate::model::ContentElement;
-use kuchikiki::traits::*;
-use kuchikiki::NodeRef;
 
 /// Extracts plain text from an HTML byte slice.
 pub fn extract_text(html: &[u8]) -> Result<String, EpubError> {
@@ -23,9 +23,7 @@ pub fn extract_text_stream<R: Read>(mut reader: R) -> Result<String, EpubError> 
     let mut rewriter = HtmlRewriter::new(
         Settings {
             element_content_handlers: vec![
-                element!("script, style", |_el| {
-                    Ok(())
-                }),
+                element!("script, style", |_el| { Ok(()) }),
                 text!("body", |t| {
                     text_clone.borrow_mut().push_str(t.as_str());
                     Ok(())
@@ -33,7 +31,7 @@ pub fn extract_text_stream<R: Read>(mut reader: R) -> Result<String, EpubError> 
             ],
             ..Settings::default()
         },
-        |_: &[u8]| {} // We discard the output HTML since we only want text
+        |_: &[u8]| {}, // We discard the output HTML since we only want text
     );
 
     let mut buffer = [0; 8192]; // 8KB buffer
@@ -91,23 +89,32 @@ where
                 element_content_handlers: vec![
                     element!("img[src]", move |el| {
                         if let Some(src) = el.get_attribute("src")
-                            && let Some(new_src) = (mapper_img.borrow_mut())("img", &src) {
-                                el.set_attribute("src", &new_src).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                            }
+                            && let Some(new_src) = (mapper_img.borrow_mut())("img", &src)
+                        {
+                            el.set_attribute("src", &new_src).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                        }
                         Ok(())
                     }),
                     element!("a[href]", move |el| {
                         if let Some(href) = el.get_attribute("href")
-                            && let Some(new_href) = (mapper_a.borrow_mut())("a", &href) {
-                                el.set_attribute("href", &new_href).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                            }
+                            && let Some(new_href) = (mapper_a.borrow_mut())("a", &href)
+                        {
+                            el.set_attribute("href", &new_href).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                        }
                         Ok(())
                     }),
                     element!("link[href]", move |el| {
                         if let Some(href) = el.get_attribute("href")
-                            && let Some(new_href) = (mapper_link.borrow_mut())("link", &href) {
-                                el.set_attribute("href", &new_href).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                            }
+                            && let Some(new_href) = (mapper_link.borrow_mut())("link", &href)
+                        {
+                            el.set_attribute("href", &new_href).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
+                        }
                         Ok(())
                     }),
                 ],
@@ -158,19 +165,17 @@ pub fn inject_head_content<R: Read, W: Write>(
 ) -> Result<(), EpubError> {
     let write_error = Rc::new(RefCell::new(None));
     let error_clone = Rc::clone(&write_error);
-    
+
     // We clone the string so it can be moved into the closure
     let content = content_to_inject.to_string();
 
     {
         let mut rewriter = HtmlRewriter::new(
             Settings {
-                element_content_handlers: vec![
-                    element!("head", move |el| {
-                        el.append(&content, lol_html::html_content::ContentType::Html);
-                        Ok(())
-                    }),
-                ],
+                element_content_handlers: vec![element!("head", move |el| {
+                    el.append(&content, lol_html::html_content::ContentType::Html);
+                    Ok(())
+                })],
                 ..Settings::default()
             },
             |c: &[u8]| {
@@ -189,15 +194,15 @@ pub fn inject_head_content<R: Read, W: Write>(
             if bytes_read == 0 {
                 break;
             }
-            rewriter
-                .write(&buffer[..bytes_read])
-                .map_err(|e| EpubError::InvalidFormat(format!("HTML theme injection error: {}", e)))?;
+            rewriter.write(&buffer[..bytes_read]).map_err(|e| {
+                EpubError::InvalidFormat(format!("HTML theme injection error: {}", e))
+            })?;
         }
 
         if write_error.borrow().is_none() {
-            rewriter
-                .end()
-                .map_err(|e| EpubError::InvalidFormat(format!("HTML theme injection error: {}", e)))?;
+            rewriter.end().map_err(|e| {
+                EpubError::InvalidFormat(format!("HTML theme injection error: {}", e))
+            })?;
         }
     }
 
@@ -210,46 +215,49 @@ pub fn inject_head_content<R: Read, W: Write>(
 }
 
 /// Injects Canonical Fragment Identifier (CFI) paths as `data-cfi` attributes into all HTML elements.
-/// 
+///
 /// This uses `kuchikiki` to build a DOM tree, calculate the strict CFI path for every node, and serialize it.
 /// It accepts a `base_cfi` (e.g., `/6/4[chap01ref]!`) to prepend to the local path.
 pub fn inject_cfi_dom(html: &str, base_cfi: &str) -> Result<String, EpubError> {
     let document = kuchikiki::parse_html().one(html);
-    
+
     // We start from the html element (or body if preferred).
     // In EPUB CFI, the <html> element is usually `/2` under the document root.
     if let Ok(html_node) = document.select_first("html") {
         traverse_and_inject(html_node.as_node(), base_cfi, "");
     }
-    
+
     let mut out = Vec::new();
-    document.serialize(&mut out).map_err(|e| EpubError::InvalidFormat(format!("DOM serialization failed: {}", e)))?;
+    document
+        .serialize(&mut out)
+        .map_err(|e| EpubError::InvalidFormat(format!("DOM serialization failed: {}", e)))?;
     Ok(String::from_utf8_lossy(&out).to_string())
 }
 
 fn traverse_and_inject(node: &NodeRef, base_cfi: &str, current_path: &str) {
     let mut child_index = 0; // 0 is before the first element
-    
+
     for child in node.children() {
         if child.as_element().is_some() {
             child_index += 2; // Elements are 2, 4, 6...
-            
-            let id_assertion = child.as_element()
+
+            let id_assertion = child
+                .as_element()
                 .and_then(|el| el.attributes.borrow().get("id").map(|s| s.to_string()));
-            
+
             let assertion_str = match id_assertion {
                 Some(id) => format!("[{}]", id),
                 None => String::new(),
             };
-            
+
             let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
-            
+
             // Inject attribute
             if let Some(el) = child.as_element() {
                 let full_cfi = format!("epubcfi({}{})", base_cfi, child_path);
                 el.attributes.borrow_mut().insert("data-cfi", full_cfi);
             }
-            
+
             // Recurse into children
             traverse_and_inject(&child, base_cfi, &child_path);
         }
@@ -267,70 +275,79 @@ pub struct SearchResult {
 
 /// Searches an HTML string for a regular expression pattern and returns a list of results
 /// mapped to their exact CFI ranges.
-/// 
+///
 /// This is a killer feature for building web readers: the backend searches the text
 /// and returns the CFIs. The frontend can just use these CFIs to highlight the results
 /// without needing to parse or search the DOM itself.
-/// 
+///
 /// * `html` - The raw HTML content of the chapter.
 /// * `base_cfi` - The OPF context path (e.g. `/6/4!`).
 /// * `pattern` - A compiled regular expression to search for.
-pub fn search_chapter(html: &str, base_cfi: &str, pattern: &regex::Regex) -> Result<Vec<SearchResult>, EpubError> {
+pub fn search_chapter(
+    html: &str,
+    base_cfi: &str,
+    pattern: &regex::Regex,
+) -> Result<Vec<SearchResult>, EpubError> {
     let document = kuchikiki::parse_html().one(html);
-    
+
     let mut results = Vec::new();
-    
+
     // We start from the html element
     if let Ok(html_node) = document.select_first("html") {
         search_node(html_node.as_node(), base_cfi, "", pattern, &mut results);
     }
-    
+
     Ok(results)
 }
 
-fn search_node(node: &NodeRef, base_cfi: &str, current_path: &str, pattern: &regex::Regex, results: &mut Vec<SearchResult>) {
+fn search_node(
+    node: &NodeRef,
+    base_cfi: &str,
+    current_path: &str,
+    pattern: &regex::Regex,
+    results: &mut Vec<SearchResult>,
+) {
     let mut child_index = 0; // Starts at 0 (before any element)
-    
+
     for child in node.children() {
         if child.as_element().is_some() {
             child_index += 2; // Next element index
-            
-            let id_assertion = child.as_element()
+
+            let id_assertion = child
+                .as_element()
                 .and_then(|el| el.attributes.borrow().get("id").map(|s| s.to_string()));
-            
+
             let assertion_str = match id_assertion {
                 Some(id) => format!("[{}]", id),
                 None => String::new(),
             };
-            
+
             let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
-            
+
             // Recurse into children
             search_node(&child, base_cfi, &child_path, pattern, results);
         } else if let Some(text_node) = child.as_text() {
             let text = text_node.borrow();
-            
+
             // Text nodes are odd numbers in CFI: 1, 3, 5...
             let cfi_text_idx = child_index + 1;
-            
+
             for mat in pattern.find_iter(&text) {
                 let start = mat.start();
                 let end = mat.end();
-                
+
                 // Build the range CFI
                 // e.g. epubcfi(/6/4!/4/2,/1:start,/1:end)
                 let range_cfi = format!(
                     "epubcfi({}{},/{}:{},/{}:{})",
-                    base_cfi, current_path,
-                    cfi_text_idx, start,
-                    cfi_text_idx, end
+                    base_cfi, current_path, cfi_text_idx, start, cfi_text_idx, end
                 );
-                
+
                 // Extract a small context excerpt (up to 20 chars around the match)
                 let context_start = start.saturating_sub(20);
                 let context_end = std::cmp::min(text.len(), end + 20);
                 let excerpt = text[context_start..context_end].to_string();
-                
+
                 results.push(SearchResult {
                     excerpt,
                     cfi: range_cfi,
@@ -356,7 +373,14 @@ pub fn extract_positions(
 ) {
     let document = kuchikiki::parse_html().one(html);
     if let Ok(html_node) = document.select_first("html") {
-        traverse_for_positions(html_node.as_node(), ctx, "", char_counter, positions, global_pos);
+        traverse_for_positions(
+            html_node.as_node(),
+            ctx,
+            "",
+            char_counter,
+            positions,
+            global_pos,
+        );
     }
 }
 
@@ -369,38 +393,49 @@ fn traverse_for_positions(
     global_pos: &mut usize,
 ) {
     let mut child_index = 0;
-    
+
     for child in node.children() {
         if child.as_element().is_some() {
             child_index += 2;
-            let id_assertion = child.as_element()
+            let id_assertion = child
+                .as_element()
                 .and_then(|el| el.attributes.borrow().get("id").map(|s| s.to_string()));
             let assertion_str = match id_assertion {
                 Some(id) => format!("[{}]", id),
                 None => String::new(),
             };
             let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
-            
-            traverse_for_positions(&child, ctx, &child_path, char_counter, positions, global_pos);
+
+            traverse_for_positions(
+                &child,
+                ctx,
+                &child_path,
+                char_counter,
+                positions,
+                global_pos,
+            );
         } else if let Some(text_node) = child.as_text() {
             let text = text_node.borrow();
             let text_len = text.chars().count();
             let cfi_text_idx = child_index + 1;
-            
+
             let mut offset = 0;
             while *char_counter + (text_len - offset) >= ctx.chars_per_position {
                 let chars_needed = ctx.chars_per_position - *char_counter;
                 offset += chars_needed;
-                
+
                 *global_pos += 1;
                 let mut stripped_base = ctx.base_cfi.to_string();
                 if stripped_base.ends_with('!') {
                     stripped_base.pop();
                 }
-                
+
                 // Add the specific CFI range
-                let cfi = format!("epubcfi({}!{}/{}:{})", stripped_base, current_path, cfi_text_idx, offset);
-                
+                let cfi = format!(
+                    "epubcfi({}!{}/{}:{})",
+                    stripped_base, current_path, cfi_text_idx, offset
+                );
+
                 positions.push(Position {
                     spine_index: ctx.spine_index,
                     href: ctx.href.to_string(),
@@ -409,7 +444,7 @@ fn traverse_for_positions(
                     chapter_progression: 0.0,
                     total_progression: 0.0,
                 });
-                
+
                 *char_counter = 0;
             }
             *char_counter += text_len - offset;
@@ -423,13 +458,32 @@ fn traverse_for_positions(
 pub fn extract_semantic_content(html: &str, base_cfi: &str) -> Vec<ContentElement> {
     let document = kuchikiki::parse_html().one(html);
     let mut elements = Vec::new();
-    
+
     // Find language from html tag or body if defined
-    let doc_lang = document.select_first("html").ok()
-        .and_then(|n| n.as_node().as_element().unwrap().attributes.borrow().get("lang").map(|s| s.to_string()))
-        .or_else(|| document.select_first("html").ok()
-        .and_then(|n| n.as_node().as_element().unwrap().attributes.borrow().get("xml:lang").map(|s| s.to_string())));
-        
+    let doc_lang = document
+        .select_first("html")
+        .ok()
+        .and_then(|n| {
+            n.as_node()
+                .as_element()
+                .unwrap()
+                .attributes
+                .borrow()
+                .get("lang")
+                .map(|s| s.to_string())
+        })
+        .or_else(|| {
+            document.select_first("html").ok().and_then(|n| {
+                n.as_node()
+                    .as_element()
+                    .unwrap()
+                    .attributes
+                    .borrow()
+                    .get("xml:lang")
+                    .map(|s| s.to_string())
+            })
+        });
+
     let html_node_path = ""; // HTML itself is usually implicit in the `!` boundary
 
     if let Ok(html_node) = document.select_first("html") {
@@ -437,7 +491,7 @@ pub fn extract_semantic_content(html: &str, base_cfi: &str) -> Vec<ContentElemen
         let mut child_index = 0;
         let mut body_path = format!("{}/4", html_node_path); // Default is /4
         let mut body_node = None;
-        
+
         for child in html_node.as_node().children() {
             if let Some(el) = child.as_element() {
                 child_index += 2;
@@ -448,23 +502,17 @@ pub fn extract_semantic_content(html: &str, base_cfi: &str) -> Vec<ContentElemen
                 }
             }
         }
-        
+
         if let Some(body) = body_node {
             let mut stripped_base = base_cfi.to_string();
             if stripped_base.ends_with('!') {
                 stripped_base.pop();
             }
-            
-            traverse_semantic_nodes(
-                &body, 
-                &stripped_base, 
-                &body_path, 
-                &doc_lang, 
-                &mut elements
-            );
+
+            traverse_semantic_nodes(&body, &stripped_base, &body_path, &doc_lang, &mut elements);
         }
     }
-    
+
     elements
 }
 
@@ -481,15 +529,15 @@ fn traverse_semantic_nodes(
         if let Some(el) = child.as_element() {
             child_index += 2;
             let tag_name = el.name.local.to_string();
-            
+
             let id_assertion = el.attributes.borrow().get("id").map(|s| s.to_string());
             let assertion_str = match id_assertion {
                 Some(id) => format!("[{}]", id),
                 None => String::new(),
             };
-            
+
             let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
-            
+
             let mut current_lang = inherited_lang.clone();
             if let Some(lang) = el.attributes.borrow().get("lang") {
                 current_lang = Some(lang.to_string());
@@ -500,14 +548,24 @@ fn traverse_semantic_nodes(
             // Is this a block-level semantic container?
             let is_block = matches!(
                 tag_name.as_str(),
-                "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote" | "li" | "dt" | "dd" | "figcaption"
+                "p" | "h1"
+                    | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "blockquote"
+                    | "li"
+                    | "dt"
+                    | "dd"
+                    | "figcaption"
             );
 
             if is_block {
                 let text_content = child.text_contents().trim().to_string();
                 if !text_content.is_empty() {
                     let cfi_range = format!("epubcfi({}!{})", base_cfi, child_path);
-                    
+
                     elements.push(ContentElement {
                         text: text_content,
                         cfi_range,

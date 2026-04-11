@@ -1,4 +1,4 @@
-use lol_html::{text, HtmlRewriter, Settings};
+use lol_html::{HtmlRewriter, Settings, text};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -9,15 +9,13 @@ fn main() {
 
     let mut rewriter = HtmlRewriter::new(
         Settings {
-            element_content_handlers: vec![
-                text!("body", |t| {
-                    text_clone.borrow_mut().push_str(t.as_str());
-                    Ok(())
-                })
-            ],
+            element_content_handlers: vec![text!("body", |t| {
+                text_clone.borrow_mut().push_str(t.as_str());
+                Ok(())
+            })],
             ..Settings::default()
         },
-        |_: &[u8]| {}
+        |_: &[u8]| {},
     );
 
     rewriter.write(html).unwrap();

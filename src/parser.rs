@@ -3,10 +3,10 @@
 use crate::error::EpubError;
 use crate::model::{EpubBook, ManifestItem, Position, TocEntry};
 use crate::provider::{DirProvider, EpubProvider, ZipProvider};
-use quick_xml::events::Event;
-use quick_xml::Reader;
-use std::io::{Read, Seek};
 use kuchikiki::traits::*;
+use quick_xml::Reader;
+use quick_xml::events::Event;
+use std::io::{Read, Seek};
 
 /// A struct that handles unpacking and parsing EPUB files.
 pub struct EpubArchive<P: EpubProvider> {
@@ -49,7 +49,10 @@ impl<P: EpubProvider> EpubArchive<P> {
     }
 
     /// Reads `META-INF/encryption.xml` to find obfuscated resources
-    fn parse_encryption(&mut self) -> Result<std::collections::HashMap<String, crate::crypto::ObfuscationAlgorithm>, EpubError> {
+    fn parse_encryption(
+        &mut self,
+    ) -> Result<std::collections::HashMap<String, crate::crypto::ObfuscationAlgorithm>, EpubError>
+    {
         let mut encryptions = std::collections::HashMap::new();
 
         let mut enc_file = match self.provider.read_file("META-INF/encryption.xml") {
@@ -75,26 +78,30 @@ impl<P: EpubProvider> EpubArchive<P> {
                     if name.ends_with("EncryptionMethod") {
                         for attr in e.attributes() {
                             if let Ok(attr) = attr
-                                && attr.key.as_ref() == b"Algorithm" {
-                                    let val = String::from_utf8_lossy(&attr.value);
-                                    if val == "http://www.idpf.org/2008/embedding" {
-                                        current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
-                                    } else if val == "http://ns.adobe.com/pdf/enc#RC" {
-                                        current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
-                                    }
+                                && attr.key.as_ref() == b"Algorithm"
+                            {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                if val == "http://www.idpf.org/2008/embedding" {
+                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
+                                } else if val == "http://ns.adobe.com/pdf/enc#RC" {
+                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
                                 }
+                            }
                         }
                     } else if name.ends_with("CipherReference") {
                         for attr in e.attributes() {
                             if let Ok(attr) = attr
-                                && attr.key.as_ref() == b"URI" {
-                                    let uri = String::from_utf8_lossy(&attr.value).into_owned();
-                                    // URL Decode URI (encryption.xml URIs are standard percent-encoded)
-                                    let decoded_uri = percent_encoding::percent_decode_str(&uri).decode_utf8_lossy().into_owned();
-                                    if let Some(algo) = current_algo {
-                                        encryptions.insert(decoded_uri, algo);
-                                    }
+                                && attr.key.as_ref() == b"URI"
+                            {
+                                let uri = String::from_utf8_lossy(&attr.value).into_owned();
+                                // URL Decode URI (encryption.xml URIs are standard percent-encoded)
+                                let decoded_uri = percent_encoding::percent_decode_str(&uri)
+                                    .decode_utf8_lossy()
+                                    .into_owned();
+                                if let Some(algo) = current_algo {
+                                    encryptions.insert(decoded_uri, algo);
                                 }
+                            }
                         }
                     }
                 }
@@ -149,7 +156,9 @@ impl<P: EpubProvider> EpubArchive<P> {
         }
 
         if rootfiles.is_empty() {
-            Err(EpubError::InvalidFormat("No rootfile full-path found in container.xml".to_string()))
+            Err(EpubError::InvalidFormat(
+                "No rootfile full-path found in container.xml".to_string(),
+            ))
         } else {
             Ok(rootfiles)
         }
@@ -178,9 +187,13 @@ impl<P: EpubProvider> EpubArchive<P> {
         let mut current_id = None; // For elements like <dc:creator id="creator1">
 
         // A temporary map to store metadata refinements (refines -> property -> value)
-        let mut refinements: std::collections::HashMap<String, std::collections::HashMap<String, String>> = std::collections::HashMap::new();
+        let mut refinements: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, String>,
+        > = std::collections::HashMap::new();
         // A temporary map connecting an ID to the index in the creators vector
-        let mut creator_id_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut creator_id_to_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
@@ -197,7 +210,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                             let attr = attr?;
                             let key = String::from_utf8_lossy(attr.key.into_inner());
                             if key == "toc" {
-                                book.toc_id = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                                book.toc_id =
+                                    Some(String::from_utf8_lossy(&attr.value).into_owned());
                             }
                         }
                     } else if current_tag.ends_with("creator") {
@@ -206,7 +220,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                             let attr = attr?;
                             let key = String::from_utf8_lossy(attr.key.into_inner());
                             if key == "id" {
-                                current_id = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                                current_id =
+                                    Some(String::from_utf8_lossy(&attr.value).into_owned());
                             } else if key == "opf:role" {
                                 // EPUB 2 style role attribute
                                 // We'll handle this in the Event::Text section by updating the last creator
@@ -276,9 +291,11 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 "id" => id = value,
                                 "href" => {
                                     // URL Decode the href as EPUB paths are URI encoded (e.g. "chapter%201.xhtml")
-                                    let decoded = percent_encoding::percent_decode_str(&value).decode_utf8_lossy().into_owned();
+                                    let decoded = percent_encoding::percent_decode_str(&value)
+                                        .decode_utf8_lossy()
+                                        .into_owned();
                                     href = decoded;
-                                },
+                                }
                                 "media-type" => media_type = value,
                                 "properties" => properties = Some(value),
                                 _ => {}
@@ -302,7 +319,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                         let mut linear = true;
                         let mut layout_override = None;
                         let mut page_spread = None;
-                        
+
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = String::from_utf8_lossy(attr.key.into_inner());
@@ -317,19 +334,28 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 } else if val.contains("rendition:layout-pre-paginated") {
                                     layout_override = Some(crate::model::LayoutType::PrePaginated);
                                 }
-                                
-                                if val.contains("page-spread-left") || val.contains("rendition:page-spread-left") {
+
+                                if val.contains("page-spread-left")
+                                    || val.contains("rendition:page-spread-left")
+                                {
                                     page_spread = Some(crate::model::PageSpread::Left);
-                                } else if val.contains("page-spread-right") || val.contains("rendition:page-spread-right") {
+                                } else if val.contains("page-spread-right")
+                                    || val.contains("rendition:page-spread-right")
+                                {
                                     page_spread = Some(crate::model::PageSpread::Right);
                                 } else if val.contains("rendition:page-spread-center") {
                                     page_spread = Some(crate::model::PageSpread::Center);
                                 }
                             }
                         }
-                        
+
                         if !idref.is_empty() {
-                            book.spine.push(crate::model::SpineItem { idref, linear, layout_override, page_spread });
+                            book.spine.push(crate::model::SpineItem {
+                                idref,
+                                linear,
+                                layout_override,
+                                page_spread,
+                            });
                         }
                     }
                 }
@@ -361,7 +387,10 @@ impl<P: EpubProvider> EpubArchive<P> {
                             book.metadata.subjects.push(text);
                         } else if current_tag.starts_with("meta_refines_") {
                             if let Some(refined_id) = &current_id {
-                                let property = current_tag.strip_prefix("meta_refines_").unwrap().to_string();
+                                let property = current_tag
+                                    .strip_prefix("meta_refines_")
+                                    .unwrap()
+                                    .to_string();
                                 let entry = refinements.entry(refined_id.clone()).or_default();
                                 entry.insert(property, text);
                             }
@@ -395,29 +424,34 @@ impl<P: EpubProvider> EpubArchive<P> {
         // Apply metadata refinements
         for (id, props) in refinements {
             if let Some(&idx) = creator_id_to_idx.get(&id)
-                && let Some(creator) = book.metadata.creators.get_mut(idx) {
-                    if let Some(role) = props.get("role") {
-                        creator.role = Some(role.clone());
-                    }
-                    if let Some(file_as) = props.get("file-as") {
-                        creator.file_as = Some(file_as.clone());
-                    }
+                && let Some(creator) = book.metadata.creators.get_mut(idx)
+            {
+                if let Some(role) = props.get("role") {
+                    creator.role = Some(role.clone());
                 }
+                if let Some(file_as) = props.get("file-as") {
+                    creator.file_as = Some(file_as.clone());
+                }
+            }
         }
 
         Ok(book)
     }
 
     /// Get a readable stream for a resource given its manifest href
-    pub fn read_resource_by_href<'a>(&'a mut self, book: &EpubBook, href: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
+    pub fn read_resource_by_href<'a>(
+        &'a mut self,
+        book: &EpubBook,
+        href: &str,
+    ) -> Result<Box<dyn Read + 'a>, EpubError> {
         let zip_path = if book.opf_dir.is_empty() {
             Self::normalize_path("", href)
         } else {
             Self::normalize_path(&book.opf_dir, href)
         };
-        
+
         let file = self.provider.read_file(&zip_path)?;
-        
+
         // Wrap with deobfuscating reader if this file is encrypted
         if let Some(&algo) = book.encryptions.get(&zip_path) {
             let identifier = book.metadata.identifier.as_deref().unwrap_or("");
@@ -431,7 +465,7 @@ impl<P: EpubProvider> EpubArchive<P> {
     /// Normalizes an EPUB path by resolving `.` and `..` relative segments.
     fn normalize_path(base: &str, href: &str) -> String {
         let mut parts = Vec::new();
-        
+
         for comp in base.split('/').chain(href.split('/')) {
             if comp.is_empty() || comp == "." {
                 continue;
@@ -442,20 +476,31 @@ impl<P: EpubProvider> EpubArchive<P> {
                 parts.push(comp);
             }
         }
-        
+
         parts.join("/")
     }
 
     /// Get a readable stream for a resource given its manifest ID
-    pub fn read_resource_by_id<'a>(&'a mut self, book: &EpubBook, id: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
-        let href = book.manifest.get(id)
+    pub fn read_resource_by_id<'a>(
+        &'a mut self,
+        book: &EpubBook,
+        id: &str,
+    ) -> Result<Box<dyn Read + 'a>, EpubError> {
+        let href = book
+            .manifest
+            .get(id)
             .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in manifest", id)))?
-            .href.clone();
+            .href
+            .clone();
         self.read_resource_by_href(book, &href)
     }
 
     /// Read the raw bytes of a resource from the archive given its manifest href
-    pub fn get_resource_by_href(&mut self, book: &EpubBook, href: &str) -> Result<Vec<u8>, EpubError> {
+    pub fn get_resource_by_href(
+        &mut self,
+        book: &EpubBook,
+        href: &str,
+    ) -> Result<Vec<u8>, EpubError> {
         let mut file = self.read_resource_by_href(book, href)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
@@ -478,74 +523,96 @@ impl<P: EpubProvider> EpubArchive<P> {
         // 1. Try EPUB 3 properties="cover-image"
         if cover_item.is_none() {
             cover_item = book.manifest.values().find(|i| {
-                i.properties.as_deref().unwrap_or("").contains("cover-image")
+                i.properties
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("cover-image")
             });
         }
 
         // 2. Try EPUB 2 meta name="cover"
         if cover_item.is_none()
-            && let Some(cover_id) = &book.metadata.cover_id {
-                cover_item = book.manifest.get(cover_id);
-            }
+            && let Some(cover_id) = &book.metadata.cover_id
+        {
+            cover_item = book.manifest.get(cover_id);
+        }
 
         // 3. Fallback: guess by ID or href for bad formatted books
         if cover_item.is_none() {
             cover_item = book.manifest.values().find(|i| {
                 let id_lower = i.id.to_lowercase();
                 let href_lower = i.href.to_lowercase();
-                (id_lower.contains("cover") || href_lower.contains("cover")) 
-                && i.media_type.starts_with("image/")
+                (id_lower.contains("cover") || href_lower.contains("cover"))
+                    && i.media_type.starts_with("image/")
             });
         }
-        
+
         // 4. Extreme Fallback: find the first image in the manifest and hope it's the cover
         if cover_item.is_none() {
-            cover_item = book.manifest.values().find(|i| {
-                i.media_type.starts_with("image/")
-            });
+            cover_item = book
+                .manifest
+                .values()
+                .find(|i| i.media_type.starts_with("image/"));
         }
 
         if let Some(item) = cover_item {
             let bytes = self.get_resource_by_id(book, &item.id)?;
             Ok((bytes, item.media_type.clone()))
         } else {
-            Err(EpubError::InvalidFormat("No cover image found in EPUB".to_string()))
+            Err(EpubError::InvalidFormat(
+                "No cover image found in EPUB".to_string(),
+            ))
         }
     }
 
     /// Reads a chapter's HTML and automatically injects `data-cfi` attributes into all DOM nodes.
     /// This is a high-level method designed for building Web Readers.
-    /// 
+    ///
     /// It automatically calculates the `base_cfi` (OPF context) for the given spine item.
     pub fn get_chapter_with_cfi(&mut self, book: &EpubBook, id: &str) -> Result<String, EpubError> {
-        let spine_index = book.spine.iter().position(|s| s.idref == id)
+        let spine_index = book
+            .spine
+            .iter()
+            .position(|s| s.idref == id)
             .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
-        
+
         let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
         let raw_html = self.get_resource_by_id(book, id)?;
         let html_str = String::from_utf8_lossy(&raw_html);
-        
+
         crate::processor::inject_cfi_dom(&html_str, &base_cfi)
     }
 
     /// Searches the given chapter's HTML for a regular expression and returns exact CFI ranges.
-    pub fn search_chapter(&mut self, book: &EpubBook, id: &str, pattern: &regex::Regex) -> Result<Vec<crate::processor::SearchResult>, EpubError> {
-        let spine_index = book.spine.iter().position(|s| s.idref == id)
+    pub fn search_chapter(
+        &mut self,
+        book: &EpubBook,
+        id: &str,
+        pattern: &regex::Regex,
+    ) -> Result<Vec<crate::processor::SearchResult>, EpubError> {
+        let spine_index = book
+            .spine
+            .iter()
+            .position(|s| s.idref == id)
             .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
-            
+
         let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
         let raw_html = self.get_resource_by_id(book, id)?;
         let html_str = String::from_utf8_lossy(&raw_html);
-        
+
         crate::processor::search_chapter(&html_str, &base_cfi, pattern)
     }
 
     /// Generates a list of synthetic reading positions (virtual pages) for the entire EPUB.
     /// This is crucial for computing reading progress and providing a unified pagination experience
     /// across different screen sizes.
-    /// 
+    ///
     /// `chars_per_position` is the number of characters that constitute a single "position" (typically 1024).
-    pub fn get_positions(&mut self, book: &EpubBook, chars_per_position: usize) -> Result<Vec<Position>, EpubError> {
+    pub fn get_positions(
+        &mut self,
+        book: &EpubBook,
+        chars_per_position: usize,
+    ) -> Result<Vec<Position>, EpubError> {
         let mut all_positions = Vec::new();
         let mut global_pos = 0;
         let mut char_counter = 0;
@@ -556,20 +623,22 @@ impl<P: EpubProvider> EpubArchive<P> {
             }
 
             let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(i, &item.idref);
-            
+
             // Get href for the manifest item
-            let href = book.manifest.get(&item.idref)
+            let href = book
+                .manifest
+                .get(&item.idref)
                 .map(|m| m.href.clone())
                 .unwrap_or_default();
 
             // Always add the chapter start position
             global_pos += 1;
-            
+
             let mut stripped_base = base_cfi.clone();
             if stripped_base.ends_with('!') {
                 stripped_base.pop();
             }
-            
+
             let mut chapter_positions = vec![Position {
                 spine_index: i,
                 href: href.clone(),
@@ -582,7 +651,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             // Read the chapter HTML
             if let Ok(raw_html) = self.get_resource_by_id(book, &item.idref) {
                 let html_str = String::from_utf8_lossy(&raw_html);
-                
+
                 let ctx = crate::processor::PositionContext {
                     base_cfi: &base_cfi,
                     chars_per_position,
@@ -591,11 +660,11 @@ impl<P: EpubProvider> EpubArchive<P> {
                 };
 
                 crate::processor::extract_positions(
-                    &html_str, 
-                    &ctx, 
+                    &html_str,
+                    &ctx,
                     &mut char_counter,
-                    &mut chapter_positions, 
-                    &mut global_pos
+                    &mut chapter_positions,
+                    &mut global_pos,
                 );
             }
 
@@ -604,7 +673,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             for (idx, pos) in chapter_positions.iter_mut().enumerate() {
                 pos.chapter_progression = idx as f32 / total_in_chapter as f32;
             }
-            
+
             all_positions.extend(chapter_positions);
         }
 
@@ -613,7 +682,8 @@ impl<P: EpubProvider> EpubArchive<P> {
         if total_positions > 0 {
             for pos in all_positions.iter_mut() {
                 // Progression from 0.0 to 1.0 based on position index
-                pos.total_progression = (pos.global_position - 1) as f32 / (total_positions.max(1)) as f32;
+                pos.total_progression =
+                    (pos.global_position - 1) as f32 / (total_positions.max(1)) as f32;
             }
         }
 
@@ -623,48 +693,64 @@ impl<P: EpubProvider> EpubArchive<P> {
     /// Extracts semantic content blocks (paragraphs, headings) from a specific chapter.
     /// Returns blocks with their text, tags, languages, and CFI paths.
     /// This is highly useful for Text-to-Speech (TTS) integrations.
-    pub fn get_semantic_content(&mut self, book: &EpubBook, id: &str) -> Result<Vec<crate::model::ContentElement>, EpubError> {
-        let spine_index = book.spine.iter().position(|s| s.idref == id)
+    pub fn get_semantic_content(
+        &mut self,
+        book: &EpubBook,
+        id: &str,
+    ) -> Result<Vec<crate::model::ContentElement>, EpubError> {
+        let spine_index = book
+            .spine
+            .iter()
+            .position(|s| s.idref == id)
             .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
-            
+
         let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
         let raw_html = self.get_resource_by_id(book, id)?;
         let html_str = String::from_utf8_lossy(&raw_html);
-        
-        Ok(crate::processor::extract_semantic_content(&html_str, &base_cfi))
+
+        Ok(crate::processor::extract_semantic_content(
+            &html_str, &base_cfi,
+        ))
     }
 
     /// Extracts the Table of Contents (TOC) of the EPUB.
     /// It prioritizes parsing the modern EPUB 3 `nav.xhtml`, and falls back to EPUB 2 `.ncx`.
     pub fn get_toc(&mut self, book: &EpubBook) -> Result<Vec<TocEntry>, EpubError> {
         // 1. Prefer EPUB 3 nav.xhtml
-        if let Some(nav_item) = book.manifest.values().find(|i| i.properties.as_deref().unwrap_or("").contains("nav")) {
+        if let Some(nav_item) = book
+            .manifest
+            .values()
+            .find(|i| i.properties.as_deref().unwrap_or("").contains("nav"))
+        {
             let html_bytes = self.get_resource_by_id(book, &nav_item.id)?;
             let html = String::from_utf8_lossy(&html_bytes).to_string();
             return Self::parse_nav_xhtml(&html);
         }
-        
+
         // 2. Fallback to EPUB 2 NCX
         if let Some(toc_id) = &book.toc_id
-            && let Some(ncx_item) = book.manifest.get(toc_id) {
-                let xml_bytes = self.get_resource_by_id(book, &ncx_item.id)?;
-                let xml = String::from_utf8_lossy(&xml_bytes).to_string();
-                return Self::parse_ncx(&xml);
-            }
-        
+            && let Some(ncx_item) = book.manifest.get(toc_id)
+        {
+            let xml_bytes = self.get_resource_by_id(book, &ncx_item.id)?;
+            let xml = String::from_utf8_lossy(&xml_bytes).to_string();
+            return Self::parse_ncx(&xml);
+        }
+
         Ok(Vec::new())
     }
 
     fn parse_nav_xhtml(html: &str) -> Result<Vec<TocEntry>, EpubError> {
         let document = kuchikiki::parse_html().one(html);
         // Find <nav epub:type="toc"> or fallback to <nav id="toc"> or just <nav>
-        let nav_node = match document.select_first("nav[epub\\:type='toc']")
+        let nav_node = match document
+            .select_first("nav[epub\\:type='toc']")
             .or_else(|_| document.select_first("nav#toc"))
-            .or_else(|_| document.select_first("nav")) {
-                Ok(node) => node,
-                Err(_) => return Ok(Vec::new()),
+            .or_else(|_| document.select_first("nav"))
+        {
+            Ok(node) => node,
+            Err(_) => return Ok(Vec::new()),
         };
-        
+
         if let Ok(ol_node) = nav_node.as_node().select_first("ol") {
             Ok(Self::parse_ol_node(ol_node.as_node()))
         } else {
@@ -675,13 +761,21 @@ impl<P: EpubProvider> EpubArchive<P> {
     fn parse_ol_node(ol: &kuchikiki::NodeRef) -> Vec<TocEntry> {
         let mut entries = Vec::new();
         // Since `select` might grab deep children, we manually iterate direct children.
-        for li in ol.children().filter(|c| c.as_element().is_some_and(|e| e.name.local.to_string() == "li")) {
+        for li in ol.children().filter(|c| {
+            c.as_element()
+                .is_some_and(|e| e.name.local.to_string() == "li")
+        }) {
             if let Ok(a_node) = li.select_first("a") {
-                let href = a_node.attributes.borrow().get("href").unwrap_or("").to_string();
+                let href = a_node
+                    .attributes
+                    .borrow()
+                    .get("href")
+                    .unwrap_or("")
+                    .to_string();
                 let title = a_node.text_contents().trim().to_string();
-                
+
                 let mut entry = TocEntry::new(title, href);
-                
+
                 if let Ok(nested_ol) = li.select_first("ol") {
                     entry.children = Self::parse_ol_node(nested_ol.as_node());
                 }
@@ -696,10 +790,10 @@ impl<P: EpubProvider> EpubArchive<P> {
         reader.config_mut().trim_text(true);
 
         #[derive(Debug, Clone)]
-        struct NavPointState { 
-            title: String, 
-            href: String, 
-            children: Vec<TocEntry> 
+        struct NavPointState {
+            title: String,
+            href: String,
+            children: Vec<TocEntry>,
         }
 
         let mut stack: Vec<NavPointState> = Vec::new();
@@ -712,7 +806,11 @@ impl<P: EpubProvider> EpubArchive<P> {
                 Event::Start(ref e) => {
                     let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
                     if name.ends_with("navPoint") {
-                        stack.push(NavPointState { title: String::new(), href: String::new(), children: Vec::new() });
+                        stack.push(NavPointState {
+                            title: String::new(),
+                            href: String::new(),
+                            children: Vec::new(),
+                        });
                     } else if name.ends_with("text") {
                         in_text = true;
                     }
@@ -723,35 +821,36 @@ impl<P: EpubProvider> EpubArchive<P> {
                         for attr in e.attributes() {
                             if let Ok(attr) = attr
                                 && attr.key.as_ref() == b"src"
-                                    && let Some(state) = stack.last_mut() {
-                                        state.href = String::from_utf8_lossy(&attr.value).into_owned();
-                                    }
+                                && let Some(state) = stack.last_mut()
+                            {
+                                state.href = String::from_utf8_lossy(&attr.value).into_owned();
+                            }
                         }
                     }
                 }
                 Event::Text(e) => {
-                    if in_text
-                        && let Some(state) = stack.last_mut() {
-                            state.title = String::from_utf8_lossy(&e).into_owned();
-                        }
+                    if in_text && let Some(state) = stack.last_mut() {
+                        state.title = String::from_utf8_lossy(&e).into_owned();
+                    }
                 }
                 Event::End(ref e) => {
                     let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
                     if name.ends_with("text") {
                         in_text = false;
                     } else if name.ends_with("navPoint")
-                        && let Some(state) = stack.pop() {
-                            let entry = TocEntry {
-                                title: state.title,
-                                href: state.href,
-                                children: state.children,
-                            };
-                            if let Some(parent) = stack.last_mut() {
-                                parent.children.push(entry);
-                            } else {
-                                root_entries.push(entry);
-                            }
+                        && let Some(state) = stack.pop()
+                    {
+                        let entry = TocEntry {
+                            title: state.title,
+                            href: state.href,
+                            children: state.children,
+                        };
+                        if let Some(parent) = stack.last_mut() {
+                            parent.children.push(entry);
+                        } else {
+                            root_entries.push(entry);
                         }
+                    }
                 }
                 Event::Eof => break,
                 _ => {}
@@ -790,14 +889,14 @@ mod tests {
         "#;
 
         let entries = EpubArchive::<crate::provider::DirProvider>::parse_ncx(xml).unwrap();
-        
+
         assert_eq!(entries.len(), 2); // Chapter 1, Chapter 2
-        
+
         // Chapter 1
         assert_eq!(entries[0].title, "Chapter 1");
         assert_eq!(entries[0].href, "ch1.xhtml");
         assert_eq!(entries[0].children.len(), 1); // Chapter 1.1 nested
-        
+
         // Chapter 1.1
         assert_eq!(entries[0].children[0].title, "Chapter 1.1");
         assert_eq!(entries[0].children[0].href, "ch1_1.xhtml");
