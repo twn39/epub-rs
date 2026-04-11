@@ -5,6 +5,8 @@ use lol_html::{element, text, HtmlRewriter, Settings};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
+use kuchikiki::traits::*;
+use kuchikiki::NodeRef;
 
 /// Extracts plain text from an HTML byte slice.
 pub fn extract_text(html: &[u8]) -> Result<String, EpubError> {
@@ -146,4 +148,51 @@ where
     }
 
     Ok(())
+}
+
+/// Injects Canonical Fragment Identifier (CFI) paths as `data-cfi` attributes into all HTML elements.
+/// 
+/// This uses `kuchikiki` to build a DOM tree, calculate the strict CFI path for every node, and serialize it.
+/// It accepts a `base_cfi` (e.g., `/6/4[chap01ref]!`) to prepend to the local path.
+pub fn inject_cfi_dom(html: &str, base_cfi: &str) -> Result<String, EpubError> {
+    let document = kuchikiki::parse_html().one(html);
+    
+    // We start from the html element (or body if preferred).
+    // In EPUB CFI, the <html> element is usually `/2` under the document root.
+    if let Ok(html_node) = document.select_first("html") {
+        traverse_and_inject(html_node.as_node(), base_cfi, "");
+    }
+    
+    let mut out = Vec::new();
+    document.serialize(&mut out).map_err(|e| EpubError::InvalidFormat(format!("DOM serialization failed: {}", e)))?;
+    Ok(String::from_utf8_lossy(&out).to_string())
+}
+
+fn traverse_and_inject(node: &NodeRef, base_cfi: &str, current_path: &str) {
+    let mut element_index = 0; // Only elements are even numbers starting from 2
+    
+    for child in node.children() {
+        if child.as_element().is_some() {
+            element_index += 2; // Elements are 2, 4, 6...
+            
+            let id_assertion = child.as_element()
+                .and_then(|el| el.attributes.borrow().get("id").map(|s| s.to_string()));
+            
+            let assertion_str = match id_assertion {
+                Some(id) => format!("[{}]", id),
+                None => String::new(),
+            };
+            
+            let child_path = format!("{}/{}{}", current_path, element_index, assertion_str);
+            
+            // Inject attribute
+            if let Some(el) = child.as_element() {
+                let full_cfi = format!("epubcfi({}{})", base_cfi, child_path);
+                el.attributes.borrow_mut().insert("data-cfi", full_cfi);
+            }
+            
+            // Recurse into children
+            traverse_and_inject(&child, base_cfi, &child_path);
+        }
+    }
 }
