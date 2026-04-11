@@ -1,9 +1,5 @@
 # epub-rs
 
-[![Crates.io](https://img.shields.io/crates/v/epub-rs.svg)](https://crates.io/crates/epub-rs)
-[![Documentation](https://docs.rs/epub-rs/badge.svg)](https://docs.rs/epub-rs)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 **epub-rs** is an industrial-grade, highly performant EPUB 2/3 processing engine for Rust. 
 
 It provides an end-to-end toolchain to **parse, process, deobfuscate, and generate** electronic books. Designed for heavy workloads and commercial reading apps, it avoids deep DOM tree memory overheads by utilizing blazing-fast stream processors ([`lol_html`](https://github.com/cloudflare/lol-html)).
