@@ -71,6 +71,12 @@ pub enum EpubCfi {
     },
 }
 
+impl Default for EpubCfi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EpubCfi {
     /// Creates a new empty CFI Point.
     pub fn new() -> Self {

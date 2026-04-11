@@ -17,7 +17,7 @@ mod tests {
         // Basic assertions to ensure metadata and structures are populated
         println!("--- Parsed EPUB Metadata ---");
         println!("Title: {:?}", book.metadata.title);
-        println!("Creators: {:?}", book.metadata.creators);
+        println!("Creators: {:?}", book.metadata.creators.iter().map(|c| &c.name).collect::<Vec<_>>());
         println!("Language: {:?}", book.metadata.language);
         println!("Identifier: {:?}", book.metadata.identifier);
         

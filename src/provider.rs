@@ -49,7 +49,7 @@ impl DirProvider {
 impl EpubProvider for DirProvider {
     fn read_file<'a>(&'a mut self, path: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
         let full_path = self.root.join(path);
-        let file = File::open(&full_path).map_err(|e| EpubError::Io(e))?;
+        let file = File::open(&full_path).map_err(EpubError::Io)?;
         Ok(Box::new(file))
     }
 }
