@@ -1,5 +1,5 @@
 use epub_rs::generator::EpubBuilder;
-use epub_rs::model::{Creator, EpubVersion, Metadata, TocEntry};
+use epub_rs::model::{Creator, EpubVersion, Metadata};
 use std::io::{Cursor, Read};
 
 fn extract_zip_file(zip_bytes: &[u8], name: &str) -> String {
@@ -20,14 +20,16 @@ fn sanitize_xml(xml: &str) -> String {
 }
 
 fn main() {
-    let mut metadata = Metadata::default();
-    metadata.title = Some("Golden Book".to_string());
-    metadata.identifier = Some("urn:uuid:golden-12345".to_string());
-    metadata.language = Some("en-US".to_string());
-    
     let mut author = Creator::new("Golden Author");
     author.role = Some("aut".to_string());
-    metadata.creators.push(author);
+
+    let metadata = Metadata {
+        title: Some("Golden Book".to_string()),
+        identifier: Some("urn:uuid:golden-12345".to_string()),
+        language: Some("en-US".to_string()),
+        creators: vec![author],
+        ..Default::default()
+    };
 
     let builder = EpubBuilder::new()
         .version(EpubVersion::V30)
