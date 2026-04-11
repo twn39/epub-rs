@@ -277,4 +277,52 @@ mod tests {
             panic!("Expected error, but got Ok");
         }
     }
+
+    #[test]
+    fn test_relative_path_resolution() {
+        use epub_rs::parser::EpubArchive;
+        use std::io::{Cursor, Write};
+
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            
+            zip.start_file("META-INF/container.xml", options).unwrap();
+            zip.write_all(b"<?xml version=\"1.0\"?>
+                <container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">
+                    <rootfiles>
+                        <rootfile full-path=\"OEBPS/content/book.opf\" media-type=\"application/oebps-package+xml\"/>
+                    </rootfiles>
+                </container>").unwrap();
+                
+            zip.start_file("OEBPS/content/book.opf", options).unwrap();
+            zip.write_all(b"<package><metadata></metadata><manifest>
+                <item id=\"img\" href=\"../images/cover.jpg\" media-type=\"image/jpeg\"/>
+                <item id=\"ch1\" href=\"./ch1.xhtml\" media-type=\"application/xhtml+xml\"/>
+            </manifest></package>").unwrap();
+            
+            zip.start_file("OEBPS/images/cover.jpg", options).unwrap();
+            zip.write_all(b"fake_image_bytes").unwrap();
+            
+            zip.start_file("OEBPS/content/ch1.xhtml", options).unwrap();
+            zip.write_all(b"fake_html").unwrap();
+            
+            zip.finish().unwrap();
+        }
+        
+        buffer.set_position(0);
+        let mut archive = EpubArchive::new(buffer).unwrap();
+        let book = archive.parse().unwrap();
+        
+        assert_eq!(book.opf_dir, "OEBPS/content");
+        
+        // Retrieve the image mapped by a relative URL ("../images/cover.jpg")
+        let img_bytes = archive.get_resource_by_id(&book, "img").expect("Failed to resolve ../ relative path");
+        assert_eq!(img_bytes, b"fake_image_bytes");
+        
+        // Retrieve the html mapped by a relative URL ("./ch1.xhtml")
+        let html_bytes = archive.get_resource_by_id(&book, "ch1").expect("Failed to resolve ./ relative path");
+        assert_eq!(html_bytes, b"fake_html");
+    }
 }

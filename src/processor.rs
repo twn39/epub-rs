@@ -226,11 +226,11 @@ pub fn inject_cfi_dom(html: &str, base_cfi: &str) -> Result<String, EpubError> {
 }
 
 fn traverse_and_inject(node: &NodeRef, base_cfi: &str, current_path: &str) {
-    let mut element_index = 0; // Only elements are even numbers starting from 2
+    let mut child_index = 0; // 0 is before the first element
     
     for child in node.children() {
         if child.as_element().is_some() {
-            element_index += 2; // Elements are 2, 4, 6...
+            child_index += 2; // Elements are 2, 4, 6...
             
             let id_assertion = child.as_element()
                 .and_then(|el| el.attributes.borrow().get("id").map(|s| s.to_string()));
@@ -240,7 +240,7 @@ fn traverse_and_inject(node: &NodeRef, base_cfi: &str, current_path: &str) {
                 None => String::new(),
             };
             
-            let child_path = format!("{}/{}{}", current_path, element_index, assertion_str);
+            let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
             
             // Inject attribute
             if let Some(el) = child.as_element() {
@@ -250,6 +250,90 @@ fn traverse_and_inject(node: &NodeRef, base_cfi: &str, current_path: &str) {
             
             // Recurse into children
             traverse_and_inject(&child, base_cfi, &child_path);
+        }
+    }
+}
+
+/// A search result mapped to its exact Canonical Fragment Identifier (CFI) range.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchResult {
+    /// The excerpt of text where the match was found.
+    pub excerpt: String,
+    /// The exact CFI range string (e.g. `epubcfi(/6/4!/4/2,/1:5,/1:10)`) pointing to the match.
+    pub cfi: String,
+}
+
+/// Searches an HTML string for a regular expression pattern and returns a list of results
+/// mapped to their exact CFI ranges.
+/// 
+/// This is a killer feature for building web readers: the backend searches the text
+/// and returns the CFIs. The frontend can just use these CFIs to highlight the results
+/// without needing to parse or search the DOM itself.
+/// 
+/// * `html` - The raw HTML content of the chapter.
+/// * `base_cfi` - The OPF context path (e.g. `/6/4!`).
+/// * `pattern` - A compiled regular expression to search for.
+pub fn search_chapter(html: &str, base_cfi: &str, pattern: &regex::Regex) -> Result<Vec<SearchResult>, EpubError> {
+    let document = kuchikiki::parse_html().one(html);
+    
+    let mut results = Vec::new();
+    
+    // We start from the html element
+    if let Ok(html_node) = document.select_first("html") {
+        search_node(html_node.as_node(), base_cfi, "", pattern, &mut results);
+    }
+    
+    Ok(results)
+}
+
+fn search_node(node: &NodeRef, base_cfi: &str, current_path: &str, pattern: &regex::Regex, results: &mut Vec<SearchResult>) {
+    let mut child_index = 0; // Starts at 0 (before any element)
+    
+    for child in node.children() {
+        if child.as_element().is_some() {
+            child_index += 2; // Next element index
+            
+            let id_assertion = child.as_element()
+                .and_then(|el| el.attributes.borrow().get("id").map(|s| s.to_string()));
+            
+            let assertion_str = match id_assertion {
+                Some(id) => format!("[{}]", id),
+                None => String::new(),
+            };
+            
+            let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
+            
+            // Recurse into children
+            search_node(&child, base_cfi, &child_path, pattern, results);
+        } else if let Some(text_node) = child.as_text() {
+            let text = text_node.borrow();
+            
+            // Text nodes are odd numbers in CFI: 1, 3, 5...
+            let cfi_text_idx = child_index + 1;
+            
+            for mat in pattern.find_iter(&text) {
+                let start = mat.start();
+                let end = mat.end();
+                
+                // Build the range CFI
+                // e.g. epubcfi(/6/4!/4/2,/1:start,/1:end)
+                let range_cfi = format!(
+                    "epubcfi({}{},/{}:{},/{}:{})",
+                    base_cfi, current_path,
+                    cfi_text_idx, start,
+                    cfi_text_idx, end
+                );
+                
+                // Extract a small context excerpt (up to 20 chars around the match)
+                let context_start = start.saturating_sub(20);
+                let context_end = std::cmp::min(text.len(), end + 20);
+                let excerpt = text[context_start..context_end].to_string();
+                
+                results.push(SearchResult {
+                    excerpt,
+                    cfi: range_cfi,
+                });
+            }
         }
     }
 }

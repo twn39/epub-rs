@@ -42,4 +42,36 @@ mod tests {
         let result = String::from_utf8(output).unwrap();
         assert!(result.contains("<title>Test</title><style>body { background: black; }</style></head>"));
     }
+
+    #[test]
+    fn test_search_chapter() {
+        use epub_rs::processor::search_chapter;
+        use regex::Regex;
+
+        let html = r#"<!DOCTYPE html>
+<html>
+<body>
+    <div id="content">
+        <p>This is a story about a brave <b>knight</b> who fought a dragon.</p>
+        <p>The knight was very brave.</p>
+    </div>
+</body>
+</html>"#;
+
+        let pattern = Regex::new(r"brave").unwrap();
+        let results = search_chapter(html, "/6/4!", &pattern).expect("Search failed");
+
+        assert_eq!(results.len(), 2);
+        
+        // First match in the first paragraph
+        assert_eq!(results[0].excerpt, " is a story about a brave ");
+        // path should be body(/4) -> div(/2[content]) -> p(/2) -> text(/1). 
+        // Note: the text node inside <p> is /1.
+        assert_eq!(results[0].cfi, "epubcfi(/6/4!/4/2[content]/2,/1:24,/1:29)");
+
+        // Second match in the second paragraph
+        assert_eq!(results[1].excerpt, "The knight was very brave.");
+        // path should be body(/4) -> div(/2[content]) -> p(/4) -> text(/1).
+        assert_eq!(results[1].cfi, "epubcfi(/6/4!/4/2[content]/4,/1:20,/1:25)");
+    }
 }
