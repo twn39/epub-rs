@@ -36,6 +36,10 @@ mod tests {
         // Create a nested TOC
         let root_entry = TocEntry::new("第一章", "text/ch1.xhtml")
             .add_child(TocEntry::new("第一节", "text/ch1_1.xhtml"));
+            
+        // Test resource stream via Cursor
+        let stream_content = b"Streamed content".to_vec();
+        let stream_reader = std::io::Cursor::new(stream_content);
         
         let builder = EpubBuilder::new()
             .metadata(metadata)
@@ -43,6 +47,7 @@ mod tests {
             .add_resource("style.css", "css/style.css", "text/css", css_content.to_vec())
             .add_chapter("chapter1", "text/ch1.xhtml", chapter1_html.to_vec())
             .add_chapter("chapter1_1", "text/ch1_1.xhtml", chapter2_html.to_vec())
+            .add_resource_stream("stream1", "stream.txt", "text/plain", stream_reader)
             .set_toc(vec![root_entry]);
         
         // Write to an in-memory buffer
@@ -62,13 +67,17 @@ mod tests {
         assert_eq!(book.metadata.subjects, vec!["Technology".to_string(), "Rust".to_string()]);
         
         // Verify Manifest (css, cover, ch1, ch1_1, nav, ncx)
-        assert_eq!(book.manifest.len(), 6);
+        assert_eq!(book.manifest.len(), 7);
         assert!(book.manifest.contains_key("cover-image"));
         assert!(book.manifest.contains_key("style.css"));
         assert!(book.manifest.contains_key("chapter1"));
         assert!(book.manifest.contains_key("chapter1_1"));
+        assert!(book.manifest.contains_key("stream1"));
         assert!(book.manifest.contains_key("nav"));
         assert!(book.manifest.contains_key("ncx"));
+        
+        let extracted_stream = archive.get_resource_by_id(&book, "stream1").expect("Failed to get stream resource");
+        assert_eq!(extracted_stream, b"Streamed content".to_vec());
         
         let cover_item = book.manifest.get("cover-image").unwrap();
         assert_eq!(cover_item.media_type, "image/jpeg");
