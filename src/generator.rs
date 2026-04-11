@@ -919,9 +919,10 @@ mod tests {
         use crate::model::{EpubVersion, Metadata};
         use std::io::Cursor;
 
-        let mut metadata = Metadata::default();
-        // The title contains & and < which must be escaped
-        metadata.title = Some("Me & You <3".to_string());
+        let metadata = Metadata {
+            title: Some("Me & You <3".to_string()),
+            ..Default::default()
+        };
 
         let builder = EpubBuilder::new()
             .version(EpubVersion::V30)
