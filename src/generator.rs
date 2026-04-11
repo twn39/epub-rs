@@ -1,7 +1,7 @@
 //! EPUB generator module using Builder pattern.
 
 use crate::error::EpubError;
-use crate::model::Metadata;
+use crate::model::{Metadata, SpineItem};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 use quick_xml::escape::escape;
@@ -60,7 +60,7 @@ struct Resource {
 pub struct EpubBuilder {
     metadata: Metadata,
     resources: Vec<Resource>,
-    spine: Vec<String>, // list of resource IDs
+    spine: Vec<SpineItem>, // list of spine items
     toc: Vec<TocEntry>,
     landmarks: Vec<Landmark>,
     cover_id: Option<String>,
@@ -178,7 +178,27 @@ impl EpubBuilder {
         content: impl Into<Vec<u8>>,
     ) -> Self {
         let id_str = id.into();
-        self.spine.push(id_str.clone());
+        self.spine.push(SpineItem::new(id_str.clone()));
+        self.resources.push(Resource {
+            id: id_str,
+            href: href.into(),
+            media_type: "application/xhtml+xml".to_string(),
+            content: ResourceContent::Bytes(content.into()),
+            properties: None,
+        });
+        self
+    }
+
+    /// Add a supplementary chapter (like an answer key or footnote page).
+    /// It is added to the spine with `linear="no"`, meaning standard reading flow skips it.
+    pub fn add_supplementary_chapter(
+        mut self,
+        id: impl Into<String>,
+        href: impl Into<String>,
+        content: impl Into<Vec<u8>>,
+    ) -> Self {
+        let id_str = id.into();
+        self.spine.push(SpineItem { idref: id_str.clone(), linear: false });
         self.resources.push(Resource {
             id: id_str,
             href: href.into(),
@@ -197,7 +217,7 @@ impl EpubBuilder {
         reader: R,
     ) -> Self {
         let id_str = id.into();
-        self.spine.push(id_str.clone());
+        self.spine.push(SpineItem::new(id_str.clone()));
         self.resources.push(Resource {
             id: id_str,
             href: href.into(),
@@ -223,7 +243,7 @@ impl EpubBuilder {
 
         self.toc.push(TocEntry::new(title_str, href_str.clone()));
 
-        self.spine.push(id_str.clone());
+        self.spine.push(SpineItem::new(id_str.clone()));
         self.resources.push(Resource {
             id: id_str,
             href: href_str,
@@ -485,9 +505,12 @@ impl EpubBuilder {
             spine.push_attribute(("toc", "ncx"));
         }
         writer.write_event(Event::Start(spine))?;
-        for idref in &self.spine {
+        for item in &self.spine {
             let mut itemref = BytesStart::new("itemref");
-            itemref.push_attribute(("idref", idref.as_str()));
+            itemref.push_attribute(("idref", item.idref.as_str()));
+            if !item.linear {
+                itemref.push_attribute(("linear", "no"));
+            }
             writer.write_event(Event::Empty(itemref))?;
         }
         writer.write_event(Event::End(BytesEnd::new("spine")))?;

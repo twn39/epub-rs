@@ -147,6 +147,66 @@ where
     Ok(())
 }
 
+/// Injects custom HTML elements (such as `<style>` or `<script>`) into the `<head>` of the document.
+/// Very useful for dynamically applying themes (e.g. Dark Mode) or custom typography in web readers.
+pub fn inject_head_content<R: Read, W: Write>(
+    mut reader: R,
+    mut writer: W,
+    content_to_inject: &str,
+) -> Result<(), EpubError> {
+    let write_error = Rc::new(RefCell::new(None));
+    let error_clone = Rc::clone(&write_error);
+    
+    // We clone the string so it can be moved into the closure
+    let content = content_to_inject.to_string();
+
+    {
+        let mut rewriter = HtmlRewriter::new(
+            Settings {
+                element_content_handlers: vec![
+                    element!("head", move |el| {
+                        el.append(&content, lol_html::html_content::ContentType::Html);
+                        Ok(())
+                    }),
+                ],
+                ..Settings::default()
+            },
+            |c: &[u8]| {
+                if let Err(e) = writer.write_all(c) {
+                    *error_clone.borrow_mut() = Some(e);
+                }
+            },
+        );
+
+        let mut buffer = [0; 8192];
+        loop {
+            if write_error.borrow().is_some() {
+                break;
+            }
+            let bytes_read = reader.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            rewriter
+                .write(&buffer[..bytes_read])
+                .map_err(|e| EpubError::InvalidFormat(format!("HTML theme injection error: {}", e)))?;
+        }
+
+        if write_error.borrow().is_none() {
+            rewriter
+                .end()
+                .map_err(|e| EpubError::InvalidFormat(format!("HTML theme injection error: {}", e)))?;
+        }
+    }
+
+    let final_error = write_error.borrow_mut().take();
+    if let Some(err) = final_error {
+        return Err(EpubError::Io(err));
+    }
+
+    Ok(())
+}
+
 /// Injects Canonical Fragment Identifier (CFI) paths as `data-cfi` attributes into all HTML elements.
 /// 
 /// This uses `kuchikiki` to build a DOM tree, calculate the strict CFI path for every node, and serialize it.

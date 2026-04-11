@@ -201,13 +201,22 @@ impl<P: EpubProvider> EpubArchive<P> {
                         }
                     } else if name_str.ends_with("itemref") {
                         // Extract spine reading order
+                        let mut idref = String::new();
+                        let mut linear = true;
+                        
                         for attr in e.attributes() {
                             let attr = attr?;
                             let key = String::from_utf8_lossy(attr.key.into_inner());
+                            let val = String::from_utf8_lossy(&attr.value).into_owned();
                             if key == "idref" {
-                                book.spine
-                                    .push(String::from_utf8_lossy(&attr.value).into_owned());
+                                idref = val;
+                            } else if key == "linear" {
+                                linear = val != "no";
                             }
+                        }
+                        
+                        if !idref.is_empty() {
+                            book.spine.push(crate::model::SpineItem { idref, linear });
                         }
                     }
                 }
@@ -317,7 +326,7 @@ impl<P: EpubProvider> EpubArchive<P> {
     /// 
     /// It automatically calculates the `base_cfi` (OPF context) for the given spine item.
     pub fn get_chapter_with_cfi(&mut self, book: &EpubBook, id: &str) -> Result<String, EpubError> {
-        let spine_index = book.spine.iter().position(|s| s == id)
+        let spine_index = book.spine.iter().position(|s| s.idref == id)
             .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
         
         let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
