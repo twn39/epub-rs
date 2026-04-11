@@ -69,4 +69,54 @@ mod tests {
         println!("Rewritten HTML Size: {} bytes", rewritten_html.len());
         assert!(!rewritten_html.is_empty(), "Rewritten HTML should not be empty");
     }
+
+    #[test]
+    fn test_parse_from_directory() {
+        use epub_rs::parser::EpubArchive;
+        use std::fs;
+        use std::io::Write;
+        
+        // 1. Unzip an EPUB to a temporary directory to test DirProvider
+        let epub_path = "ebooks/软件设计的哲学 (John Ousterhout) (z-library.sk, 1lib.sk, z-lib.sk).epub";
+        let file = std::fs::File::open(epub_path).expect("Failed to open EPUB file");
+        let mut archive = zip::ZipArchive::new(file).expect("Failed to open ZIP");
+        
+        let temp_dir = std::env::temp_dir().join("epub_rs_test_explode");
+        let _ = fs::remove_dir_all(&temp_dir); // clean up if exists
+        
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let outpath = match file.enclosed_name() {
+                Some(path) => temp_dir.join(path),
+                None => continue,
+            };
+
+            if (*file.name()).ends_with('/') {
+                fs::create_dir_all(&outpath).unwrap();
+            } else {
+                if let Some(p) = outpath.parent() {
+                    if !p.exists() {
+                        fs::create_dir_all(&p).unwrap();
+                    }
+                }
+                let mut outfile = fs::File::create(&outpath).unwrap();
+                std::io::copy(&mut file, &mut outfile).unwrap();
+            }
+        }
+        
+        // 2. Test parsing using DirProvider
+        let mut dir_archive = EpubArchive::from_dir(&temp_dir);
+        let book = dir_archive.parse().expect("Failed to parse EPUB from directory");
+        
+        assert_eq!(book.metadata.title.as_deref(), Some("\u{200b}软件设计的哲学"));
+        assert_eq!(book.manifest.len(), 40);
+        assert_eq!(book.spine.len(), 25);
+        
+        let second_chapter_id = &book.spine[1];
+        let raw_html = dir_archive.get_resource_by_id(&book, second_chapter_id).expect("Failed to get HTML resource");
+        assert!(!raw_html.is_empty());
+        
+        // Clean up
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

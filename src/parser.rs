@@ -2,23 +2,33 @@
 
 use crate::error::EpubError;
 use crate::model::{EpubBook, ManifestItem};
+use crate::provider::{DirProvider, EpubProvider, ZipProvider};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::io::{Read, Seek};
-use zip::ZipArchive;
 
 /// A struct that handles unpacking and parsing EPUB files.
-pub struct EpubArchive<R: Read + Seek> {
-    archive: ZipArchive<R>,
+pub struct EpubArchive<P: EpubProvider> {
+    provider: P,
 }
 
-impl<R: Read + Seek> EpubArchive<R> {
-    /// Create a new `EpubArchive` from a generic reader
+impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
+    /// Create a new `EpubArchive` from a generic reader containing a ZIP file
     pub fn new(reader: R) -> Result<Self, EpubError> {
-        let archive = ZipArchive::new(reader)?;
-        Ok(Self { archive })
+        let provider = ZipProvider::new(reader)?;
+        Ok(Self { provider })
     }
+}
 
+impl EpubArchive<DirProvider> {
+    /// Create a new `EpubArchive` from an unzipped local directory
+    pub fn from_dir<P: AsRef<std::path::Path>>(path: P) -> Self {
+        let provider = DirProvider::new(path);
+        Self { provider }
+    }
+}
+
+impl<P: EpubProvider> EpubArchive<P> {
     /// Parse the EPUB archive and extract metadata, manifest, and spine
     pub fn parse(&mut self) -> Result<EpubBook, EpubError> {
         let rootfile_path = self.parse_container()?;
@@ -28,8 +38,8 @@ impl<R: Read + Seek> EpubArchive<R> {
     /// Reads `META-INF/container.xml` to find the path of the primary OPF file
     fn parse_container(&mut self) -> Result<String, EpubError> {
         let mut container_file = self
-            .archive
-            .by_name("META-INF/container.xml")
+            .provider
+            .read_file("META-INF/container.xml")
             .map_err(|_| EpubError::MissingContainer)?;
 
         let mut buf = String::new();
@@ -68,7 +78,7 @@ impl<R: Read + Seek> EpubArchive<R> {
 
     /// Parses the OPF file (usually .opf) to build the domain models
     fn parse_opf(&mut self, opf_path: &str) -> Result<EpubBook, EpubError> {
-        let mut opf_file = self.archive.by_name(opf_path)?;
+        let mut opf_file = self.provider.read_file(opf_path)?;
         let mut buf = String::new();
         opf_file.read_to_string(&mut buf)?;
 
@@ -194,19 +204,19 @@ impl<R: Read + Seek> EpubArchive<R> {
     }
 
     /// Get a readable stream for a resource given its manifest href
-    pub fn read_resource_by_href<'a>(&'a mut self, book: &EpubBook, href: &str) -> Result<zip::read::ZipFile<'a, R>, EpubError> {
-        let zip_path = if book.opf_dir.is_empty() {
+    pub fn read_resource_by_href<'a>(&'a mut self, book: &EpubBook, href: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
+        let res_path = if book.opf_dir.is_empty() {
             href.to_string()
         } else {
             format!("{}/{}", book.opf_dir, href)
         };
         
-        let file = self.archive.by_name(&zip_path)?;
+        let file = self.provider.read_file(&res_path)?;
         Ok(file)
     }
 
     /// Get a readable stream for a resource given its manifest ID
-    pub fn read_resource_by_id<'a>(&'a mut self, book: &EpubBook, id: &str) -> Result<zip::read::ZipFile<'a, R>, EpubError> {
+    pub fn read_resource_by_id<'a>(&'a mut self, book: &EpubBook, id: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
         let href = book.manifest.get(id)
             .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in manifest", id)))?
             .href.clone();
