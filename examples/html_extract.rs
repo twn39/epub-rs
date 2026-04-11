@@ -1,4 +1,4 @@
-use lol_html::{element, text, HtmlRewriter, Settings};
+use lol_html::{text, HtmlRewriter, Settings};
 use std::cell::RefCell;
 use std::rc::Rc;
 

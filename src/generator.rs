@@ -5,10 +5,16 @@ use crate::model::Metadata;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 use quick_xml::escape::escape;
-use std::io::{Seek, Write};
+use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
+
+/// Represents the content of a resource, which can be either fully in-memory or a readable stream.
+pub enum ResourceContent {
+    Bytes(Vec<u8>),
+    Stream(Box<dyn Read + Send + Sync>),
+}
 
 /// Represents a table of contents entry.
 #[derive(Clone, Debug)]
@@ -34,12 +40,11 @@ impl TocEntry {
 }
 
 /// Represents a file to be added to the EPUB archive.
-#[derive(Clone)]
 struct Resource {
     id: String,
     href: String,
     media_type: String,
-    content: Vec<u8>,
+    content: ResourceContent,
     properties: Option<String>,
 }
 
@@ -95,14 +100,14 @@ impl EpubBuilder {
             id: id.clone(),
             href: href.into(),
             media_type: media_type.into(),
-            content: content.into(),
+            content: ResourceContent::Bytes(content.into()),
             properties: Some("cover-image".to_string()),
         });
         self.cover_id = Some(id);
         self
     }
 
-    /// Add a resource (HTML, image, CSS, etc.) to the EPUB manifest.
+    /// Add a resource (HTML, image, CSS, etc.) to the EPUB manifest from memory.
     /// This does not add it to the reading order (spine).
     pub fn add_resource(
         mut self,
@@ -115,7 +120,26 @@ impl EpubBuilder {
             id: id.into(),
             href: href.into(),
             media_type: media_type.into(),
-            content: content.into(),
+            content: ResourceContent::Bytes(content.into()),
+            properties: None,
+        });
+        self
+    }
+
+    /// Add a large resource (like a high-res video or image) via a readable stream.
+    /// The reader will be consumed and copied directly into the ZIP archive during generation.
+    pub fn add_resource_stream<R: Read + Send + Sync + 'static>(
+        mut self,
+        id: impl Into<String>,
+        href: impl Into<String>,
+        media_type: impl Into<String>,
+        reader: R,
+    ) -> Self {
+        self.resources.push(Resource {
+            id: id.into(),
+            href: href.into(),
+            media_type: media_type.into(),
+            content: ResourceContent::Stream(Box::new(reader)),
             properties: None,
         });
         self
@@ -134,7 +158,26 @@ impl EpubBuilder {
             id: id_str,
             href: href.into(),
             media_type: "application/xhtml+xml".to_string(),
-            content: content.into(),
+            content: ResourceContent::Bytes(content.into()),
+            properties: None,
+        });
+        self
+    }
+
+    /// Add a chapter via a readable stream.
+    pub fn add_chapter_stream<R: Read + Send + Sync + 'static>(
+        mut self,
+        id: impl Into<String>,
+        href: impl Into<String>,
+        reader: R,
+    ) -> Self {
+        let id_str = id.into();
+        self.spine.push(id_str.clone());
+        self.resources.push(Resource {
+            id: id_str,
+            href: href.into(),
+            media_type: "application/xhtml+xml".to_string(),
+            content: ResourceContent::Stream(Box::new(reader)),
             properties: None,
         });
         self
@@ -160,7 +203,7 @@ impl EpubBuilder {
             id: id_str,
             href: href_str,
             media_type: "application/xhtml+xml".to_string(),
-            content: content.into(),
+            content: ResourceContent::Bytes(content.into()),
             properties: None,
         });
         self
@@ -179,7 +222,7 @@ impl EpubBuilder {
                 id: "nav".to_string(),
                 href: "nav.xhtml".to_string(),
                 media_type: "application/xhtml+xml".to_string(),
-                content: nav_html.into_bytes(),
+                content: ResourceContent::Bytes(nav_html.into_bytes()),
                 properties: Some("nav".to_string()),
             });
 
@@ -189,7 +232,7 @@ impl EpubBuilder {
                 id: "ncx".to_string(),
                 href: "toc.ncx".to_string(),
                 media_type: "application/x-dtbncx+xml".to_string(),
-                content: ncx_xml.into_bytes(),
+                content: ResourceContent::Bytes(ncx_xml.into_bytes()),
                 properties: None,
             });
         }
@@ -212,16 +255,25 @@ impl EpubBuilder {
 </container>"#;
         zip.write_all(container_xml.as_bytes())?;
 
+        // Generate OPF content BEFORE consuming self.resources
+        let opf_content = self.generate_opf(has_toc)?;
+
         // 3. Write resources
-        for res in &self.resources {
+        for mut res in self.resources {
             let zip_path = format!("OEBPS/{}", res.href);
             zip.start_file(&zip_path, options_deflated)?;
-            zip.write_all(&res.content)?;
+            match res.content {
+                ResourceContent::Bytes(bytes) => {
+                    zip.write_all(&bytes)?;
+                }
+                ResourceContent::Stream(ref mut stream) => {
+                    std::io::copy(stream, &mut zip)?;
+                }
+            }
         }
 
         // 4. Write `OEBPS/content.opf`
         zip.start_file("OEBPS/content.opf", options_deflated)?;
-        let opf_content = self.generate_opf(has_toc)?;
         zip.write_all(&opf_content)?;
 
         zip.finish()?;
