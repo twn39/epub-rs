@@ -32,6 +32,13 @@ pub struct Landmark {
     pub href: String,
 }
 
+/// Represents a physical page mapping for the EPUB.
+#[derive(Clone, Debug)]
+pub struct PageListEntry {
+    pub name: String, // e.g. "IV", "1", "2"
+    pub href: String,
+}
+
 impl TocEntry {
     pub fn new(title: impl Into<String>, href: impl Into<String>) -> Self {
         Self {
@@ -64,6 +71,7 @@ pub struct EpubBuilder {
     spine: Vec<SpineItem>, // list of spine items
     toc: Vec<TocEntry>,
     landmarks: Vec<Landmark>,
+    page_list: Vec<PageListEntry>,
     cover_id: Option<String>,
 }
 
@@ -83,6 +91,7 @@ impl EpubBuilder {
             spine: Vec::new(),
             toc: Vec::new(),
             landmarks: Vec::new(),
+            page_list: Vec::new(),
             cover_id: None,
         }
     }
@@ -104,6 +113,19 @@ impl EpubBuilder {
             epub_type: epub_type.into(),
             href: href.into(),
             title: title.into(),
+        });
+        self
+    }
+
+    /// Add a physical page mapping entry (for academic/textbook parity).
+    pub fn add_page(
+        mut self,
+        name: impl Into<String>,
+        href: impl Into<String>,
+    ) -> Self {
+        self.page_list.push(PageListEntry {
+            name: name.into(),
+            href: href.into(),
         });
         self
     }
@@ -392,6 +414,18 @@ impl EpubBuilder {
             html.push_str("</ol>\n</nav>\n");
         }
 
+        if !self.page_list.is_empty() {
+            html.push_str("<nav epub:type=\"page-list\" id=\"page-list\">\n<h2>Page List</h2>\n<ol>\n");
+            for page in &self.page_list {
+                html.push_str(&format!(
+                    "  <li><a href=\"{}\">{}</a></li>\n",
+                    escape(&page.href),
+                    escape(&page.name)
+                ));
+            }
+            html.push_str("</ol>\n</nav>\n");
+        }
+
         html.push_str("</body>\n</html>");
         html
     }
@@ -413,12 +447,29 @@ impl EpubBuilder {
     /// Generate EPUB 2 compatible `toc.ncx`
     fn generate_ncx(&self) -> String {
         let title = self.metadata.title.as_deref().unwrap_or("Untitled");
-        let mut ncx = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"urn:uuid:default-epub-rs-id\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"0\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"0\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n", escape(title));
+        
+        let max_page = self.page_list.len(); // A rough estimate for total/max pages
+        
+        let mut ncx = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"urn:uuid:default-epub-rs-id\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"{}\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"{}\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n", max_page, max_page, escape(title));
         
         let mut play_order = 0;
         Self::build_ncx_navpoints(&self.toc, &mut ncx, &mut play_order);
         
-        ncx.push_str("  </navMap>\n</ncx>");
+        ncx.push_str("  </navMap>\n");
+
+        if !self.page_list.is_empty() {
+            ncx.push_str("  <pageList>\n    <navLabel><text>Pages</text></navLabel>\n");
+            for (i, page) in self.page_list.iter().enumerate() {
+                play_order += 1;
+                ncx.push_str(&format!(
+                    "    <pageTarget id=\"page-{}\" type=\"normal\" value=\"{}\" playOrder=\"{}\">\n      <navLabel><text>{}</text></navLabel>\n      <content src=\"{}\"/>\n    </pageTarget>\n",
+                    i + 1, escape(&page.name), play_order, escape(&page.name), escape(&page.href)
+                ));
+            }
+            ncx.push_str("  </pageList>\n");
+        }
+
+        ncx.push_str("</ncx>");
         ncx
     }
 

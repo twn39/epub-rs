@@ -59,6 +59,8 @@ mod tests {
             .add_resource_stream("stream1", "stream.txt", "text/plain", stream_reader)
             .add_landmark("cover", "text/ch1.xhtml", "封面")
             .add_landmark("toc", "nav.xhtml", "目录")
+            .add_page("1", "text/ch1.xhtml#page1")
+            .add_page("2", "text/ch1_1.xhtml#page2")
             .set_toc(vec![root_entry]);
         
         // Write to an in-memory buffer
@@ -121,9 +123,16 @@ mod tests {
         assert!(nav_str.contains("<li><a href=\"text/ch1.xhtml\">第一章</a>"));
         assert!(nav_str.contains("<li><a href=\"text/ch1_1.xhtml\">第一节</a>"));
         
-        // Check Landmarks
+        // Check Landmarks and Page List
         assert!(nav_str.contains("epub:type=\"landmarks\""));
         assert!(nav_str.contains("epub:type=\"cover\" href=\"text/ch1.xhtml\">封面</a>"));
+        assert!(nav_str.contains("epub:type=\"page-list\" id=\"page-list\""));
+        assert!(nav_str.contains("href=\"text/ch1.xhtml#page1\">1</a>"));
+        assert!(nav_str.contains("href=\"text/ch1_1.xhtml#page2\">2</a>"));
+        
+        assert!(ncx_str.contains("<pageList>"));
+        assert!(ncx_str.contains("<pageTarget id=\"page-1\" type=\"normal\" value=\"1\" playOrder=\"3\">"));
+        assert!(ncx_str.contains("<pageTarget id=\"page-2\" type=\"normal\" value=\"2\" playOrder=\"4\">"));
         
         // Extract and verify content
         let extracted_css = archive.get_resource_by_id(&book, "style.css").expect("Failed to get css");
