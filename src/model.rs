@@ -75,6 +75,20 @@ pub struct Position {
     pub total_progression: f32,
 }
 
+/// A structured, semantic representation of a content block (e.g., a paragraph or heading).
+/// Useful for Text-To-Speech (TTS), accessibility (A11Y), or advanced reading interfaces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContentElement {
+    /// The plain text content of the element.
+    pub text: String,
+    /// The exact CFI range covering this element's text.
+    pub cfi_range: String,
+    /// The semantic tag name (e.g., "h1", "p", "blockquote").
+    pub tag_name: String,
+    /// The declared language of this block (e.g., "en", "zh-CN"), useful for switching TTS voices.
+    pub language: Option<String>,
+}
+
 /// The central EPUB document structure
 #[derive(Debug, Default, Clone)]
 pub struct EpubBook {
