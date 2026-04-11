@@ -159,10 +159,15 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 property = Some(String::from_utf8_lossy(&attr.value).into_owned());
                             }
                         }
-                        if let (Some(r), Some(p)) = (refines, property) {
+                        let ref_id = refines.clone();
+                        let p_name = property.clone();
+                        if let (Some(r), Some(p)) = (ref_id, p_name) {
                             // We don't have the text yet, store the state to catch in Event::Text
                             current_id = Some(r); // repurpose current_id to hold the target refines ID
                             current_tag = format!("meta_refines_{}", p);
+                        } else if let Some(p) = property {
+                            // Global properties like rendition:layout
+                            current_tag = format!("meta_global_{}", p);
                         }
                     }
                 }
@@ -175,6 +180,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                         let mut id = String::new();
                         let mut href = String::new();
                         let mut media_type = String::new();
+                        let mut properties = None;
 
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -183,8 +189,13 @@ impl<P: EpubProvider> EpubArchive<P> {
 
                             match key.as_ref() {
                                 "id" => id = value,
-                                "href" => href = value,
+                                "href" => {
+                                    // URL Decode the href as EPUB paths are URI encoded (e.g. "chapter%201.xhtml")
+                                    let decoded = percent_encoding::percent_decode_str(&value).decode_utf8_lossy().into_owned();
+                                    href = decoded;
+                                },
                                 "media-type" => media_type = value,
+                                "properties" => properties = Some(value),
                                 _ => {}
                             }
                         }
@@ -196,6 +207,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                                     id,
                                     href,
                                     media_type,
+                                    properties,
                                 },
                             );
                         }
@@ -203,6 +215,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                         // Extract spine reading order
                         let mut idref = String::new();
                         let mut linear = true;
+                        let mut layout_override = None;
+                        let mut page_spread = None;
                         
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -212,11 +226,25 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 idref = val;
                             } else if key == "linear" {
                                 linear = val != "no";
+                            } else if key == "properties" {
+                                if val.contains("rendition:layout-reflowable") {
+                                    layout_override = Some(crate::model::LayoutType::Reflowable);
+                                } else if val.contains("rendition:layout-pre-paginated") {
+                                    layout_override = Some(crate::model::LayoutType::PrePaginated);
+                                }
+                                
+                                if val.contains("page-spread-left") || val.contains("rendition:page-spread-left") {
+                                    page_spread = Some(crate::model::PageSpread::Left);
+                                } else if val.contains("page-spread-right") || val.contains("rendition:page-spread-right") {
+                                    page_spread = Some(crate::model::PageSpread::Right);
+                                } else if val.contains("rendition:page-spread-center") {
+                                    page_spread = Some(crate::model::PageSpread::Center);
+                                }
                             }
                         }
                         
                         if !idref.is_empty() {
-                            book.spine.push(crate::model::SpineItem { idref, linear });
+                            book.spine.push(crate::model::SpineItem { idref, linear, layout_override, page_spread });
                         }
                     }
                 }
@@ -246,12 +274,22 @@ impl<P: EpubProvider> EpubArchive<P> {
                             book.metadata.rights = Some(text);
                         } else if current_tag.ends_with("subject") {
                             book.metadata.subjects.push(text);
-                        } else if current_tag.starts_with("meta_refines_")
-                            && let Some(refined_id) = &current_id {
+                        } else if current_tag.starts_with("meta_refines_") {
+                            if let Some(refined_id) = &current_id {
                                 let property = current_tag.strip_prefix("meta_refines_").unwrap().to_string();
                                 let entry = refinements.entry(refined_id.clone()).or_default();
                                 entry.insert(property, text);
                             }
+                        } else if current_tag.starts_with("meta_global_") {
+                            let property = current_tag.strip_prefix("meta_global_").unwrap();
+                            if property == "rendition:layout" {
+                                if text == "pre-paginated" {
+                                    book.metadata.layout = crate::model::LayoutType::PrePaginated;
+                                } else {
+                                    book.metadata.layout = crate::model::LayoutType::Reflowable;
+                                }
+                            }
+                        }
                     }
                 }
                 Event::End(ref e) => {

@@ -166,4 +166,38 @@ mod tests {
         assert!(book.manifest.contains_key("chapter1"));
         assert!(!book.manifest.contains_key("nav"));
     }
+
+    #[test]
+    fn test_fixed_layout_generation() {
+        use epub_rs::model::{EpubVersion, Metadata, LayoutType, PageSpread};
+
+        let mut metadata = Metadata::default();
+        metadata.title = Some("Comic Book".to_string());
+        metadata.layout = LayoutType::PrePaginated; // Global fixed layout
+
+        let builder = EpubBuilder::new()
+            .version(EpubVersion::V30)
+            .metadata(metadata)
+            // page 1 is a double-page spread center
+            .add_chapter_with_layout("page1", "text/p1.xhtml", b"<html><body>Page 1</body></html>".to_vec(), None, Some(PageSpread::Center))
+            // page 2 forces reflowable (override) and goes on the left
+            .add_chapter_with_layout("page2", "text/p2.xhtml", b"<html><body>Page 2</body></html>".to_vec(), Some(LayoutType::Reflowable), Some(PageSpread::Left));
+
+        let mut buffer = Cursor::new(Vec::new());
+        builder.generate(&mut buffer).expect("Failed to generate FXL EPUB");
+
+        buffer.set_position(0);
+        let mut archive = EpubArchive::new(buffer).expect("Failed to open FXL EPUB");
+        let book = archive.parse().expect("Failed to parse FXL EPUB");
+
+        // Verify Global Layout
+        assert_eq!(book.metadata.layout, LayoutType::PrePaginated);
+
+        // Verify Spine Items overrides
+        assert_eq!(book.spine[0].page_spread, Some(PageSpread::Center));
+        assert_eq!(book.spine[0].layout_override, None);
+
+        assert_eq!(book.spine[1].page_spread, Some(PageSpread::Left));
+        assert_eq!(book.spine[1].layout_override, Some(LayoutType::Reflowable));
+    }
 }

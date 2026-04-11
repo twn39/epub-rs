@@ -14,6 +14,25 @@ pub enum EpubVersion {
 }
 
 
+/// The layout rendition type of the EPUB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutType {
+    /// Content flows dynamically to fit the screen (default).
+    #[default]
+    Reflowable,
+    /// Content is pre-paginated with fixed dimensions (e.g. comics, children's books).
+    PrePaginated,
+}
+
+/// Hints for how a fixed-layout spine item should be displayed in a synthetic spread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageSpread {
+    None,
+    Left,
+    Right,
+    Center,
+}
+
 /// Represents an item in the reading order (spine).
 #[derive(Debug, Clone)]
 pub struct SpineItem {
@@ -22,6 +41,10 @@ pub struct SpineItem {
     /// Whether this item should be read linearly (part of the normal reading flow).
     /// If false, it's typically supplementary content (like an answer key or popup).
     pub linear: bool,
+    /// Optional property indicating if the item has a specific layout override.
+    pub layout_override: Option<LayoutType>,
+    /// Optional property indicating how the item behaves in a two-page spread (left, right, center, none).
+    pub page_spread: Option<PageSpread>,
 }
 
 impl SpineItem {
@@ -29,6 +52,8 @@ impl SpineItem {
         Self {
             idref: idref.into(),
             linear: true,
+            layout_override: None,
+            page_spread: None,
         }
     }
 }
@@ -80,6 +105,8 @@ pub struct Metadata {
     pub date: Option<String>,
     pub rights: Option<String>,
     pub subjects: Vec<String>,
+    /// Global layout type of the EPUB (reflowable or pre-paginated).
+    pub layout: LayoutType,
 }
 
 /// Represents an `item` in the `manifest` block of the OPF
@@ -88,4 +115,5 @@ pub struct ManifestItem {
     pub id: String,
     pub href: String,
     pub media_type: String,
+    pub properties: Option<String>,
 }
