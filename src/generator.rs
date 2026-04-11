@@ -393,8 +393,32 @@ impl EpubBuilder {
         if let Some(title) = &self.metadata.title {
             Self::write_text_element(&mut writer, "dc:title", title)?;
         }
-        for creator in &self.metadata.creators {
-            Self::write_text_element(&mut writer, "dc:creator", creator)?;
+        // Output creators with optional refinements
+        for (i, creator) in self.metadata.creators.iter().enumerate() {
+            let id = format!("creator_{}", i);
+            let mut c_start = BytesStart::new("dc:creator");
+            c_start.push_attribute(("id", id.as_str()));
+            writer.write_event(Event::Start(c_start))?;
+            writer.write_event(Event::Text(BytesText::new(&creator.name)))?;
+            writer.write_event(Event::End(BytesEnd::new("dc:creator")))?;
+
+            if let Some(role) = &creator.role {
+                let mut m_start = BytesStart::new("meta");
+                m_start.push_attribute(("refines", format!("#{}", id).as_str()));
+                m_start.push_attribute(("property", "role"));
+                m_start.push_attribute(("scheme", "marc:relators"));
+                writer.write_event(Event::Start(m_start))?;
+                writer.write_event(Event::Text(BytesText::new(role)))?;
+                writer.write_event(Event::End(BytesEnd::new("meta")))?;
+            }
+            if let Some(file_as) = &creator.file_as {
+                let mut m_start = BytesStart::new("meta");
+                m_start.push_attribute(("refines", format!("#{}", id).as_str()));
+                m_start.push_attribute(("property", "file-as"));
+                writer.write_event(Event::Start(m_start))?;
+                writer.write_event(Event::Text(BytesText::new(file_as)))?;
+                writer.write_event(Event::End(BytesEnd::new("meta")))?;
+            }
         }
         if let Some(lang) = &self.metadata.language {
             Self::write_text_element(&mut writer, "dc:language", lang)?;

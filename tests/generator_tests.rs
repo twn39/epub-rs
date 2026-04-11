@@ -10,7 +10,16 @@ mod tests {
         // 1. Build an EPUB in memory
         let mut metadata = Metadata::default();
         metadata.title = Some("Test Generated Book".to_string());
-        metadata.creators.push("Rust Developer".to_string());
+        
+        let mut author = epub_rs::model::Creator::new("Rust Developer");
+        author.role = Some("aut".to_string());
+        author.file_as = Some("Developer, Rust".to_string());
+        metadata.creators.push(author);
+        
+        let mut translator = epub_rs::model::Creator::new("Gemini Bot");
+        translator.role = Some("trl".to_string());
+        metadata.creators.push(translator);
+
         metadata.language = Some("zh-CN".to_string());
         metadata.publisher = Some("Gemini Press".to_string());
         metadata.subjects.push("Technology".to_string());
@@ -63,7 +72,15 @@ mod tests {
 
         // 3. Verify contents
         assert_eq!(book.metadata.title.as_deref(), Some("Test Generated Book"));
-        assert_eq!(book.metadata.creators, vec!["Rust Developer".to_string()]);
+        
+        assert_eq!(book.metadata.creators.len(), 2);
+        assert_eq!(book.metadata.creators[0].name, "Rust Developer");
+        assert_eq!(book.metadata.creators[0].role.as_deref(), Some("aut"));
+        assert_eq!(book.metadata.creators[0].file_as.as_deref(), Some("Developer, Rust"));
+        
+        assert_eq!(book.metadata.creators[1].name, "Gemini Bot");
+        assert_eq!(book.metadata.creators[1].role.as_deref(), Some("trl"));
+
         assert_eq!(book.metadata.language.as_deref(), Some("zh-CN"));
         assert_eq!(book.metadata.publisher.as_deref(), Some("Gemini Press"));
         assert_eq!(book.metadata.subjects, vec!["Technology".to_string(), "Rust".to_string()]);

@@ -88,27 +88,24 @@ where
             Settings {
                 element_content_handlers: vec![
                     element!("img[src]", move |el| {
-                        if let Some(src) = el.get_attribute("src") {
-                            if let Some(new_src) = (mapper_img.borrow_mut())("img", &src) {
+                        if let Some(src) = el.get_attribute("src")
+                            && let Some(new_src) = (mapper_img.borrow_mut())("img", &src) {
                                 el.set_attribute("src", &new_src).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                             }
-                        }
                         Ok(())
                     }),
                     element!("a[href]", move |el| {
-                        if let Some(href) = el.get_attribute("href") {
-                            if let Some(new_href) = (mapper_a.borrow_mut())("a", &href) {
+                        if let Some(href) = el.get_attribute("href")
+                            && let Some(new_href) = (mapper_a.borrow_mut())("a", &href) {
                                 el.set_attribute("href", &new_href).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                             }
-                        }
                         Ok(())
                     }),
                     element!("link[href]", move |el| {
-                        if let Some(href) = el.get_attribute("href") {
-                            if let Some(new_href) = (mapper_link.borrow_mut())("link", &href) {
+                        if let Some(href) = el.get_attribute("href")
+                            && let Some(new_href) = (mapper_link.borrow_mut())("link", &href) {
                                 el.set_attribute("href", &new_href).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
                             }
-                        }
                         Ok(())
                     }),
                 ],

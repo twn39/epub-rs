@@ -96,6 +96,12 @@ impl<P: EpubProvider> EpubArchive<P> {
         // State tracking
         let mut in_metadata = false;
         let mut current_tag = String::new();
+        let mut current_id = None; // For elements like <dc:creator id="creator1">
+
+        // A temporary map to store metadata refinements (refines -> property -> value)
+        let mut refinements: std::collections::HashMap<String, std::collections::HashMap<String, String>> = std::collections::HashMap::new();
+        // A temporary map connecting an ID to the index in the creators vector
+        let mut creator_id_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
@@ -114,6 +120,39 @@ impl<P: EpubProvider> EpubArchive<P> {
                             if key == "toc" {
                                 book.toc_id = Some(String::from_utf8_lossy(&attr.value).into_owned());
                             }
+                        }
+                    } else if current_tag.ends_with("creator") {
+                        current_id = None;
+                        for attr in e.attributes() {
+                            let attr = attr?;
+                            let key = String::from_utf8_lossy(attr.key.into_inner());
+                            if key == "id" {
+                                current_id = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                            } else if key == "opf:role" {
+                                // EPUB 2 style role attribute
+                                // We'll handle this in the Event::Text section by updating the last creator
+                            }
+                        }
+                    } else if current_tag == "meta" {
+                        // Check for EPUB 3 refinements
+                        let mut refines = None;
+                        let mut property = None;
+                        for attr in e.attributes() {
+                            let attr = attr?;
+                            let key = String::from_utf8_lossy(attr.key.into_inner());
+                            if key == "refines" {
+                                let val = String::from_utf8_lossy(&attr.value).into_owned();
+                                if val.starts_with('#') {
+                                    refines = Some(val[1..].to_string());
+                                }
+                            } else if key == "property" {
+                                property = Some(String::from_utf8_lossy(&attr.value).into_owned());
+                            }
+                        }
+                        if let (Some(r), Some(p)) = (refines, property) {
+                            // We don't have the text yet, store the state to catch in Event::Text
+                            current_id = Some(r); // repurpose current_id to hold the target refines ID
+                            current_tag = format!("meta_refines_{}", p);
                         }
                     }
                 }
@@ -168,7 +207,12 @@ impl<P: EpubProvider> EpubArchive<P> {
                         if current_tag.ends_with("title") {
                             book.metadata.title = Some(text);
                         } else if current_tag.ends_with("creator") {
-                            book.metadata.creators.push(text);
+                            let creator = crate::model::Creator::new(&text);
+                            // If this creator tag had an ID, remember its index
+                            if let Some(id) = &current_id {
+                                creator_id_to_idx.insert(id.clone(), book.metadata.creators.len());
+                            }
+                            book.metadata.creators.push(creator);
                         } else if current_tag.ends_with("language") {
                             book.metadata.language = Some(text);
                         } else if current_tag.ends_with("identifier") {
@@ -183,7 +227,12 @@ impl<P: EpubProvider> EpubArchive<P> {
                             book.metadata.rights = Some(text);
                         } else if current_tag.ends_with("subject") {
                             book.metadata.subjects.push(text);
-                        }
+                        } else if current_tag.starts_with("meta_refines_")
+                            && let Some(refined_id) = &current_id {
+                                let property = current_tag.strip_prefix("meta_refines_").unwrap().to_string();
+                                let entry = refinements.entry(refined_id.clone()).or_default();
+                                entry.insert(property, text);
+                            }
                     }
                 }
                 Event::End(ref e) => {
@@ -193,11 +242,25 @@ impl<P: EpubProvider> EpubArchive<P> {
                         in_metadata = false;
                     }
                     current_tag.clear();
+                    current_id = None;
                 }
                 Event::Eof => break,
                 _ => {}
             }
             event_buf.clear();
+        }
+
+        // Apply metadata refinements
+        for (id, props) in refinements {
+            if let Some(&idx) = creator_id_to_idx.get(&id)
+                && let Some(creator) = book.metadata.creators.get_mut(idx) {
+                    if let Some(role) = props.get("role") {
+                        creator.role = Some(role.clone());
+                    }
+                    if let Some(file_as) = props.get("file-as") {
+                        creator.file_as = Some(file_as.clone());
+                    }
+                }
         }
 
         Ok(book)
