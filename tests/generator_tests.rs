@@ -1,29 +1,28 @@
 #[cfg(test)]
 mod tests {
     use epub_rs::generator::EpubBuilder;
-    use epub_rs::model::{Metadata, TocEntry};
+    use epub_rs::model::{Metadata, TocEntry, Creator};
     use epub_rs::parser::EpubArchive;
     use std::io::Cursor;
 
     #[test]
     fn test_generate_and_parse_epub() {
         // 1. Build an EPUB in memory
-        let mut metadata = Metadata::default();
-        metadata.title = Some("Test Generated Book".to_string());
-        
-        let mut author = epub_rs::model::Creator::new("Rust Developer");
+        let mut author = Creator::new("Rust Developer");
         author.role = Some("aut".to_string());
         author.file_as = Some("Developer, Rust".to_string());
-        metadata.creators.push(author);
-        
-        let mut translator = epub_rs::model::Creator::new("Gemini Bot");
-        translator.role = Some("trl".to_string());
-        metadata.creators.push(translator);
 
-        metadata.language = Some("zh-CN".to_string());
-        metadata.publisher = Some("Gemini Press".to_string());
-        metadata.subjects.push("Technology".to_string());
-        metadata.subjects.push("Rust".to_string());
+        let mut translator = Creator::new("Gemini Bot");
+        translator.role = Some("trl".to_string());
+
+        let metadata = Metadata {
+            title: Some("Test Generated Book".to_string()),
+            creators: vec![author, translator],
+            language: Some("zh-CN".to_string()),
+            publisher: Some("Gemini Press".to_string()),
+            subjects: vec!["Technology".to_string(), "Rust".to_string()],
+            ..Default::default()
+        };
         
         let chapter1_html = br#"<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -157,13 +156,15 @@ mod tests {
     fn test_generate_epub_v2() {
         use epub_rs::model::{EpubVersion, Metadata, Creator};
 
-        let mut metadata = Metadata::default();
-        metadata.title = Some("Legacy Book".to_string());
-        metadata.creators.push(Creator {
-            name: "V2 Author".to_string(),
-            role: Some("aut".to_string()),
-            file_as: Some("Author, V2".to_string()),
-        });
+        let mut author = Creator::new("V2 Author");
+        author.role = Some("aut".to_string());
+        author.file_as = Some("Author, V2".to_string());
+
+        let metadata = Metadata {
+            title: Some("Legacy Book".to_string()),
+            creators: vec![author],
+            ..Default::default()
+        };
 
         let builder = EpubBuilder::new()
             .version(EpubVersion::V20)
@@ -187,9 +188,11 @@ mod tests {
     fn test_fixed_layout_generation() {
         use epub_rs::model::{EpubVersion, Metadata, LayoutType, PageSpread};
 
-        let mut metadata = Metadata::default();
-        metadata.title = Some("Comic Book".to_string());
-        metadata.layout = LayoutType::PrePaginated; // Global fixed layout
+        let metadata = Metadata {
+            title: Some("Comic Book".to_string()),
+            layout: LayoutType::PrePaginated,
+            ..Default::default()
+        };
 
         let builder = EpubBuilder::new()
             .version(EpubVersion::V30)
