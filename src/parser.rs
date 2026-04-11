@@ -35,7 +35,7 @@ impl<P: EpubProvider> EpubArchive<P> {
         self.parse_container()
     }
 
-    /// Parse the default (first) rendition of the EPUB archive.
+    /// Parse the EPUB archive and extract metadata, manifest, and spine
     pub fn parse(&mut self) -> Result<EpubBook, EpubError> {
         let rootfiles = self.parse_container()?;
         self.parse_rendition(&rootfiles[0])
@@ -43,7 +43,77 @@ impl<P: EpubProvider> EpubArchive<P> {
 
     /// Parse a specific rendition by its OPF path.
     pub fn parse_rendition(&mut self, opf_path: &str) -> Result<EpubBook, EpubError> {
-        self.parse_opf(opf_path)
+        let mut book = self.parse_opf(opf_path)?;
+        book.encryptions = self.parse_encryption().unwrap_or_default();
+        Ok(book)
+    }
+
+    /// Reads `META-INF/encryption.xml` to find obfuscated resources
+    fn parse_encryption(&mut self) -> Result<std::collections::HashMap<String, crate::crypto::ObfuscationAlgorithm>, EpubError> {
+        let mut encryptions = std::collections::HashMap::new();
+
+        let mut enc_file = match self.provider.read_file("META-INF/encryption.xml") {
+            Ok(f) => f,
+            Err(_) => return Ok(encryptions), // Doesn't exist, which is fine
+        };
+
+        let mut buf = String::new();
+        if enc_file.read_to_string(&mut buf).is_err() {
+            return Ok(encryptions);
+        }
+
+        let mut reader = Reader::from_str(&buf);
+        reader.config_mut().trim_text(true);
+
+        let mut current_algo = None;
+        let mut event_buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut event_buf) {
+                Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => {
+                    let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
+                    if name.ends_with("EncryptionMethod") {
+                        for attr in e.attributes() {
+                            if let Ok(attr) = attr {
+                                if attr.key.as_ref() == b"Algorithm" {
+                                    let val = String::from_utf8_lossy(&attr.value);
+                                    if val == "http://www.idpf.org/2008/embedding" {
+                                        current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
+                                    } else if val == "http://ns.adobe.com/pdf/enc#RC" {
+                                        current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
+                                    }
+                                }
+                            }
+                        }
+                    } else if name.ends_with("CipherReference") {
+                        for attr in e.attributes() {
+                            if let Ok(attr) = attr {
+                                if attr.key.as_ref() == b"URI" {
+                                    let uri = String::from_utf8_lossy(&attr.value).into_owned();
+                                    // URL Decode URI (encryption.xml URIs are standard percent-encoded)
+                                    let decoded_uri = percent_encoding::percent_decode_str(&uri).decode_utf8_lossy().into_owned();
+                                    if let Some(algo) = current_algo {
+                                        encryptions.insert(decoded_uri, algo);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(Event::End(ref e)) => {
+                    let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
+                    if name.ends_with("EncryptedData") {
+                        current_algo = None;
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break, // Gracefully ignore encryption XML parsing errors
+                _ => {}
+            }
+            event_buf.clear();
+        }
+
+        Ok(encryptions)
     }
 
     /// Reads `META-INF/container.xml` to find the paths of the OPF files
@@ -349,7 +419,15 @@ impl<P: EpubProvider> EpubArchive<P> {
         };
         
         let file = self.provider.read_file(&zip_path)?;
-        Ok(file)
+        
+        // Wrap with deobfuscating reader if this file is encrypted
+        if let Some(&algo) = book.encryptions.get(&zip_path) {
+            let identifier = book.metadata.identifier.as_deref().unwrap_or("");
+            let deobfuscated = crate::crypto::DeobfuscatingReader::new(file, identifier, algo);
+            Ok(Box::new(deobfuscated))
+        } else {
+            Ok(file)
+        }
     }
 
     /// Normalizes an EPUB path by resolving `.` and `..` relative segments.

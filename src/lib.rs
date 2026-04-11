@@ -1,4 +1,5 @@
 pub mod cfi;
+pub mod crypto;
 pub mod error;
 pub mod generator;
 pub mod model;
