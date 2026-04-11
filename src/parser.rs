@@ -452,6 +452,18 @@ impl<P: EpubProvider> EpubArchive<P> {
         crate::processor::inject_cfi_dom(&html_str, &base_cfi)
     }
 
+    /// Searches the given chapter's HTML for a regular expression and returns exact CFI ranges.
+    pub fn search_chapter(&mut self, book: &EpubBook, id: &str, pattern: &regex::Regex) -> Result<Vec<crate::processor::SearchResult>, EpubError> {
+        let spine_index = book.spine.iter().position(|s| s.idref == id)
+            .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
+            
+        let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
+        let raw_html = self.get_resource_by_id(book, id)?;
+        let html_str = String::from_utf8_lossy(&raw_html);
+        
+        crate::processor::search_chapter(&html_str, &base_cfi, pattern)
+    }
+
     /// Extracts the Table of Contents (TOC) of the EPUB.
     /// It prioritizes parsing the modern EPUB 3 `nav.xhtml`, and falls back to EPUB 2 `.ncx`.
     pub fn get_toc(&mut self, book: &EpubBook) -> Result<Vec<TocEntry>, EpubError> {
