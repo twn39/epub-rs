@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = "0.4.44"
 kuchikiki = "0.8.2"
 lol_html = "2.7.2"
 quick-xml = "0.39.2"
