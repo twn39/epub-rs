@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use epub_rs::generator::{EpubBuilder, TocEntry};
-    use epub_rs::model::Metadata;
+    use epub_rs::generator::EpubBuilder;
+    use epub_rs::model::{EpubVersion, Metadata, Creator, TocEntry};
     use epub_rs::parser::EpubArchive;
     use std::io::Cursor;
 
@@ -36,7 +36,10 @@ mod tests {
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>Chapter 1.1</title></head>
-<body><h2>Nested Section</h2><p>This is nested.</p></body>
+<body><h2>Nested Section</h2><p>This is nested.</p>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>
+<script type="text/javascript"></script>
+</body>
 </html>"#;
 
         let css_content = b"h1 { color: red; }";
@@ -102,6 +105,10 @@ mod tests {
         
         let cover_item = book.manifest.get("cover-image").unwrap();
         assert_eq!(cover_item.media_type, "image/jpeg");
+        
+        let ch2_item = book.manifest.get("chapter1_1").unwrap();
+        assert!(ch2_item.properties.as_deref().unwrap_or("").contains("scripted"));
+        assert!(ch2_item.properties.as_deref().unwrap_or("").contains("svg"));
 
         // Verify Spine
         assert_eq!(book.spine.len(), 2);

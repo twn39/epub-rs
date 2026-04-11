@@ -158,6 +158,25 @@ impl EpubBuilder {
         self
     }
 
+    /// Add a resource with specific EPUB 3 properties (e.g. "scripted", "mathml", "svg", "nav").
+    pub fn add_resource_with_properties(
+        mut self,
+        id: impl Into<String>,
+        href: impl Into<String>,
+        media_type: impl Into<String>,
+        content: impl Into<Vec<u8>>,
+        properties: impl Into<String>,
+    ) -> Self {
+        self.resources.push(Resource {
+            id: id.into(),
+            href: href.into(),
+            media_type: media_type.into(),
+            content: ResourceContent::Bytes(content.into()),
+            properties: Some(properties.into()),
+        });
+        self
+    }
+
     /// Add a large resource (like a high-res video or image) via a readable stream.
     /// The reader will be consumed and copied directly into the ZIP archive during generation.
     pub fn add_resource_stream<R: Read + Send + Sync + 'static>(
@@ -185,13 +204,16 @@ impl EpubBuilder {
         content: impl Into<Vec<u8>>,
     ) -> Self {
         let id_str = id.into();
+        let content_bytes = content.into();
+        let properties = Self::infer_properties(&content_bytes);
+        
         self.spine.push(SpineItem::new(id_str.clone()));
         self.resources.push(Resource {
             id: id_str,
             href: href.into(),
             media_type: "application/xhtml+xml".to_string(),
-            content: ResourceContent::Bytes(content.into()),
-            properties: None,
+            content: ResourceContent::Bytes(content_bytes),
+            properties,
         });
         self
     }
@@ -277,6 +299,8 @@ impl EpubBuilder {
         let id_str = id.into();
         let href_str = href.into();
         let title_str = title.into();
+        let content_bytes = content.into();
+        let properties = Self::infer_properties(&content_bytes);
 
         self.toc.push(TocEntry::new(title_str, href_str.clone()));
 
@@ -285,8 +309,8 @@ impl EpubBuilder {
             id: id_str,
             href: href_str,
             media_type: "application/xhtml+xml".to_string(),
-            content: ResourceContent::Bytes(content.into()),
-            properties: None,
+            content: ResourceContent::Bytes(content_bytes),
+            properties,
         });
         self
     }
@@ -464,6 +488,31 @@ impl EpubBuilder {
             }
             
             ncx.push_str("    </navPoint>\n");
+        }
+    }
+
+    /// Helper to infer EPUB 3 properties (scripted, mathml, svg) from HTML content.
+    fn infer_properties(content: &[u8]) -> Option<String> {
+        let mut props = Vec::new();
+        // A simple heuristic search. For production, a proper DOM traversal could be used,
+        // but string scanning is much faster and sufficient for detecting these tags.
+        let html_str = String::from_utf8_lossy(content);
+        let lower = html_str.to_lowercase();
+        
+        if lower.contains("<script") {
+            props.push("scripted");
+        }
+        if lower.contains("<svg") {
+            props.push("svg");
+        }
+        if lower.contains("<math") {
+            props.push("mathml");
+        }
+        
+        if props.is_empty() {
+            None
+        } else {
+            Some(props.join(" "))
         }
     }
 
