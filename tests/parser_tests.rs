@@ -186,4 +186,95 @@ mod tests {
         let default_book = archive.parse().expect("Failed to parse default rendition");
         assert_eq!(default_book.metadata.title.as_deref(), Some("Reflowable Version"));
     }
+
+    #[test]
+    fn test_error_handling_bad_zip() {
+        use epub_rs::parser::EpubArchive;
+        use std::io::Cursor;
+        
+        let bad_zip_bytes = b"This is clearly not a ZIP file at all".to_vec();
+        let buffer = Cursor::new(bad_zip_bytes);
+        
+        let result = EpubArchive::new(buffer);
+        assert!(result.is_err());
+        
+        if let Err(e) = result {
+            match e {
+                epub_rs::error::EpubError::Zip(_) => {} // Expected
+                e => panic!("Expected Zip error, got {:?}", e),
+            }
+        } else {
+            panic!("Expected error, but got Ok");
+        }
+    }
+
+    #[test]
+    fn test_error_handling_missing_container() {
+        use epub_rs::parser::EpubArchive;
+        use std::io::{Cursor, Write};
+        
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            // We intentionally do NOT write META-INF/container.xml
+            zip.start_file("mimetype", options).unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            zip.finish().unwrap();
+        }
+        
+        buffer.set_position(0);
+        let mut archive = EpubArchive::new(buffer).expect("Should open valid ZIP");
+        
+        let result = archive.parse();
+        assert!(result.is_err());
+        
+        if let Err(e) = result {
+            match e {
+                epub_rs::error::EpubError::MissingContainer => {} // Expected
+                e => panic!("Expected MissingContainer error, got {:?}", e),
+            }
+        } else {
+            panic!("Expected error, but got Ok");
+        }
+    }
+
+    #[test]
+    fn test_error_handling_malformed_container() {
+        use epub_rs::parser::EpubArchive;
+        use std::io::{Cursor, Write};
+        
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            
+            // Malformed XML without the rootfile element
+            zip.start_file("META-INF/container.xml", options).unwrap();
+            zip.write_all(b"<?xml version=\"1.0\"?>
+                <container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">
+                    <rootfiles>
+                        <!-- MISSING ROOTFILE -->
+                    </rootfiles>
+                </container>").unwrap();
+            zip.finish().unwrap();
+        }
+        
+        buffer.set_position(0);
+        let mut archive = EpubArchive::new(buffer).expect("Should open valid ZIP");
+        
+        let result = archive.parse();
+        assert!(result.is_err());
+        
+        if let Err(e) = result {
+            match e {
+                epub_rs::error::EpubError::InvalidFormat(msg) => {
+                    assert!(msg.contains("No rootfile full-path found"));
+                }
+                e => panic!("Expected InvalidFormat error, got {:?}", e),
+            }
+        } else {
+            panic!("Expected error, but got Ok");
+        }
+    }
 }
