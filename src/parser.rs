@@ -228,4 +228,19 @@ impl<R: Read + Seek> EpubArchive<R> {
         file.read_to_end(&mut buf)?;
         Ok(buf)
     }
+
+    /// Reads a chapter's HTML and automatically injects `data-cfi` attributes into all DOM nodes.
+    /// This is a high-level method designed for building Web Readers.
+    /// 
+    /// It automatically calculates the `base_cfi` (OPF context) for the given spine item.
+    pub fn get_chapter_with_cfi(&mut self, book: &EpubBook, id: &str) -> Result<String, EpubError> {
+        let spine_index = book.spine.iter().position(|s| s == id)
+            .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
+        
+        let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
+        let raw_html = self.get_resource_by_id(book, id)?;
+        let html_str = String::from_utf8_lossy(&raw_html);
+        
+        crate::processor::inject_cfi_dom(&html_str, &base_cfi)
+    }
 }

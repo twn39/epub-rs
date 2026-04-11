@@ -69,6 +69,18 @@ impl EpubCfi {
         self.character_offset = Some(offset);
         self
     }
+
+    /// Generates a standard base CFI path for a spine item.
+    /// Assuming a standard OPF structure where `<spine>` is the 3rd element (/6/6).
+    /// 
+    /// # Arguments
+    /// * `spine_index` - The 0-based index of the item in the spine.
+    /// * `item_id` - The OPF manifest ID of the item for the assertion.
+    pub fn generate_spine_base_cfi(spine_index: usize, item_id: &str) -> String {
+        // Spine itemref elements are even numbers starting from 2
+        let item_cfi_index = (spine_index + 1) * 2;
+        format!("/6/6/{}[{}]!", item_cfi_index, item_id)
+    }
 }
 
 impl fmt::Display for EpubCfi {
