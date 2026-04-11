@@ -18,10 +18,10 @@ mod tests {
 </html>"#;
 
         let injected = inject_cfi_dom(html, "/6/4!").expect("Failed to inject CFIs");
-        
+
         // Verify head
         assert!(injected.contains(r#"data-cfi="epubcfi(/6/4!/2)""#)); // <head>
-        
+
         // Verify body and children
         assert!(injected.contains(r#"data-cfi="epubcfi(/6/4!/4)""#)); // <body>
         assert!(injected.contains(r#"data-cfi="epubcfi(/6/4!/4/2[wrapper])""#)); // <div id="wrapper">
@@ -32,15 +32,18 @@ mod tests {
     #[test]
     fn test_inject_head_content() {
         use epub_rs::processor::inject_head_content;
-        
-        let html = r#"<!DOCTYPE html><html><head><title>Test</title></head><body><p>1</p></body></html>"#;
+
+        let html =
+            r#"<!DOCTYPE html><html><head><title>Test</title></head><body><p>1</p></body></html>"#;
         let mut output = Vec::new();
-        
+
         let css = "<style>body { background: black; }</style>";
         inject_head_content(html.as_bytes(), &mut output, css).expect("Failed to inject CSS");
-        
+
         let result = String::from_utf8(output).unwrap();
-        assert!(result.contains("<title>Test</title><style>body { background: black; }</style></head>"));
+        assert!(
+            result.contains("<title>Test</title><style>body { background: black; }</style></head>")
+        );
     }
 
     #[test]
@@ -62,10 +65,10 @@ mod tests {
         let results = search_chapter(html, "/6/4!", &pattern).expect("Search failed");
 
         assert_eq!(results.len(), 2);
-        
+
         // First match in the first paragraph
         assert_eq!(results[0].excerpt, " is a story about a brave ");
-        // path should be body(/4) -> div(/2[content]) -> p(/2) -> text(/1). 
+        // path should be body(/4) -> div(/2[content]) -> p(/2) -> text(/1).
         // Note: the text node inside <p> is /1.
         assert_eq!(results[0].cfi, "epubcfi(/6/4!/4/2[content]/2,/1:24,/1:29)");
 
@@ -77,7 +80,6 @@ mod tests {
 
     #[test]
     fn test_extract_positions() {
-        
         use epub_rs::processor::extract_positions;
 
         let html = r#"<html><body><div id="content"><p>12345</p><p>67890</p><p>abcde</p></div></body></html>"#;
@@ -110,7 +112,7 @@ mod tests {
         );
 
         assert_eq!(positions.len(), 3);
-        
+
         // Match 1: in "12345", at offset 4
         // path: body(/4) -> div(/2) -> p(/2) -> text(/1)
         assert_eq!(positions[0].cfi, "epubcfi(/6/4!/4/2[content]/2/1:4)");
@@ -125,7 +127,7 @@ mod tests {
         // path: body(/4) -> div(/2) -> p(/6) -> text(/1)
         assert_eq!(positions[2].cfi, "epubcfi(/6/4!/4/2[content]/6/1:2)");
         assert_eq!(positions[2].global_position, 3);
-        
+
         // Final leftover counter should be 3
         assert_eq!(char_counter, 3);
     }
@@ -146,22 +148,31 @@ mod tests {
 </html>"#;
 
         let elements = extract_semantic_content(html, "/6/4[chap1]!");
-        
+
         assert_eq!(elements.len(), 3);
-        
+
         assert_eq!(elements[0].tag_name, "h1");
         assert_eq!(elements[0].text, "Chapter Title");
         assert_eq!(elements[0].language.as_deref(), Some("en")); // Inherited from html
-        assert_eq!(elements[0].cfi_range, "epubcfi(/6/4[chap1]!/4/2[content]/2)");
-        
+        assert_eq!(
+            elements[0].cfi_range,
+            "epubcfi(/6/4[chap1]!/4/2[content]/2)"
+        );
+
         assert_eq!(elements[1].tag_name, "p");
         assert_eq!(elements[1].text, "Bonjour!");
         assert_eq!(elements[1].language.as_deref(), Some("fr")); // Overridden
-        assert_eq!(elements[1].cfi_range, "epubcfi(/6/4[chap1]!/4/2[content]/4)");
-        
+        assert_eq!(
+            elements[1].cfi_range,
+            "epubcfi(/6/4[chap1]!/4/2[content]/4)"
+        );
+
         assert_eq!(elements[2].tag_name, "blockquote");
         assert_eq!(elements[2].text, "Quote text");
         assert_eq!(elements[2].language.as_deref(), Some("en")); // Inherited again
-        assert_eq!(elements[2].cfi_range, "epubcfi(/6/4[chap1]!/4/2[content]/6)");
+        assert_eq!(
+            elements[2].cfi_range,
+            "epubcfi(/6/4[chap1]!/4/2[content]/6)"
+        );
     }
 }

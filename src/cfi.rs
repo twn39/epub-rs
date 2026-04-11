@@ -1,5 +1,5 @@
 //! EPUB Canonical Fragment Identifier (CFI) implementation.
-//! 
+//!
 //! CFI allows pinpointing a specific location within an EPUB document without modifying the underlying files.
 //! Format Example: `epubcfi(/6/4[chap01ref]!/4[body01]/10[para05]/2/1:3)`
 //! Range Example: `epubcfi(/6/4[chap01ref]!/4[body01]/10[para05],/2/1:1,/3:4)`
@@ -112,7 +112,7 @@ impl EpubCfi {
 
     /// Generates a standard base CFI path for a spine item.
     /// Assuming a standard OPF structure where `<spine>` is the 3rd element (/6/6).
-    /// 
+    ///
     /// # Arguments
     /// * `spine_index` - The 0-based index of the item in the spine.
     /// * `item_id` - The OPF manifest ID of the item for the assertion.
@@ -156,7 +156,9 @@ impl std::str::FromStr for EpubCfi {
             let end = parse_path(parts[2])?;
             Ok(EpubCfi::Range { parent, start, end })
         } else {
-            Err(EpubError::InvalidFormat("Invalid CFI range structure".to_string()))
+            Err(EpubError::InvalidFormat(
+                "Invalid CFI range structure".to_string(),
+            ))
         }
     }
 }
@@ -164,7 +166,7 @@ impl std::str::FromStr for EpubCfi {
 fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
     let mut path = CfiPath::default();
     let parts: Vec<&str> = s.split('!').collect();
-    
+
     if parts.len() == 1 {
         let (steps, offset) = parse_steps_and_offset(parts[0])?;
         path.steps = steps;
@@ -172,14 +174,16 @@ fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
     } else if parts.len() == 2 {
         let (base_steps, _) = parse_steps_and_offset(parts[0])?;
         path.steps = base_steps;
-        
+
         let (local_steps, offset) = parse_steps_and_offset(parts[1])?;
         path.local_steps = Some(local_steps);
         path.character_offset = offset;
     } else {
-        return Err(EpubError::InvalidFormat("Invalid CFI path structure".to_string()));
+        return Err(EpubError::InvalidFormat(
+            "Invalid CFI path structure".to_string(),
+        ));
     }
-    
+
     Ok(path)
 }
 
@@ -189,12 +193,13 @@ fn parse_steps_and_offset(s: &str) -> Result<(Vec<CfiStep>, Option<u32>), EpubEr
     if let Some(colon_idx) = s.find(':') {
         let offset_str = &s[colon_idx + 1..];
         offset = Some(
-            offset_str.parse::<u32>()
-                .map_err(|_| EpubError::InvalidFormat("Invalid character offset".to_string()))?
+            offset_str
+                .parse::<u32>()
+                .map_err(|_| EpubError::InvalidFormat("Invalid character offset".to_string()))?,
         );
         path_str = &s[..colon_idx];
     }
-    
+
     let steps = parse_steps(path_str)?;
     Ok((steps, offset))
 }
@@ -204,15 +209,15 @@ fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
     if path.is_empty() {
         return Ok(steps);
     }
-    
+
     // Skip first slash if it exists
     let path = path.strip_prefix('/').unwrap_or(path);
-    
+
     for part in path.split('/') {
         if part.is_empty() {
             continue;
         }
-        
+
         // Check for assertions `[id]`
         let (index_str, assertion) = if let Some(bracket_start) = part.find('[') {
             if let Some(bracket_end) = part.find(']') {
@@ -225,10 +230,12 @@ fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
         } else {
             (part, None)
         };
-        
-        let index = index_str.parse::<u32>().map_err(|_| EpubError::InvalidFormat(format!("Invalid CFI index: {}", index_str)))?;
+
+        let index = index_str
+            .parse::<u32>()
+            .map_err(|_| EpubError::InvalidFormat(format!("Invalid CFI index: {}", index_str)))?;
         steps.push(CfiStep::new(index, assertion));
     }
-    
+
     Ok(steps)
 }

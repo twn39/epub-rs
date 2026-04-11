@@ -39,10 +39,10 @@ fn main() {
 
     let mut buffer = Cursor::new(Vec::new());
     builder.generate(&mut buffer).unwrap();
-    
+
     let opf_xml = extract_zip_file(&buffer.into_inner(), "OEBPS/content.opf");
     let sanitized_opf = sanitize_xml(&opf_xml);
-    
+
     println!("=== SANITIZED OPF ===");
     println!("{}", sanitized_opf);
     println!("=====================");
