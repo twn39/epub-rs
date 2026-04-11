@@ -2,6 +2,12 @@
 name = "epub-rs"
 version = "0.1.0"
 edition = "2024"
+description = "An industrial-grade, highly performant EPUB 2/3 processing engine for parsing, processing, deobfuscating, and generating electronic books."
+repository = "https://github.com/twn39/epub-rs"
+license = "MIT"
+keywords = ["epub", "ebook", "parser", "generator", "cfi"]
+categories = ["parser-implementations", "text-processing"]
+authors = ["twn39 <twn39@163.com>"]
 
 [dependencies]
 chrono = "0.4.44"
