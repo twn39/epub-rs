@@ -31,9 +31,9 @@ mod tests {
         
         // Print the first few spine items for debugging
         println!("--- First 3 Spine Items ---");
-        for (i, id) in book.spine.iter().take(3).enumerate() {
-            if let Some(item) = book.manifest.get(id) {
-                println!("{}. ID: {}, HREF: {}, Media-Type: {}", i + 1, item.id, item.href, item.media_type);
+        for (i, item) in book.spine.iter().take(3).enumerate() {
+            if let Some(manifest_item) = book.manifest.get(&item.idref) {
+                println!("{}. ID: {}, HREF: {}, Media-Type: {}, Linear: {}", i + 1, manifest_item.id, manifest_item.href, manifest_item.media_type, item.linear);
             }
         }
         
@@ -41,7 +41,7 @@ mod tests {
         println!("\n--- Phase 2: Testing Content Processor ---");
         
         // 1. Fetch raw bytes of the second chapter (index 1) from the archive
-        let second_chapter_id = &book.spine[1];
+        let second_chapter_id = &book.spine[1].idref;
         let raw_html = archive.get_resource_by_id(&book, second_chapter_id).expect("Failed to get HTML resource");
         
         println!("Chapter 2 Raw HTML Size: {} bytes", raw_html.len());
@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(book.manifest.len(), 40);
         assert_eq!(book.spine.len(), 25);
         
-        let second_chapter_id = &book.spine[1];
+        let second_chapter_id = &book.spine[1].idref;
         let raw_html = dir_archive.get_resource_by_id(&book, second_chapter_id).expect("Failed to get HTML resource");
         assert!(!raw_html.is_empty());
         

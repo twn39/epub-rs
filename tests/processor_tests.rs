@@ -28,4 +28,18 @@ mod tests {
         assert!(injected.contains(r#"data-cfi="epubcfi(/6/4!/4/2[wrapper]/2)""#)); // <p>
         assert!(injected.contains(r#"data-cfi="epubcfi(/6/4!/4/2[wrapper]/4[p2])""#)); // <p id="p2">
     }
+
+    #[test]
+    fn test_inject_head_content() {
+        use epub_rs::processor::inject_head_content;
+        
+        let html = r#"<!DOCTYPE html><html><head><title>Test</title></head><body><p>1</p></body></html>"#;
+        let mut output = Vec::new();
+        
+        let css = "<style>body { background: black; }</style>";
+        inject_head_content(html.as_bytes(), &mut output, css).expect("Failed to inject CSS");
+        
+        let result = String::from_utf8(output).unwrap();
+        assert!(result.contains("<title>Test</title><style>body { background: black; }</style></head>"));
+    }
 }

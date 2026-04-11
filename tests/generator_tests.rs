@@ -103,8 +103,8 @@ mod tests {
 
         // Verify Spine
         assert_eq!(book.spine.len(), 2);
-        assert_eq!(book.spine[0], "chapter1");
-        assert_eq!(book.spine[1], "chapter1_1");
+        assert_eq!(book.spine[0].idref, "chapter1");
+        assert_eq!(book.spine[1].idref, "chapter1_1");
         
         // Check generated ncx content
         let extracted_ncx = archive.get_resource_by_id(&book, "ncx").expect("Failed to get ncx");
