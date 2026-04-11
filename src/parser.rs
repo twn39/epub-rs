@@ -193,15 +193,29 @@ impl<R: Read + Seek> EpubArchive<R> {
         Ok(book)
     }
 
-    /// Read the raw bytes of a resource from the archive given its manifest href
-    pub fn get_resource_by_href(&mut self, book: &EpubBook, href: &str) -> Result<Vec<u8>, EpubError> {
+    /// Get a readable stream for a resource given its manifest href
+    pub fn read_resource_by_href<'a>(&'a mut self, book: &EpubBook, href: &str) -> Result<zip::read::ZipFile<'a, R>, EpubError> {
         let zip_path = if book.opf_dir.is_empty() {
             href.to_string()
         } else {
             format!("{}/{}", book.opf_dir, href)
         };
         
-        let mut file = self.archive.by_name(&zip_path)?;
+        let file = self.archive.by_name(&zip_path)?;
+        Ok(file)
+    }
+
+    /// Get a readable stream for a resource given its manifest ID
+    pub fn read_resource_by_id<'a>(&'a mut self, book: &EpubBook, id: &str) -> Result<zip::read::ZipFile<'a, R>, EpubError> {
+        let href = book.manifest.get(id)
+            .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in manifest", id)))?
+            .href.clone();
+        self.read_resource_by_href(book, &href)
+    }
+
+    /// Read the raw bytes of a resource from the archive given its manifest href
+    pub fn get_resource_by_href(&mut self, book: &EpubBook, href: &str) -> Result<Vec<u8>, EpubError> {
+        let mut file = self.read_resource_by_href(book, href)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
         Ok(buf)
@@ -209,9 +223,9 @@ impl<R: Read + Seek> EpubArchive<R> {
 
     /// Helper to get a resource by its manifest ID
     pub fn get_resource_by_id(&mut self, book: &EpubBook, id: &str) -> Result<Vec<u8>, EpubError> {
-        let item = book.manifest.get(id).ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in manifest", id)))?;
-        // Clone href to avoid borrow checker issues
-        let href = item.href.clone();
-        self.get_resource_by_href(book, &href)
+        let mut file = self.read_resource_by_id(book, id)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        Ok(buf)
     }
 }

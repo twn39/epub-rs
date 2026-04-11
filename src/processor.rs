@@ -3,10 +3,16 @@
 use crate::error::EpubError;
 use lol_html::{element, text, HtmlRewriter, Settings};
 use std::cell::RefCell;
+use std::io::{Read, Write};
 use std::rc::Rc;
 
 /// Extracts plain text from an HTML byte slice.
 pub fn extract_text(html: &[u8]) -> Result<String, EpubError> {
+    extract_text_stream(html)
+}
+
+/// Extracts plain text from an HTML stream. Memory efficient.
+pub fn extract_text_stream<R: Read>(mut reader: R) -> Result<String, EpubError> {
     let extracted_text = Rc::new(RefCell::new(String::new()));
     let text_clone = Rc::clone(&extracted_text);
 
@@ -26,9 +32,17 @@ pub fn extract_text(html: &[u8]) -> Result<String, EpubError> {
         |_: &[u8]| {} // We discard the output HTML since we only want text
     );
 
-    rewriter
-        .write(html)
-        .map_err(|e| EpubError::InvalidFormat(format!("HTML extraction error: {}", e)))?;
+    let mut buffer = [0; 8192]; // 8KB buffer
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        rewriter
+            .write(&buffer[..bytes_read])
+            .map_err(|e| EpubError::InvalidFormat(format!("HTML extraction error: {}", e)))?;
+    }
+
     rewriter
         .end()
         .map_err(|e| EpubError::InvalidFormat(format!("HTML extraction error: {}", e)))?;
@@ -44,7 +58,24 @@ where
     F: FnMut(&str, &str) -> Option<String> + 'static,
 {
     let mut output = Vec::new();
+    rewrite_links_stream(html, &mut output, link_mapper)?;
+    Ok(output)
+}
+
+/// Rewrites HTML links from a stream to a writer. Memory efficient.
+pub fn rewrite_links_stream<R: Read, W: Write, F>(
+    mut reader: R,
+    mut writer: W,
+    link_mapper: F,
+) -> Result<(), EpubError>
+where
+    F: FnMut(&str, &str) -> Option<String> + 'static,
+{
     let mapper_rc = Rc::new(RefCell::new(link_mapper));
+
+    // To handle io::Error during write inside the closure
+    let write_error = Rc::new(RefCell::new(None));
+    let error_clone = Rc::clone(&write_error);
 
     {
         let mapper_img = Rc::clone(&mapper_rc);
@@ -81,16 +112,38 @@ where
                 ],
                 ..Settings::default()
             },
-            |c: &[u8]| output.extend_from_slice(c),
+            |c: &[u8]| {
+                if let Err(e) = writer.write_all(c) {
+                    *error_clone.borrow_mut() = Some(e);
+                }
+            },
         );
 
-        rewriter
-            .write(html)
-            .map_err(|e| EpubError::InvalidFormat(format!("HTML rewrite error: {}", e)))?;
-        rewriter
-            .end()
-            .map_err(|e| EpubError::InvalidFormat(format!("HTML rewrite error: {}", e)))?;
+        let mut buffer = [0; 8192];
+        loop {
+            if write_error.borrow().is_some() {
+                break;
+            }
+            let bytes_read = reader.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            rewriter
+                .write(&buffer[..bytes_read])
+                .map_err(|e| EpubError::InvalidFormat(format!("HTML rewrite error: {}", e)))?;
+        }
+
+        if write_error.borrow().is_none() {
+            rewriter
+                .end()
+                .map_err(|e| EpubError::InvalidFormat(format!("HTML rewrite error: {}", e)))?;
+        }
     }
 
-    Ok(output)
+    let final_error = write_error.borrow_mut().take();
+    if let Some(err) = final_error {
+        return Err(EpubError::Io(err));
+    }
+
+    Ok(())
 }
