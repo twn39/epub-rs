@@ -24,6 +24,14 @@ pub struct TocEntry {
     pub children: Vec<TocEntry>,
 }
 
+/// Represents a structural landmark (e.g. cover, titlepage, toc, bodymatter).
+#[derive(Clone, Debug)]
+pub struct Landmark {
+    pub epub_type: String, // e.g. "cover", "toc", "bodymatter"
+    pub title: String,
+    pub href: String,
+}
+
 impl TocEntry {
     pub fn new(title: impl Into<String>, href: impl Into<String>) -> Self {
         Self {
@@ -54,6 +62,7 @@ pub struct EpubBuilder {
     resources: Vec<Resource>,
     spine: Vec<String>, // list of resource IDs
     toc: Vec<TocEntry>,
+    landmarks: Vec<Landmark>,
     cover_id: Option<String>,
 }
 
@@ -71,8 +80,24 @@ impl EpubBuilder {
             resources: Vec::new(),
             spine: Vec::new(),
             toc: Vec::new(),
+            landmarks: Vec::new(),
             cover_id: None,
         }
+    }
+
+    /// Add a landmark (structural reference like `cover`, `toc`, `bodymatter`).
+    pub fn add_landmark(
+        mut self,
+        epub_type: impl Into<String>,
+        href: impl Into<String>,
+        title: impl Into<String>,
+    ) -> Self {
+        self.landmarks.push(Landmark {
+            epub_type: epub_type.into(),
+            href: href.into(),
+            title: title.into(),
+        });
+        self
     }
 
     /// Set the EPUB metadata
@@ -284,7 +309,22 @@ impl EpubBuilder {
     fn generate_nav_xhtml(&self) -> String {
         let mut html = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head><title>Navigation</title></head>\n<body>\n<nav epub:type=\"toc\" id=\"toc\">\n<h1>Table of Contents</h1>\n");
         Self::build_nav_list(&self.toc, &mut html);
-        html.push_str("</nav>\n</body>\n</html>");
+        html.push_str("</nav>\n");
+
+        if !self.landmarks.is_empty() {
+            html.push_str("<nav epub:type=\"landmarks\" id=\"landmarks\">\n<h2>Landmarks</h2>\n<ol>\n");
+            for landmark in &self.landmarks {
+                html.push_str(&format!(
+                    "  <li><a epub:type=\"{}\" href=\"{}\">{}</a></li>\n",
+                    escape(&landmark.epub_type),
+                    escape(&landmark.href),
+                    escape(&landmark.title)
+                ));
+            }
+            html.push_str("</ol>\n</nav>\n");
+        }
+
+        html.push_str("</body>\n</html>");
         html
     }
 
@@ -427,6 +467,19 @@ impl EpubBuilder {
             writer.write_event(Event::Empty(itemref))?;
         }
         writer.write_event(Event::End(BytesEnd::new("spine")))?;
+
+        // <guide> for EPUB 2 fallback landmarks
+        if !self.landmarks.is_empty() {
+            writer.write_event(Event::Start(BytesStart::new("guide")))?;
+            for landmark in &self.landmarks {
+                let mut reference = BytesStart::new("reference");
+                reference.push_attribute(("type", landmark.epub_type.as_str()));
+                reference.push_attribute(("title", landmark.title.as_str()));
+                reference.push_attribute(("href", landmark.href.as_str()));
+                writer.write_event(Event::Empty(reference))?;
+            }
+            writer.write_event(Event::End(BytesEnd::new("guide")))?;
+        }
 
         // </package>
         writer.write_event(Event::End(BytesEnd::new("package")))?;
