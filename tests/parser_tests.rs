@@ -53,9 +53,11 @@ mod tests {
         assert!(!extracted_text.is_empty(), "Extracted text should not be empty");
 
         // 2.1 Test extracting text via stream (lazy)
-        let mut chapter_stream = archive.read_resource_by_id(&book, second_chapter_id).expect("Failed to get HTML stream");
-        let stream_extracted = epub_rs::processor::extract_text_stream(&mut chapter_stream).expect("Failed to extract text from stream");
-        assert_eq!(extracted_text, stream_extracted, "Stream extracted text should match slice extracted text");
+        {
+            let mut chapter_stream = archive.read_resource_by_id(&book, second_chapter_id).expect("Failed to get HTML stream");
+            let stream_extracted = epub_rs::processor::extract_text_stream(&mut chapter_stream).expect("Failed to extract text from stream");
+            assert_eq!(extracted_text, stream_extracted, "Stream extracted text should match slice extracted text");
+        }
 
         // 3. Test link rewriting (using slice)
         let rewritten_html = epub_rs::processor::rewrite_links(&raw_html, |tag, url| {
@@ -68,6 +70,23 @@ mod tests {
         
         println!("Rewritten HTML Size: {} bytes", rewritten_html.len());
         assert!(!rewritten_html.is_empty(), "Rewritten HTML should not be empty");
+
+        // --- Phase 5: Test Cover & TOC ---
+        println!("\n--- Phase 5: Testing Smart API Extraction ---");
+        let (cover_bytes, cover_mime) = archive.get_cover_image(&book).expect("Failed to get cover image");
+        println!("Cover Image extracted! Size: {} bytes, Type: {}", cover_bytes.len(), cover_mime);
+        assert!(!cover_bytes.is_empty());
+        assert!(cover_mime.starts_with("image/"));
+
+        let toc = archive.get_toc(&book).expect("Failed to get TOC");
+        println!("TOC Root Entries: {}", toc.len());
+        assert!(!toc.is_empty());
+        
+        // Print first TOC entry
+        if let Some(first) = toc.first() {
+            println!("First TOC Entry: '{}' -> {}", first.title, first.href);
+            assert!(!first.title.is_empty());
+        }
     }
 
     #[test]

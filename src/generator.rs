@@ -1,7 +1,7 @@
 //! EPUB generator module using Builder pattern.
 
 use crate::error::EpubError;
-use crate::model::{EpubVersion, Metadata, SpineItem};
+use crate::model::{EpubVersion, Metadata, SpineItem, TocEntry};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 use quick_xml::escape::escape;
@@ -14,14 +14,6 @@ use zip::ZipWriter;
 pub enum ResourceContent {
     Bytes(Vec<u8>),
     Stream(Box<dyn Read + Send + Sync>),
-}
-
-/// Represents a table of contents entry.
-#[derive(Clone, Debug)]
-pub struct TocEntry {
-    pub title: String,
-    pub href: String,
-    pub children: Vec<TocEntry>,
 }
 
 /// Represents a structural landmark (e.g. cover, titlepage, toc, bodymatter).
@@ -37,21 +29,6 @@ pub struct Landmark {
 pub struct PageListEntry {
     pub name: String, // e.g. "IV", "1", "2"
     pub href: String,
-}
-
-impl TocEntry {
-    pub fn new(title: impl Into<String>, href: impl Into<String>) -> Self {
-        Self {
-            title: title.into(),
-            href: href.into(),
-            children: Vec::new(),
-        }
-    }
-
-    pub fn add_child(mut self, child: TocEntry) -> Self {
-        self.children.push(child);
-        self
-    }
 }
 
 /// Represents a file to be added to the EPUB archive.
