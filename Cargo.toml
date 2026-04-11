@@ -17,3 +17,10 @@ sha1 = "0.11.0"
 thiserror = "2.0.18"
 url = "2.5.8"
 zip = "8.5.1"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "epub_benchmark"
+harness = false
