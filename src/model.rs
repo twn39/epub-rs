@@ -58,6 +58,23 @@ impl SpineItem {
     }
 }
 
+/// A synthetic reading position (virtual page).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Position {
+    /// The index of the spine item this position belongs to.
+    pub spine_index: usize,
+    /// The href of the manifest item.
+    pub href: String,
+    /// The exact CFI pointing to this position.
+    pub cfi: String,
+    /// The global position index (1-based) across the entire EPUB.
+    pub global_position: usize,
+    /// The progression within the current chapter (0.0 to 1.0).
+    pub chapter_progression: f32,
+    /// The overall progression within the entire EPUB (0.0 to 1.0).
+    pub total_progression: f32,
+}
+
 /// The central EPUB document structure
 #[derive(Debug, Default, Clone)]
 pub struct EpubBook {

@@ -5,6 +5,7 @@ use lol_html::{element, text, HtmlRewriter, Settings};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
+use crate::model::Position;
 use kuchikiki::traits::*;
 use kuchikiki::NodeRef;
 
@@ -334,6 +335,82 @@ fn search_node(node: &NodeRef, base_cfi: &str, current_path: &str, pattern: &reg
                     cfi: range_cfi,
                 });
             }
+        }
+    }
+}
+
+pub fn extract_positions(
+    html: &str,
+    base_cfi: &str,
+    chars_per_position: usize,
+    char_counter: &mut usize,
+    positions: &mut Vec<Position>,
+    global_pos: &mut usize,
+    spine_index: usize,
+    href: &str,
+) {
+    let document = kuchikiki::parse_html().one(html);
+    if let Ok(html_node) = document.select_first("html") {
+        traverse_for_positions(html_node.as_node(), base_cfi, "", chars_per_position, char_counter, positions, global_pos, spine_index, href);
+    }
+}
+
+fn traverse_for_positions(
+    node: &NodeRef,
+    base_cfi: &str,
+    current_path: &str,
+    chars_per_position: usize,
+    char_counter: &mut usize,
+    positions: &mut Vec<Position>,
+    global_pos: &mut usize,
+    spine_index: usize,
+    href: &str,
+) {
+    let mut child_index = 0;
+    
+    for child in node.children() {
+        if child.as_element().is_some() {
+            child_index += 2;
+            let id_assertion = child.as_element()
+                .and_then(|el| el.attributes.borrow().get("id").map(|s| s.to_string()));
+            let assertion_str = match id_assertion {
+                Some(id) => format!("[{}]", id),
+                None => String::new(),
+            };
+            let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
+            
+            traverse_for_positions(&child, base_cfi, &child_path, chars_per_position, char_counter, positions, global_pos, spine_index, href);
+        } else if let Some(text_node) = child.as_text() {
+            let text = text_node.borrow();
+            let text_len = text.chars().count();
+            let cfi_text_idx = child_index + 1;
+            
+            let mut offset = 0;
+            while *char_counter + (text_len - offset) >= chars_per_position {
+                let chars_needed = chars_per_position - *char_counter;
+                offset += chars_needed;
+                
+                *global_pos += 1;
+                let mut stripped_base = base_cfi.to_string();
+                if stripped_base.ends_with('!') {
+                    stripped_base.pop();
+                }
+                
+                // Add the specific CFI range
+                let cfi = format!("epubcfi({}!{}/{}:{})", stripped_base, current_path, cfi_text_idx, offset);
+                
+                positions.push(Position {
+                    spine_index,
+                    href: href.to_string(),
+                    cfi,
+                    global_position: *global_pos,
+                    chapter_progression: 0.0,
+                    total_progression: 0.0,
+                });
+                
+                *char_counter = 0;
+            }
+            *char_counter += text_len - offset;
         }
     }
 }
