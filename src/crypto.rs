@@ -129,7 +129,7 @@ mod tests {
         let key = generate_idpf_key(identifier);
         
         // Create 2000 bytes of data
-        let mut original_data = vec![42u8; 2000];
+        let original_data = vec![42u8; 2000];
         
         // Obfuscate the first 1040 bytes
         let mut obfuscated_data = original_data.clone();

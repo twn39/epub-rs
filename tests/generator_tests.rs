@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use epub_rs::generator::EpubBuilder;
-    use epub_rs::model::{EpubVersion, Metadata, Creator, TocEntry};
+    use epub_rs::model::{Metadata, TocEntry};
     use epub_rs::parser::EpubArchive;
     use std::io::Cursor;
 
