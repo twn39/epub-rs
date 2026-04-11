@@ -47,12 +47,17 @@ mod tests {
         println!("Chapter 2 Raw HTML Size: {} bytes", raw_html.len());
         assert!(!raw_html.is_empty(), "Chapter HTML should not be empty");
 
-        // 2. Test extracting text
+        // 2. Test extracting text (using slice)
         let extracted_text = epub_rs::processor::extract_text(&raw_html).expect("Failed to extract text");
         println!("Extracted Text Preview: {:.100}...", extracted_text);
         assert!(!extracted_text.is_empty(), "Extracted text should not be empty");
 
-        // 3. Test link rewriting
+        // 2.1 Test extracting text via stream (lazy)
+        let mut chapter_stream = archive.read_resource_by_id(&book, second_chapter_id).expect("Failed to get HTML stream");
+        let stream_extracted = epub_rs::processor::extract_text_stream(&mut chapter_stream).expect("Failed to extract text from stream");
+        assert_eq!(extracted_text, stream_extracted, "Stream extracted text should match slice extracted text");
+
+        // 3. Test link rewriting (using slice)
         let rewritten_html = epub_rs::processor::rewrite_links(&raw_html, |tag, url| {
             if tag == "img" {
                 Some(format!("https://cdn.example.com/{}", url))
