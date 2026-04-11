@@ -94,15 +94,19 @@ mod tests {
         // Third <p> is 5 chars ("abcde"). Leftover (2) + 5 = 7. It should emit another position after 2 chars.
         // Leftover: 3 chars.
 
+        let ctx = epub_rs::processor::PositionContext {
+            base_cfi: "/6/4!",
+            chars_per_position: 4,
+            spine_index: 0,
+            href: "test.xhtml",
+        };
+
         extract_positions(
             html,
-            "/6/4!",
-            4,
+            &ctx,
             &mut char_counter,
             &mut positions,
             &mut global_pos,
-            0,
-            "test.xhtml",
         );
 
         assert_eq!(positions.len(), 3);
