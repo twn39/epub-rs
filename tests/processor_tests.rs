@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn test_extract_positions() {
-        use epub_rs::model::Position;
+        
         use epub_rs::processor::extract_positions;
 
         let html = r#"<html><body><div id="content"><p>12345</p><p>67890</p><p>abcde</p></div></body></html>"#;

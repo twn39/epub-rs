@@ -93,7 +93,7 @@ mod tests {
     fn test_parse_from_directory() {
         use epub_rs::parser::EpubArchive;
         use std::fs;
-        use std::io::Write;
+        
         
         // 1. Unzip an EPUB to a temporary directory to test DirProvider
         let epub_path = "ebooks/软件设计的哲学 (John Ousterhout) (z-library.sk, 1lib.sk, z-lib.sk).epub";
@@ -113,11 +113,10 @@ mod tests {
             if (*file.name()).ends_with('/') {
                 fs::create_dir_all(&outpath).unwrap();
             } else {
-                if let Some(p) = outpath.parent() {
-                    if !p.exists() {
-                        fs::create_dir_all(&p).unwrap();
+                if let Some(p) = outpath.parent()
+                    && !p.exists() {
+                        fs::create_dir_all(p).unwrap();
                     }
-                }
                 let mut outfile = fs::File::create(&outpath).unwrap();
                 std::io::copy(&mut file, &mut outfile).unwrap();
             }

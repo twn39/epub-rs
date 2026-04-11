@@ -1,5 +1,4 @@
 //! EPUB generator module using Builder pattern.
-
 use crate::error::EpubError;
 use crate::model::{EpubVersion, Metadata, SpineItem, TocEntry};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
@@ -9,12 +8,26 @@ use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
+use std::path::Path;
 
 /// Represents the content of a resource, which can be either fully in-memory or a readable stream.
 pub enum ResourceContent {
     Bytes(Vec<u8>),
     Stream(Box<dyn Read + Send + Sync>),
 }
+
+/// Built-in themes for quick, elegant publishing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
+pub enum Theme {
+    /// No CSS injected automatically.
+    #[default]
+    None,
+    /// A clean, modern typography stylesheet suitable for novels and articles, 
+    /// with built-in dark mode support (media queries).
+    Modern,
+}
+
 
 /// Represents a structural landmark (e.g. cover, titlepage, toc, bodymatter).
 #[derive(Clone, Debug)]
@@ -44,6 +57,7 @@ struct Resource {
 pub struct EpubBuilder {
     version: EpubVersion,
     metadata: Metadata,
+    theme: Theme,
     resources: Vec<Resource>,
     spine: Vec<SpineItem>, // list of spine items
     toc: Vec<TocEntry>,
@@ -58,12 +72,51 @@ impl Default for EpubBuilder {
     }
 }
 
+const MODERN_THEME_CSS: &str = r#"
+/* Modern EPUB-RS Default Theme */
+body {
+    font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+    font-size: 1em;
+    line-height: 1.6;
+    margin: 5% 5%;
+    text-align: justify;
+    color: #333;
+    background-color: #fff;
+}
+h1, h2, h3, h4, h5, h6 {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #111;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+    text-align: center;
+}
+p {
+    margin: 0 0 1em 0;
+    text-indent: 1.5em;
+}
+blockquote {
+    font-style: italic;
+    margin: 1em 2em;
+    padding-left: 1em;
+    border-left: 2px solid #ccc;
+}
+@media (prefers-color-scheme: dark) {
+    body {
+        color: #ddd;
+        background-color: #121212;
+    }
+    h1, h2, h3, h4, h5, h6 { color: #fff; }
+    blockquote { border-left-color: #444; }
+}
+"#;
+
 impl EpubBuilder {
     /// Create a new empty EPUB builder
     pub fn new() -> Self {
         Self {
             version: EpubVersion::default(),
             metadata: Metadata::default(),
+            theme: Theme::default(),
             resources: Vec::new(),
             spine: Vec::new(),
             toc: Vec::new(),
@@ -76,6 +129,13 @@ impl EpubBuilder {
     /// Set the EPUB version target
     pub fn version(mut self, version: EpubVersion) -> Self {
         self.version = version;
+        self
+    }
+
+    /// Set the global built-in theme. If set to anything other than `None`,
+    /// it will automatically inject a CSS file and link it into all added HTML chapters.
+    pub fn theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
         self
     }
 
@@ -262,6 +322,85 @@ impl EpubBuilder {
         self
     }
 
+    /// Add a chapter from an HTML file. Automatically discovers `<img src="...">` and 
+    /// `<link href="style.css">` tags, loads those files from the local disk, adds them to 
+    /// the EPUB manifest, and rewrites the HTML to point to the new internal EPUB paths.
+    pub fn add_chapter_from_html_file<P: AsRef<Path>>(
+        mut self,
+        id: impl Into<String>,
+        file_path: P,
+    ) -> Result<Self, EpubError> {
+        let path = file_path.as_ref();
+        let base_dir = path.parent().unwrap_or_else(|| Path::new(""));
+        
+        let mut html_content = std::fs::read(path).map_err(EpubError::Io)?;
+        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+        let chapter_href = format!("text/{}", filename);
+        
+        // Use lol_html to find assets and rewrite links
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let assets_to_add = Rc::new(RefCell::new(Vec::new()));
+        
+        let assets_img = Rc::clone(&assets_to_add);
+        let assets_link = Rc::clone(&assets_to_add);
+        
+        // A mapper that records local paths and rewrites to OEBPS internal paths
+        let rewritten_html = crate::processor::rewrite_links(&html_content, move |tag, url| {
+            // Ignore absolute URLs (http://, https://, data:)
+            if url.starts_with("http") || url.starts_with("data:") {
+                return None;
+            }
+            
+            // Clean URL from anchors or query strings (e.g. img.jpg?v=1)
+            let clean_url = url.split('?').next().unwrap_or(url).split('#').next().unwrap_or(url);
+            
+            if tag == "img" {
+                let internal_path = format!("images/{}", clean_url);
+                assets_img.borrow_mut().push((clean_url.to_string(), internal_path.clone(), "image/jpeg".to_string())); // Simplified mime
+                return Some(format!("../{}", internal_path)); // relative to text/ folder
+            } else if tag == "link" {
+                let internal_path = format!("styles/{}", clean_url);
+                assets_link.borrow_mut().push((clean_url.to_string(), internal_path.clone(), "text/css".to_string()));
+                return Some(format!("../{}", internal_path));
+            }
+            None
+        })?;
+        
+        html_content = rewritten_html;
+        
+        // Consume the assets to add
+        let assets = Rc::try_unwrap(assets_to_add).unwrap().into_inner();
+        for (local_path, internal_path, mime) in assets {
+            // Read from local disk relative to the HTML file
+            let absolute_path = base_dir.join(&local_path);
+            if let Ok(bytes) = std::fs::read(absolute_path) {
+                // Generate a safe ID for the asset
+                let asset_id = local_path.replace(['/', '.', '\\'], "_");
+                
+                // Add asset to builder
+                self.resources.push(Resource {
+                    id: asset_id,
+                    href: internal_path,
+                    media_type: mime,
+                    content: ResourceContent::Bytes(bytes),
+                    properties: None,
+                });
+            }
+        }
+        
+        // Add the rewritten chapter
+        self.spine.push(SpineItem::new(id.into()));
+        self.resources.push(Resource {
+            id: filename.to_string(),
+            href: chapter_href,
+            media_type: "application/xhtml+xml".to_string(),
+            content: ResourceContent::Bytes(html_content),
+            properties: None,
+        });
+
+        Ok(self)
+    }
     /// Add a chapter with a specific layout or page spread behavior (ideal for comics or picture books).
     pub fn add_chapter_with_layout(
         mut self,
@@ -272,6 +411,9 @@ impl EpubBuilder {
         spread: Option<crate::model::PageSpread>,
     ) -> Self {
         let id_str = id.into();
+        let content_bytes = content.into();
+        let properties = Self::infer_properties(&content_bytes);
+
         let mut spine_item = SpineItem::new(id_str.clone());
         spine_item.layout_override = layout;
         spine_item.page_spread = spread;
@@ -281,8 +423,8 @@ impl EpubBuilder {
             id: id_str,
             href: href.into(),
             media_type: "application/xhtml+xml".to_string(),
-            content: ResourceContent::Bytes(content.into()),
-            properties: None,
+            content: ResourceContent::Bytes(content_bytes),
+            properties,
         });
         self
     }
@@ -318,6 +460,18 @@ impl EpubBuilder {
     /// Build the EPUB and write it to the provided writer (e.g., `std::fs::File` or `Vec<u8>`).
     pub fn generate<W: Write + Seek>(mut self, writer: W) -> Result<(), EpubError> {
         let mut zip = ZipWriter::new(writer);
+
+        let mut theme_href = None;
+        if self.theme == Theme::Modern {
+            theme_href = Some("styles/epub-rs-modern.css");
+            self.resources.push(Resource {
+                id: "epub-rs-theme-modern".to_string(),
+                href: theme_href.unwrap().to_string(),
+                media_type: "text/css".to_string(),
+                content: ResourceContent::Bytes(MODERN_THEME_CSS.as_bytes().to_vec()),
+                properties: None,
+            });
+        }
 
         // Auto-generate Navigation documents if we have TOC entries
         let has_toc = !self.toc.is_empty();
@@ -379,10 +533,27 @@ impl EpubBuilder {
             let zip_path = format!("OEBPS/{}", res.href);
             zip.start_file(&zip_path, options_deflated)?;
             match res.content {
-                ResourceContent::Bytes(bytes) => {
+                ResourceContent::Bytes(mut bytes) => {
+                    // Inject CSS reference if it's an HTML file and theme is enabled
+                    if res.media_type == "application/xhtml+xml"
+                        && let Some(css_href) = theme_href {
+                            // Calculate relative path from this HTML file to the styles dir.
+                            // Simplified logic: Count slashes in `res.href` to figure out depth
+                            let depth = res.href.chars().filter(|&c| c == '/').count();
+                            let up_path = "../".repeat(depth);
+                            let relative_css_path = format!("{}{}", up_path, css_href);
+                            
+                            let link_tag = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\" />\n", relative_css_path);
+                            let mut new_html = Vec::new();
+                            if crate::processor::inject_head_content(&bytes[..], &mut new_html, &link_tag).is_ok() && !new_html.is_empty() {
+                                bytes = new_html;
+                            }
+                        }
                     zip.write_all(&bytes)?;
                 }
                 ResourceContent::Stream(ref mut stream) => {
+                    // Note: We don't auto-inject themes into streamed HTML to save memory.
+                    // If a user streams HTML, they are responsible for their own themes.
                     std::io::copy(stream, &mut zip)?;
                 }
             }
