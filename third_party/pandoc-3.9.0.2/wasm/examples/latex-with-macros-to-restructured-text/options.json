@@ -1,6 +1,0 @@
-{
- "from": "latex",
- "to": "rst",
- "standalone": true,
- "citeproc": false
-}
