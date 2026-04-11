@@ -742,4 +742,32 @@ mod tests {
         assert!(combo_str.contains("scripted"));
         assert!(combo_str.contains("svg"));
     }
+
+    #[test]
+    fn test_xml_entity_escaping() {
+        use crate::model::{EpubVersion, Metadata};
+        use std::io::Cursor;
+
+        let mut metadata = Metadata::default();
+        // The title contains & and < which must be escaped
+        metadata.title = Some("Me & You <3".to_string());
+
+        let builder = EpubBuilder::new()
+            .version(EpubVersion::V30)
+            .metadata(metadata)
+            .add_chapter("chapter1", "text/ch1.xhtml", b"Hello".to_vec());
+
+        let mut buffer = Cursor::new(Vec::new());
+        builder.generate(&mut buffer).expect("Failed to generate EPUB");
+
+        let data = buffer.into_inner();
+        let reader = Cursor::new(data);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+        let mut file = archive.by_name("OEBPS/content.opf").unwrap();
+        let mut opf_content = String::new();
+        file.read_to_string(&mut opf_content).unwrap();
+
+        // Should be correctly escaped in the raw XML
+        assert!(opf_content.contains("<dc:title>Me &amp; You &lt;3</dc:title>"));
+    }
 }

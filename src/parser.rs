@@ -342,14 +342,32 @@ impl<P: EpubProvider> EpubArchive<P> {
 
     /// Get a readable stream for a resource given its manifest href
     pub fn read_resource_by_href<'a>(&'a mut self, book: &EpubBook, href: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
-        let res_path = if book.opf_dir.is_empty() {
-            href.to_string()
+        let zip_path = if book.opf_dir.is_empty() {
+            Self::normalize_path("", href)
         } else {
-            format!("{}/{}", book.opf_dir, href)
+            Self::normalize_path(&book.opf_dir, href)
         };
         
-        let file = self.provider.read_file(&res_path)?;
+        let file = self.provider.read_file(&zip_path)?;
         Ok(file)
+    }
+
+    /// Normalizes an EPUB path by resolving `.` and `..` relative segments.
+    fn normalize_path(base: &str, href: &str) -> String {
+        let mut parts = Vec::new();
+        
+        for comp in base.split('/').chain(href.split('/')) {
+            if comp.is_empty() || comp == "." {
+                continue;
+            }
+            if comp == ".." {
+                parts.pop(); // Go up one directory
+            } else {
+                parts.push(comp);
+            }
+        }
+        
+        parts.join("/")
     }
 
     /// Get a readable stream for a resource given its manifest ID
