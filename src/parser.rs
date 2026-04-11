@@ -562,3 +562,48 @@ impl<P: EpubProvider> EpubArchive<P> {
         Ok(root_entries)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ncx_pure() {
+        let xml = r#"
+        <?xml version="1.0" encoding="UTF-8"?>
+        <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+          <navMap>
+            <navPoint id="navPoint-1" playOrder="1">
+              <navLabel><text>Chapter 1</text></navLabel>
+              <content src="ch1.xhtml"/>
+              <navPoint id="navPoint-2" playOrder="2">
+                <navLabel><text>Chapter 1.1</text></navLabel>
+                <content src="ch1_1.xhtml"/>
+              </navPoint>
+            </navPoint>
+            <navPoint id="navPoint-3" playOrder="3">
+              <navLabel><text>Chapter 2</text></navLabel>
+              <content src="ch2.xhtml"/>
+            </navPoint>
+          </navMap>
+        </ncx>
+        "#;
+
+        let entries = EpubArchive::<crate::provider::DirProvider>::parse_ncx(xml).unwrap();
+        
+        assert_eq!(entries.len(), 2); // Chapter 1, Chapter 2
+        
+        // Chapter 1
+        assert_eq!(entries[0].title, "Chapter 1");
+        assert_eq!(entries[0].href, "ch1.xhtml");
+        assert_eq!(entries[0].children.len(), 1); // Chapter 1.1 nested
+        
+        // Chapter 1.1
+        assert_eq!(entries[0].children[0].title, "Chapter 1.1");
+        assert_eq!(entries[0].children[0].href, "ch1_1.xhtml");
+
+        // Chapter 2
+        assert_eq!(entries[1].title, "Chapter 2");
+        assert_eq!(entries[1].href, "ch2.xhtml");
+    }
+}
