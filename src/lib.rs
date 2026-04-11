@@ -4,6 +4,7 @@ pub mod generator;
 pub mod model;
 pub mod parser;
 pub mod processor;
+pub mod provider;
 
 pub use cfi::EpubCfi;
 pub use error::EpubError;
