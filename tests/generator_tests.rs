@@ -48,6 +48,8 @@ mod tests {
             .add_chapter("chapter1", "text/ch1.xhtml", chapter1_html.to_vec())
             .add_chapter("chapter1_1", "text/ch1_1.xhtml", chapter2_html.to_vec())
             .add_resource_stream("stream1", "stream.txt", "text/plain", stream_reader)
+            .add_landmark("cover", "text/ch1.xhtml", "封面")
+            .add_landmark("toc", "nav.xhtml", "目录")
             .set_toc(vec![root_entry]);
         
         // Write to an in-memory buffer
@@ -101,6 +103,10 @@ mod tests {
         // It should contain nested <ol> inside <li>
         assert!(nav_str.contains("<li><a href=\"text/ch1.xhtml\">第一章</a>"));
         assert!(nav_str.contains("<li><a href=\"text/ch1_1.xhtml\">第一节</a>"));
+        
+        // Check Landmarks
+        assert!(nav_str.contains("epub:type=\"landmarks\""));
+        assert!(nav_str.contains("epub:type=\"cover\" href=\"text/ch1.xhtml\">封面</a>"));
         
         // Extract and verify content
         let extracted_css = archive.get_resource_by_id(&book, "style.css").expect("Failed to get css");
