@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
 use crate::model::Position;
+use crate::model::ContentElement;
 use kuchikiki::traits::*;
 use kuchikiki::NodeRef;
 
@@ -411,6 +412,112 @@ fn traverse_for_positions(
                 *char_counter = 0;
             }
             *char_counter += text_len - offset;
+        }
+    }
+}
+
+/// Extracts a structured, semantic list of content elements (headings, paragraphs, blockquotes)
+/// from the HTML chapter. Excellent for feeding a Text-To-Speech (TTS) engine, as it preserves
+/// paragraph boundaries, language, and exact CFI highlighting coordinates.
+pub fn extract_semantic_content(html: &str, base_cfi: &str) -> Vec<ContentElement> {
+    let document = kuchikiki::parse_html().one(html);
+    let mut elements = Vec::new();
+    
+    // Find language from html tag or body if defined
+    let doc_lang = document.select_first("html").ok()
+        .and_then(|n| n.as_node().as_element().unwrap().attributes.borrow().get("lang").map(|s| s.to_string()))
+        .or_else(|| document.select_first("html").ok()
+        .and_then(|n| n.as_node().as_element().unwrap().attributes.borrow().get("xml:lang").map(|s| s.to_string())));
+        
+    let html_node_path = ""; // HTML itself is usually implicit in the `!` boundary
+
+    if let Ok(html_node) = document.select_first("html") {
+        // Look for the body tag inside HTML
+        let mut child_index = 0;
+        let mut body_path = format!("{}/4", html_node_path); // Default is /4
+        let mut body_node = None;
+        
+        for child in html_node.as_node().children() {
+            if let Some(el) = child.as_element() {
+                child_index += 2;
+                if el.name.local.to_string() == "body" {
+                    body_node = Some(child.clone());
+                    body_path = format!("{}/{}", html_node_path, child_index);
+                    break;
+                }
+            }
+        }
+        
+        if let Some(body) = body_node {
+            let mut stripped_base = base_cfi.to_string();
+            if stripped_base.ends_with('!') {
+                stripped_base.pop();
+            }
+            
+            traverse_semantic_nodes(
+                &body, 
+                &stripped_base, 
+                &body_path, 
+                &doc_lang, 
+                &mut elements
+            );
+        }
+    }
+    
+    elements
+}
+
+fn traverse_semantic_nodes(
+    node: &NodeRef,
+    base_cfi: &str,
+    current_path: &str,
+    inherited_lang: &Option<String>,
+    elements: &mut Vec<ContentElement>,
+) {
+    let mut child_index = 0;
+
+    for child in node.children() {
+        if let Some(el) = child.as_element() {
+            child_index += 2;
+            let tag_name = el.name.local.to_string();
+            
+            let id_assertion = el.attributes.borrow().get("id").map(|s| s.to_string());
+            let assertion_str = match id_assertion {
+                Some(id) => format!("[{}]", id),
+                None => String::new(),
+            };
+            
+            let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
+            
+            let mut current_lang = inherited_lang.clone();
+            if let Some(lang) = el.attributes.borrow().get("lang") {
+                current_lang = Some(lang.to_string());
+            } else if let Some(lang) = el.attributes.borrow().get("xml:lang") {
+                current_lang = Some(lang.to_string());
+            }
+
+            // Is this a block-level semantic container?
+            let is_block = matches!(
+                tag_name.as_str(),
+                "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote" | "li" | "dt" | "dd" | "figcaption"
+            );
+
+            if is_block {
+                let text_content = child.text_contents().trim().to_string();
+                if !text_content.is_empty() {
+                    let cfi_range = format!("epubcfi({}!{})", base_cfi, child_path);
+                    
+                    elements.push(ContentElement {
+                        text: text_content,
+                        cfi_range,
+                        tag_name: tag_name.clone(),
+                        language: current_lang.clone(),
+                    });
+                }
+            } else {
+                // Not a block (e.g. <div>, <section>, <span>), traverse deeper
+                traverse_semantic_nodes(&child, base_cfi, &child_path, &current_lang, elements);
+            }
         }
     }
 }

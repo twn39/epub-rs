@@ -74,8 +74,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                     let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
                     if name.ends_with("EncryptionMethod") {
                         for attr in e.attributes() {
-                            if let Ok(attr) = attr {
-                                if attr.key.as_ref() == b"Algorithm" {
+                            if let Ok(attr) = attr
+                                && attr.key.as_ref() == b"Algorithm" {
                                     let val = String::from_utf8_lossy(&attr.value);
                                     if val == "http://www.idpf.org/2008/embedding" {
                                         current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
@@ -83,12 +83,11 @@ impl<P: EpubProvider> EpubArchive<P> {
                                         current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
                                     }
                                 }
-                            }
                         }
                     } else if name.ends_with("CipherReference") {
                         for attr in e.attributes() {
-                            if let Ok(attr) = attr {
-                                if attr.key.as_ref() == b"URI" {
+                            if let Ok(attr) = attr
+                                && attr.key.as_ref() == b"URI" {
                                     let uri = String::from_utf8_lossy(&attr.value).into_owned();
                                     // URL Decode URI (encryption.xml URIs are standard percent-encoded)
                                     let decoded_uri = percent_encoding::percent_decode_str(&uri).decode_utf8_lossy().into_owned();
@@ -96,7 +95,6 @@ impl<P: EpubProvider> EpubArchive<P> {
                                         encryptions.insert(decoded_uri, algo);
                                     }
                                 }
-                            }
                         }
                     }
                 }
@@ -616,6 +614,20 @@ impl<P: EpubProvider> EpubArchive<P> {
         }
 
         Ok(all_positions)
+    }
+
+    /// Extracts semantic content blocks (paragraphs, headings) from a specific chapter.
+    /// Returns blocks with their text, tags, languages, and CFI paths.
+    /// This is highly useful for Text-to-Speech (TTS) integrations.
+    pub fn get_semantic_content(&mut self, book: &EpubBook, id: &str) -> Result<Vec<crate::model::ContentElement>, EpubError> {
+        let spine_index = book.spine.iter().position(|s| s.idref == id)
+            .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
+            
+        let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
+        let raw_html = self.get_resource_by_id(book, id)?;
+        let html_str = String::from_utf8_lossy(&raw_html);
+        
+        Ok(crate::processor::extract_semantic_content(&html_str, &base_cfi))
     }
 
     /// Extracts the Table of Contents (TOC) of the EPUB.

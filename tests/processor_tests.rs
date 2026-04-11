@@ -125,4 +125,39 @@ mod tests {
         // Final leftover counter should be 3
         assert_eq!(char_counter, 3);
     }
+
+    #[test]
+    fn test_extract_semantic_content() {
+        use epub_rs::processor::extract_semantic_content;
+
+        let html = r#"<!DOCTYPE html>
+<html lang="en">
+<body>
+    <div id="content">
+        <h1>Chapter Title</h1>
+        <p lang="fr">Bonjour!</p>
+        <blockquote>Quote text</blockquote>
+    </div>
+</body>
+</html>"#;
+
+        let elements = extract_semantic_content(html, "/6/4[chap1]!");
+        
+        assert_eq!(elements.len(), 3);
+        
+        assert_eq!(elements[0].tag_name, "h1");
+        assert_eq!(elements[0].text, "Chapter Title");
+        assert_eq!(elements[0].language.as_deref(), Some("en")); // Inherited from html
+        assert_eq!(elements[0].cfi_range, "epubcfi(/6/4[chap1]!/4/2[content]/2)");
+        
+        assert_eq!(elements[1].tag_name, "p");
+        assert_eq!(elements[1].text, "Bonjour!");
+        assert_eq!(elements[1].language.as_deref(), Some("fr")); // Overridden
+        assert_eq!(elements[1].cfi_range, "epubcfi(/6/4[chap1]!/4/2[content]/4)");
+        
+        assert_eq!(elements[2].tag_name, "blockquote");
+        assert_eq!(elements[2].text, "Quote text");
+        assert_eq!(elements[2].language.as_deref(), Some("en")); // Inherited again
+        assert_eq!(elements[2].cfi_range, "epubcfi(/6/4[chap1]!/4/2[content]/6)");
+    }
 }
