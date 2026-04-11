@@ -1,6 +1,0 @@
-{
- "from": "latex",
- "to": "docbook5",
- "html-math-method": "mathml",
- "standalone": true
-}
