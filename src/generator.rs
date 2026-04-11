@@ -1,7 +1,7 @@
 //! EPUB generator module using Builder pattern.
 
 use crate::error::EpubError;
-use crate::model::{Metadata, SpineItem};
+use crate::model::{EpubVersion, Metadata, SpineItem};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
 use quick_xml::escape::escape;
@@ -58,6 +58,7 @@ struct Resource {
 
 /// A Builder for creating EPUB files.
 pub struct EpubBuilder {
+    version: EpubVersion,
     metadata: Metadata,
     resources: Vec<Resource>,
     spine: Vec<SpineItem>, // list of spine items
@@ -76,6 +77,7 @@ impl EpubBuilder {
     /// Create a new empty EPUB builder
     pub fn new() -> Self {
         Self {
+            version: EpubVersion::default(),
             metadata: Metadata::default(),
             resources: Vec::new(),
             spine: Vec::new(),
@@ -83,6 +85,12 @@ impl EpubBuilder {
             landmarks: Vec::new(),
             cover_id: None,
         }
+    }
+
+    /// Set the EPUB version target
+    pub fn version(mut self, version: EpubVersion) -> Self {
+        self.version = version;
+        self
     }
 
     /// Add a landmark (structural reference like `cover`, `toc`, `bodymatter`).
@@ -260,26 +268,36 @@ impl EpubBuilder {
 
         // Auto-generate Navigation documents if we have TOC entries
         let has_toc = !self.toc.is_empty();
+        let mut has_ncx = false;
+        
         if has_toc {
-            // EPUB 3 nav.xhtml
-            let nav_html = self.generate_nav_xhtml();
-            self.resources.push(Resource {
-                id: "nav".to_string(),
-                href: "nav.xhtml".to_string(),
-                media_type: "application/xhtml+xml".to_string(),
-                content: ResourceContent::Bytes(nav_html.into_bytes()),
-                properties: Some("nav".to_string()),
-            });
+            // EPUB 3 requires nav.xhtml
+            if self.version == EpubVersion::V30 {
+                let nav_html = self.generate_nav_xhtml();
+                self.resources.push(Resource {
+                    id: "nav".to_string(),
+                    href: "nav.xhtml".to_string(),
+                    media_type: "application/xhtml+xml".to_string(),
+                    content: ResourceContent::Bytes(nav_html.into_bytes()),
+                    properties: Some("nav".to_string()),
+                });
+                
+                // Fallback NCX for backwards compatibility
+                has_ncx = true;
+            } else if self.version == EpubVersion::V20 {
+                has_ncx = true;
+            }
 
-            // EPUB 2 toc.ncx (for fallback compatibility)
-            let ncx_xml = self.generate_ncx();
-            self.resources.push(Resource {
-                id: "ncx".to_string(),
-                href: "toc.ncx".to_string(),
-                media_type: "application/x-dtbncx+xml".to_string(),
-                content: ResourceContent::Bytes(ncx_xml.into_bytes()),
-                properties: None,
-            });
+            if has_ncx {
+                let ncx_xml = self.generate_ncx();
+                self.resources.push(Resource {
+                    id: "ncx".to_string(),
+                    href: "toc.ncx".to_string(),
+                    media_type: "application/x-dtbncx+xml".to_string(),
+                    content: ResourceContent::Bytes(ncx_xml.into_bytes()),
+                    properties: None,
+                });
+            }
         }
 
         // 1. Write `mimetype` (MUST be first, MUST be uncompressed)
@@ -301,7 +319,7 @@ impl EpubBuilder {
         zip.write_all(container_xml.as_bytes())?;
 
         // Generate OPF content BEFORE consuming self.resources
-        let opf_content = self.generate_opf(has_toc)?;
+        let opf_content = self.generate_opf(has_ncx)?;
 
         // 3. Write resources
         for mut res in self.resources {

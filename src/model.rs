@@ -2,6 +2,18 @@
 
 use std::collections::HashMap;
 
+/// Specifies the version of the EPUB standard to target during generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
+pub enum EpubVersion {
+    /// EPUB 2.0 (Compatible with older e-readers, relies on NCX)
+    V20,
+    /// EPUB 3.0 (Modern standard, uses HTML5 navigation and semantic tags)
+    #[default]
+    V30,
+}
+
+
 /// Represents an item in the reading order (spine).
 #[derive(Debug, Clone)]
 pub struct SpineItem {

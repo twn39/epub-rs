@@ -136,4 +136,34 @@ mod tests {
         assert!(extracted_text.contains("Hello World"));
         assert!(extracted_text.contains("This is a generated EPUB chapter."));
     }
+
+    #[test]
+    fn test_generate_epub_v2() {
+        use epub_rs::model::{EpubVersion, Metadata, Creator};
+
+        let mut metadata = Metadata::default();
+        metadata.title = Some("Legacy Book".to_string());
+        metadata.creators.push(Creator {
+            name: "V2 Author".to_string(),
+            role: Some("aut".to_string()),
+            file_as: Some("Author, V2".to_string()),
+        });
+
+        let builder = EpubBuilder::new()
+            .version(EpubVersion::V20)
+            .metadata(metadata)
+            .add_chapter("chapter1", "text/ch1.xhtml", b"<html><body>Legacy</body></html>".to_vec());
+
+        let mut buffer = Cursor::new(Vec::new());
+        builder.generate(&mut buffer).expect("Failed to generate V2 EPUB");
+
+        buffer.set_position(0);
+        let mut archive = EpubArchive::new(buffer).expect("Failed to open V2 generated EPUB");
+        let book = archive.parse().expect("Failed to parse V2 generated EPUB");
+
+        assert_eq!(book.metadata.title.as_deref(), Some("Legacy Book"));
+        assert_eq!(book.manifest.len(), 1); // Only chapter1, no nav since V2, no NCX since TOC is empty
+        assert!(book.manifest.contains_key("chapter1"));
+        assert!(!book.manifest.contains_key("nav"));
+    }
 }
