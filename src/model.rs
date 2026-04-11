@@ -93,6 +93,29 @@ impl Creator {
     }
 }
 
+/// Represents a table of contents entry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TocEntry {
+    pub title: String,
+    pub href: String,
+    pub children: Vec<TocEntry>,
+}
+
+impl TocEntry {
+    pub fn new(title: impl Into<String>, href: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            href: href.into(),
+            children: Vec::new(),
+        }
+    }
+
+    pub fn add_child(mut self, child: TocEntry) -> Self {
+        self.children.push(child);
+        self
+    }
+}
+
 /// Represents the `metadata` block in the OPF
 #[derive(Debug, Default, Clone)]
 pub struct Metadata {
@@ -107,6 +130,8 @@ pub struct Metadata {
     pub subjects: Vec<String>,
     /// Global layout type of the EPUB (reflowable or pre-paginated).
     pub layout: LayoutType,
+    /// EPUB 2 compatible cover image ID reference
+    pub cover_id: Option<String>,
 }
 
 /// Represents an `item` in the `manifest` block of the OPF

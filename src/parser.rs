@@ -1,11 +1,12 @@
 //! EPUB parser module.
 
 use crate::error::EpubError;
-use crate::model::{EpubBook, ManifestItem};
+use crate::model::{EpubBook, ManifestItem, TocEntry};
 use crate::provider::{DirProvider, EpubProvider, ZipProvider};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::io::{Read, Seek};
+use kuchikiki::traits::*;
 
 /// A struct that handles unpacking and parsing EPUB files.
 pub struct EpubArchive<P: EpubProvider> {
@@ -168,6 +169,22 @@ impl<P: EpubProvider> EpubArchive<P> {
                         } else if let Some(p) = property {
                             // Global properties like rendition:layout
                             current_tag = format!("meta_global_{}", p);
+                        } else {
+                            // Check EPUB 2 cover
+                            let mut is_cover = false;
+                            let mut content = None;
+                            for attr in e.attributes().flatten() {
+                                let key = String::from_utf8_lossy(attr.key.into_inner());
+                                let val = String::from_utf8_lossy(&attr.value).into_owned();
+                                if key == "name" && val == "cover" {
+                                    is_cover = true;
+                                } else if key == "content" {
+                                    content = Some(val);
+                                }
+                            }
+                            if is_cover && content.is_some() {
+                                book.metadata.cover_id = content;
+                            }
                         }
                     }
                 }
@@ -359,6 +376,49 @@ impl<P: EpubProvider> EpubArchive<P> {
         Ok(buf)
     }
 
+    /// Smart API to find and extract the cover image of the EPUB.
+    /// Returns the bytes of the image and its media_type (e.g., "image/jpeg").
+    pub fn get_cover_image(&mut self, book: &EpubBook) -> Result<(Vec<u8>, String), EpubError> {
+        let mut cover_item = None;
+
+        // 1. Try EPUB 3 properties="cover-image"
+        if cover_item.is_none() {
+            cover_item = book.manifest.values().find(|i| {
+                i.properties.as_deref().unwrap_or("").contains("cover-image")
+            });
+        }
+
+        // 2. Try EPUB 2 meta name="cover"
+        if cover_item.is_none()
+            && let Some(cover_id) = &book.metadata.cover_id {
+                cover_item = book.manifest.get(cover_id);
+            }
+
+        // 3. Fallback: guess by ID or href for bad formatted books
+        if cover_item.is_none() {
+            cover_item = book.manifest.values().find(|i| {
+                let id_lower = i.id.to_lowercase();
+                let href_lower = i.href.to_lowercase();
+                (id_lower.contains("cover") || href_lower.contains("cover")) 
+                && i.media_type.starts_with("image/")
+            });
+        }
+        
+        // 4. Extreme Fallback: find the first image in the manifest and hope it's the cover
+        if cover_item.is_none() {
+            cover_item = book.manifest.values().find(|i| {
+                i.media_type.starts_with("image/")
+            });
+        }
+
+        if let Some(item) = cover_item {
+            let bytes = self.get_resource_by_id(book, &item.id)?;
+            Ok((bytes, item.media_type.clone()))
+        } else {
+            Err(EpubError::InvalidFormat("No cover image found in EPUB".to_string()))
+        }
+    }
+
     /// Reads a chapter's HTML and automatically injects `data-cfi` attributes into all DOM nodes.
     /// This is a high-level method designed for building Web Readers.
     /// 
@@ -372,5 +432,133 @@ impl<P: EpubProvider> EpubArchive<P> {
         let html_str = String::from_utf8_lossy(&raw_html);
         
         crate::processor::inject_cfi_dom(&html_str, &base_cfi)
+    }
+
+    /// Extracts the Table of Contents (TOC) of the EPUB.
+    /// It prioritizes parsing the modern EPUB 3 `nav.xhtml`, and falls back to EPUB 2 `.ncx`.
+    pub fn get_toc(&mut self, book: &EpubBook) -> Result<Vec<TocEntry>, EpubError> {
+        // 1. Prefer EPUB 3 nav.xhtml
+        if let Some(nav_item) = book.manifest.values().find(|i| i.properties.as_deref().unwrap_or("").contains("nav")) {
+            let html_bytes = self.get_resource_by_id(book, &nav_item.id)?;
+            let html = String::from_utf8_lossy(&html_bytes).to_string();
+            return Self::parse_nav_xhtml(&html);
+        }
+        
+        // 2. Fallback to EPUB 2 NCX
+        if let Some(toc_id) = &book.toc_id
+            && let Some(ncx_item) = book.manifest.get(toc_id) {
+                let xml_bytes = self.get_resource_by_id(book, &ncx_item.id)?;
+                let xml = String::from_utf8_lossy(&xml_bytes).to_string();
+                return Self::parse_ncx(&xml);
+            }
+        
+        Ok(Vec::new())
+    }
+
+    fn parse_nav_xhtml(html: &str) -> Result<Vec<TocEntry>, EpubError> {
+        let document = kuchikiki::parse_html().one(html);
+        // Find <nav epub:type="toc"> or fallback to <nav id="toc"> or just <nav>
+        let nav_node = match document.select_first("nav[epub\\:type='toc']")
+            .or_else(|_| document.select_first("nav#toc"))
+            .or_else(|_| document.select_first("nav")) {
+                Ok(node) => node,
+                Err(_) => return Ok(Vec::new()),
+        };
+        
+        if let Ok(ol_node) = nav_node.as_node().select_first("ol") {
+            Ok(Self::parse_ol_node(ol_node.as_node()))
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn parse_ol_node(ol: &kuchikiki::NodeRef) -> Vec<TocEntry> {
+        let mut entries = Vec::new();
+        // Since `select` might grab deep children, we manually iterate direct children.
+        for li in ol.children().filter(|c| c.as_element().is_some_and(|e| e.name.local.to_string() == "li")) {
+            if let Ok(a_node) = li.select_first("a") {
+                let href = a_node.attributes.borrow().get("href").unwrap_or("").to_string();
+                let title = a_node.text_contents().trim().to_string();
+                
+                let mut entry = TocEntry::new(title, href);
+                
+                if let Ok(nested_ol) = li.select_first("ol") {
+                    entry.children = Self::parse_ol_node(nested_ol.as_node());
+                }
+                entries.push(entry);
+            }
+        }
+        entries
+    }
+
+    fn parse_ncx(xml: &str) -> Result<Vec<TocEntry>, EpubError> {
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+
+        #[derive(Debug, Clone)]
+        struct NavPointState { 
+            title: String, 
+            href: String, 
+            children: Vec<TocEntry> 
+        }
+
+        let mut stack: Vec<NavPointState> = Vec::new();
+        let mut root_entries = Vec::new();
+        let mut in_text = false;
+        let mut event_buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut event_buf)? {
+                Event::Start(ref e) => {
+                    let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
+                    if name.ends_with("navPoint") {
+                        stack.push(NavPointState { title: String::new(), href: String::new(), children: Vec::new() });
+                    } else if name.ends_with("text") {
+                        in_text = true;
+                    }
+                }
+                Event::Empty(ref e) => {
+                    let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
+                    if name.ends_with("content") {
+                        for attr in e.attributes() {
+                            if let Ok(attr) = attr
+                                && attr.key.as_ref() == b"src"
+                                    && let Some(state) = stack.last_mut() {
+                                        state.href = String::from_utf8_lossy(&attr.value).into_owned();
+                                    }
+                        }
+                    }
+                }
+                Event::Text(e) => {
+                    if in_text
+                        && let Some(state) = stack.last_mut() {
+                            state.title = String::from_utf8_lossy(&e).into_owned();
+                        }
+                }
+                Event::End(ref e) => {
+                    let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
+                    if name.ends_with("text") {
+                        in_text = false;
+                    } else if name.ends_with("navPoint")
+                        && let Some(state) = stack.pop() {
+                            let entry = TocEntry {
+                                title: state.title,
+                                href: state.href,
+                                children: state.children,
+                            };
+                            if let Some(parent) = stack.last_mut() {
+                                parent.children.push(entry);
+                            } else {
+                                root_entries.push(entry);
+                            }
+                        }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            event_buf.clear();
+        }
+
+        Ok(root_entries)
     }
 }
