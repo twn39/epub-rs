@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod tests {
     use epub_rs::parser::EpubArchive;
-    
 
     #[test]
     fn test_parse_real_epub() {
         // Use one of the real EPUB files from the `ebooks` directory
-        let file_path = "ebooks/软件设计的哲学 (John Ousterhout) (z-library.sk, 1lib.sk, z-lib.sk).epub";
+        let file_path =
+            "ebooks/软件设计的哲学 (John Ousterhout) (z-library.sk, 1lib.sk, z-lib.sk).epub";
 
         // Skip the test in CI if the file is not found
         let file = match std::fs::File::open(file_path) {
@@ -135,7 +135,8 @@ mod tests {
         use std::fs;
 
         // 1. Unzip an EPUB to a temporary directory to test DirProvider
-        let epub_path = "ebooks/软件设计的哲学 (John Ousterhout) (z-library.sk, 1lib.sk, z-lib.sk).epub";
+        let epub_path =
+            "ebooks/软件设计的哲学 (John Ousterhout) (z-library.sk, 1lib.sk, z-lib.sk).epub";
 
         // Skip the test in CI if the file is not found
         let file = match std::fs::File::open(epub_path) {
