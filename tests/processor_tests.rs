@@ -74,4 +74,55 @@ mod tests {
         // path should be body(/4) -> div(/2[content]) -> p(/4) -> text(/1).
         assert_eq!(results[1].cfi, "epubcfi(/6/4!/4/2[content]/4,/1:20,/1:25)");
     }
+
+    #[test]
+    fn test_extract_positions() {
+        use epub_rs::model::Position;
+        use epub_rs::processor::extract_positions;
+
+        let html = r#"<html><body><div id="content"><p>12345</p><p>67890</p><p>abcde</p></div></body></html>"#;
+
+        let mut positions = Vec::new();
+        let mut char_counter = 0;
+        let mut global_pos = 0;
+
+        // We set chars_per_position to 4.
+        // First <p> is 5 chars ("12345"). It should emit a position after 4 chars.
+        // Leftover: 1 char.
+        // Second <p> is 5 chars ("67890"). Leftover (1) + 5 = 6. It should emit another position after 3 chars.
+        // Leftover: 2 chars.
+        // Third <p> is 5 chars ("abcde"). Leftover (2) + 5 = 7. It should emit another position after 2 chars.
+        // Leftover: 3 chars.
+
+        extract_positions(
+            html,
+            "/6/4!",
+            4,
+            &mut char_counter,
+            &mut positions,
+            &mut global_pos,
+            0,
+            "test.xhtml",
+        );
+
+        assert_eq!(positions.len(), 3);
+        
+        // Match 1: in "12345", at offset 4
+        // path: body(/4) -> div(/2) -> p(/2) -> text(/1)
+        assert_eq!(positions[0].cfi, "epubcfi(/6/4!/4/2[content]/2/1:4)");
+        assert_eq!(positions[0].global_position, 1);
+
+        // Match 2: in "67890", at offset 3
+        // path: body(/4) -> div(/2) -> p(/4) -> text(/1)
+        assert_eq!(positions[1].cfi, "epubcfi(/6/4!/4/2[content]/4/1:3)");
+        assert_eq!(positions[1].global_position, 2);
+
+        // Match 3: in "abcde", at offset 2
+        // path: body(/4) -> div(/2) -> p(/6) -> text(/1)
+        assert_eq!(positions[2].cfi, "epubcfi(/6/4!/4/2[content]/6/1:2)");
+        assert_eq!(positions[2].global_position, 3);
+        
+        // Final leftover counter should be 3
+        assert_eq!(char_counter, 3);
+    }
 }
