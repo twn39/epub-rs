@@ -206,7 +206,12 @@ impl EpubBuilder {
         content: impl Into<Vec<u8>>,
     ) -> Self {
         let id_str = id.into();
-        self.spine.push(SpineItem { idref: id_str.clone(), linear: false });
+        self.spine.push(SpineItem { 
+            idref: id_str.clone(), 
+            linear: false,
+            layout_override: None,
+            page_spread: None,
+        });
         self.resources.push(Resource {
             id: id_str,
             href: href.into(),
@@ -231,6 +236,31 @@ impl EpubBuilder {
             href: href.into(),
             media_type: "application/xhtml+xml".to_string(),
             content: ResourceContent::Stream(Box::new(reader)),
+            properties: None,
+        });
+        self
+    }
+
+    /// Add a chapter with a specific layout or page spread behavior (ideal for comics or picture books).
+    pub fn add_chapter_with_layout(
+        mut self,
+        id: impl Into<String>,
+        href: impl Into<String>,
+        content: impl Into<Vec<u8>>,
+        layout: Option<crate::model::LayoutType>,
+        spread: Option<crate::model::PageSpread>,
+    ) -> Self {
+        let id_str = id.into();
+        let mut spine_item = SpineItem::new(id_str.clone());
+        spine_item.layout_override = layout;
+        spine_item.page_spread = spread;
+        
+        self.spine.push(spine_item);
+        self.resources.push(Resource {
+            id: id_str,
+            href: href.into(),
+            media_type: "application/xhtml+xml".to_string(),
+            content: ResourceContent::Bytes(content.into()),
             properties: None,
         });
         self
@@ -493,6 +523,23 @@ impl EpubBuilder {
             Self::write_text_element(&mut writer, "dc:subject", subject)?;
         }
 
+        if self.version == EpubVersion::V30 {
+            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let mut m_start = BytesStart::new("meta");
+            m_start.push_attribute(("property", "dcterms:modified"));
+            writer.write_event(Event::Start(m_start))?;
+            writer.write_event(Event::Text(BytesText::new(&now)))?;
+            writer.write_event(Event::End(BytesEnd::new("meta")))?;
+
+            if self.metadata.layout == crate::model::LayoutType::PrePaginated {
+                let mut m_layout = BytesStart::new("meta");
+                m_layout.push_attribute(("property", "rendition:layout"));
+                writer.write_event(Event::Start(m_layout))?;
+                writer.write_event(Event::Text(BytesText::new("pre-paginated")))?;
+                writer.write_event(Event::End(BytesEnd::new("meta")))?;
+            }
+        }
+
         // EPUB 2 Cover Meta
         if let Some(cover_id) = &self.cover_id {
             let mut meta_cover = BytesStart::new("meta");
@@ -528,6 +575,28 @@ impl EpubBuilder {
             itemref.push_attribute(("idref", item.idref.as_str()));
             if !item.linear {
                 itemref.push_attribute(("linear", "no"));
+            }
+            if self.version == EpubVersion::V30 {
+                let mut properties = Vec::new();
+                if item.layout_override == Some(crate::model::LayoutType::Reflowable) {
+                    properties.push("rendition:layout-reflowable");
+                } else if item.layout_override == Some(crate::model::LayoutType::PrePaginated) {
+                    properties.push("rendition:layout-pre-paginated");
+                }
+                
+                if let Some(spread) = item.page_spread {
+                    match spread {
+                        crate::model::PageSpread::Left => properties.push("page-spread-left"),
+                        crate::model::PageSpread::Right => properties.push("page-spread-right"),
+                        crate::model::PageSpread::Center => properties.push("rendition:page-spread-center"),
+                        crate::model::PageSpread::None => (),
+                    }
+                }
+                
+                if !properties.is_empty() {
+                    let prop_str = properties.join(" ");
+                    itemref.push_attribute(("properties", prop_str.as_str()));
+                }
             }
             writer.write_event(Event::Empty(itemref))?;
         }
