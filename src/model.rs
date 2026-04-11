@@ -88,6 +88,8 @@ pub struct EpubBook {
     pub opf_dir: String,
     /// ID of the NCX table of contents if available
     pub toc_id: Option<String>,
+    /// Map of encrypted files and their algorithm (ZIP relative path -> ObfuscationAlgorithm)
+    pub encryptions: HashMap<String, crate::crypto::ObfuscationAlgorithm>,
 }
 
 /// Represents a creator or contributor to the EPUB.
