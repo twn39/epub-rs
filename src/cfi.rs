@@ -2,6 +2,7 @@
 //! 
 //! CFI allows pinpointing a specific location within an EPUB document without modifying the underlying files.
 //! Format Example: `epubcfi(/6/4[chap01ref]!/4[body01]/10[para05]/2/1:3)`
+//! Range Example: `epubcfi(/6/4[chap01ref]!/4[body01]/10[para05],/2/1:1,/3:4)`
 
 use crate::error::EpubError;
 use std::fmt;
@@ -31,42 +32,75 @@ impl fmt::Display for CfiStep {
     }
 }
 
-/// Represents a Canonical Fragment Identifier (CFI).
-#[derive(Debug, Clone, PartialEq)]
-pub struct EpubCfi {
-    /// The base path within the EPUB package (resolving through the OPF to the specific item).
-    pub base_path: Vec<CfiStep>,
-    /// The path within the specific document (e.g., inside the HTML file).
-    pub local_path: Vec<CfiStep>,
-    /// The character offset within the final text node, if applicable.
+/// Represents a path sequence in a CFI.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CfiPath {
+    pub steps: Vec<CfiStep>,
+    pub local_steps: Option<Vec<CfiStep>>,
     pub character_offset: Option<u32>,
 }
 
-impl EpubCfi {
-    /// Creates a new empty CFI.
-    pub fn new() -> Self {
-        Self {
-            base_path: Vec::new(),
-            local_path: Vec::new(),
-            character_offset: None,
+impl fmt::Display for CfiPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for step in &self.steps {
+            write!(f, "{}", step)?;
         }
+        if let Some(local) = &self.local_steps {
+            write!(f, "!")?;
+            for step in local {
+                write!(f, "{}", step)?;
+            }
+        }
+        if let Some(offset) = self.character_offset {
+            write!(f, ":{}", offset)?;
+        }
+        Ok(())
+    }
+}
+
+/// Represents a Canonical Fragment Identifier (CFI), which can be a single point or a range.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EpubCfi {
+    /// A single point in the EPUB.
+    Point(CfiPath),
+    /// A range in the EPUB.
+    Range {
+        parent: CfiPath,
+        start: CfiPath,
+        end: CfiPath,
+    },
+}
+
+impl EpubCfi {
+    /// Creates a new empty CFI Point.
+    pub fn new() -> Self {
+        EpubCfi::Point(CfiPath::default())
     }
 
-    /// Add a step to the base path (OPF context).
+    /// Add a step to the base path (before '!').
     pub fn add_base_step(mut self, step: CfiStep) -> Self {
-        self.base_path.push(step);
+        if let EpubCfi::Point(ref mut path) = self {
+            path.steps.push(step);
+        }
         self
     }
 
-    /// Add a step to the local path (HTML context).
+    /// Add a step to the local path (after '!').
     pub fn add_local_step(mut self, step: CfiStep) -> Self {
-        self.local_path.push(step);
+        if let EpubCfi::Point(ref mut path) = self {
+            if path.local_steps.is_none() {
+                path.local_steps = Some(Vec::new());
+            }
+            path.local_steps.as_mut().unwrap().push(step);
+        }
         self
     }
 
     /// Set the final character offset.
     pub fn character_offset(mut self, offset: u32) -> Self {
-        self.character_offset = Some(offset);
+        if let EpubCfi::Point(ref mut path) = self {
+            path.character_offset = Some(offset);
+        }
         self
     }
 
@@ -86,17 +120,9 @@ impl EpubCfi {
 impl fmt::Display for EpubCfi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "epubcfi(")?;
-        for step in &self.base_path {
-            write!(f, "{}", step)?;
-        }
-        if !self.local_path.is_empty() {
-            write!(f, "!")?;
-            for step in &self.local_path {
-                write!(f, "{}", step)?;
-            }
-        }
-        if let Some(offset) = self.character_offset {
-            write!(f, ":{}", offset)?;
+        match self {
+            EpubCfi::Point(path) => write!(f, "{}", path)?,
+            EpubCfi::Range { parent, start, end } => write!(f, "{},{},{}", parent, start, end)?,
         }
         write!(f, ")")
     }
@@ -105,8 +131,7 @@ impl fmt::Display for EpubCfi {
 impl std::str::FromStr for EpubCfi {
     type Err = EpubError;
 
-    /// Extremely basic string parsing for CFI. Only supports `epubcfi(...)` format.
-    /// Does not implement full range, temporal, or spatial parsing.
+    /// Parses a CFI string, supporting both Point and Range formats.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         if !s.starts_with("epubcfi(") || !s.ends_with(')') {
@@ -114,35 +139,58 @@ impl std::str::FromStr for EpubCfi {
         }
 
         let inner = &s[8..s.len() - 1]; // inside epubcfi(...)
-        let mut cfi = EpubCfi::new();
-        
-        let parts: Vec<&str> = inner.split('!').collect();
-        if parts.is_empty() || parts.len() > 2 {
-            return Err(EpubError::InvalidFormat("Invalid CFI structure".to_string()));
+        let parts: Vec<&str> = inner.split(',').collect();
+
+        if parts.len() == 1 {
+            let path = parse_path(parts[0])?;
+            Ok(EpubCfi::Point(path))
+        } else if parts.len() == 3 {
+            let parent = parse_path(parts[0])?;
+            let start = parse_path(parts[1])?;
+            let end = parse_path(parts[2])?;
+            Ok(EpubCfi::Range { parent, start, end })
+        } else {
+            Err(EpubError::InvalidFormat("Invalid CFI range structure".to_string()))
         }
-
-        // Parse base steps
-        cfi.base_path = parse_steps(parts[0])?;
-
-        // Parse local steps if `!` is present
-        if parts.len() == 2 {
-            let mut local_str = parts[1];
-            
-            // Check if there is a character offset `:3`
-            if let Some(colon_idx) = local_str.find(':') {
-                let offset_str = &local_str[colon_idx + 1..];
-                cfi.character_offset = Some(
-                    offset_str.parse::<u32>()
-                        .map_err(|_| EpubError::InvalidFormat("Invalid character offset".to_string()))?
-                );
-                local_str = &local_str[..colon_idx];
-            }
-            
-            cfi.local_path = parse_steps(local_str)?;
-        }
-
-        Ok(cfi)
     }
+}
+
+fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
+    let mut path = CfiPath::default();
+    let parts: Vec<&str> = s.split('!').collect();
+    
+    if parts.len() == 1 {
+        let (steps, offset) = parse_steps_and_offset(parts[0])?;
+        path.steps = steps;
+        path.character_offset = offset;
+    } else if parts.len() == 2 {
+        let (base_steps, _) = parse_steps_and_offset(parts[0])?;
+        path.steps = base_steps;
+        
+        let (local_steps, offset) = parse_steps_and_offset(parts[1])?;
+        path.local_steps = Some(local_steps);
+        path.character_offset = offset;
+    } else {
+        return Err(EpubError::InvalidFormat("Invalid CFI path structure".to_string()));
+    }
+    
+    Ok(path)
+}
+
+fn parse_steps_and_offset(s: &str) -> Result<(Vec<CfiStep>, Option<u32>), EpubError> {
+    let mut offset = None;
+    let mut path_str = s;
+    if let Some(colon_idx) = s.find(':') {
+        let offset_str = &s[colon_idx + 1..];
+        offset = Some(
+            offset_str.parse::<u32>()
+                .map_err(|_| EpubError::InvalidFormat("Invalid character offset".to_string()))?
+        );
+        path_str = &s[..colon_idx];
+    }
+    
+    let steps = parse_steps(path_str)?;
+    Ok((steps, offset))
 }
 
 fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
