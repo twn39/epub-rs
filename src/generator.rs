@@ -15,6 +15,22 @@ use zip::ZipWriter;
 pub struct TocEntry {
     pub title: String,
     pub href: String,
+    pub children: Vec<TocEntry>,
+}
+
+impl TocEntry {
+    pub fn new(title: impl Into<String>, href: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            href: href.into(),
+            children: Vec::new(),
+        }
+    }
+
+    pub fn add_child(mut self, child: TocEntry) -> Self {
+        self.children.push(child);
+        self
+    }
 }
 
 /// Represents a file to be added to the EPUB archive.
@@ -33,6 +49,7 @@ pub struct EpubBuilder {
     resources: Vec<Resource>,
     spine: Vec<String>, // list of resource IDs
     toc: Vec<TocEntry>,
+    cover_id: Option<String>,
 }
 
 impl Default for EpubBuilder {
@@ -49,12 +66,39 @@ impl EpubBuilder {
             resources: Vec::new(),
             spine: Vec::new(),
             toc: Vec::new(),
+            cover_id: None,
         }
     }
 
     /// Set the EPUB metadata
     pub fn metadata(mut self, metadata: Metadata) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// Set a custom Table of Contents structure (supporting nested chapters).
+    pub fn set_toc(mut self, toc: Vec<TocEntry>) -> Self {
+        self.toc = toc;
+        self
+    }
+
+    /// Add a cover image. This automatically creates a resource with `properties="cover-image"`
+    /// and configures the EPUB 2 compatible `<meta name="cover" ... />`.
+    pub fn set_cover(
+        mut self,
+        href: impl Into<String>,
+        media_type: impl Into<String>,
+        content: impl Into<Vec<u8>>,
+    ) -> Self {
+        let id = "cover-image".to_string();
+        self.resources.push(Resource {
+            id: id.clone(),
+            href: href.into(),
+            media_type: media_type.into(),
+            content: content.into(),
+            properties: Some("cover-image".to_string()),
+        });
+        self.cover_id = Some(id);
         self
     }
 
@@ -97,6 +141,7 @@ impl EpubBuilder {
     }
 
     /// Add a chapter and also add it to the Table of Contents (TOC).
+    /// Note: If you want a nested TOC, use `set_toc()` instead.
     pub fn add_chapter_with_nav(
         mut self,
         id: impl Into<String>,
@@ -108,10 +153,7 @@ impl EpubBuilder {
         let href_str = href.into();
         let title_str = title.into();
 
-        self.toc.push(TocEntry {
-            title: title_str,
-            href: href_str.clone(),
-        });
+        self.toc.push(TocEntry::new(title_str, href_str.clone()));
 
         self.spine.push(id_str.clone());
         self.resources.push(Resource {
@@ -188,12 +230,24 @@ impl EpubBuilder {
 
     /// Generate EPUB 3 `nav.xhtml`
     fn generate_nav_xhtml(&self) -> String {
-        let mut html = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head><title>Navigation</title></head>\n<body>\n<nav epub:type=\"toc\" id=\"toc\">\n<h1>Table of Contents</h1>\n<ol>\n");
-        for entry in &self.toc {
-            html.push_str(&format!("  <li><a href=\"{}\">{}</a></li>\n", escape(&entry.href), escape(&entry.title)));
-        }
-        html.push_str("</ol>\n</nav>\n</body>\n</html>");
+        let mut html = String::from("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head><title>Navigation</title></head>\n<body>\n<nav epub:type=\"toc\" id=\"toc\">\n<h1>Table of Contents</h1>\n");
+        Self::build_nav_list(&self.toc, &mut html);
+        html.push_str("</nav>\n</body>\n</html>");
         html
+    }
+
+    fn build_nav_list(entries: &[TocEntry], html: &mut String) {
+        if entries.is_empty() { return; }
+        html.push_str("<ol>\n");
+        for entry in entries {
+            html.push_str(&format!("  <li><a href=\"{}\">{}</a>", escape(&entry.href), escape(&entry.title)));
+            if !entry.children.is_empty() {
+                html.push('\n');
+                Self::build_nav_list(&entry.children, html);
+            }
+            html.push_str("</li>\n");
+        }
+        html.push_str("</ol>\n");
     }
 
     /// Generate EPUB 2 compatible `toc.ncx`
@@ -201,15 +255,28 @@ impl EpubBuilder {
         let title = self.metadata.title.as_deref().unwrap_or("Untitled");
         let mut ncx = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"urn:uuid:default-epub-rs-id\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"0\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"0\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n", escape(title));
         
-        for (i, entry) in self.toc.iter().enumerate() {
-            let order = i + 1;
-            ncx.push_str(&format!(
-                "    <navPoint id=\"navPoint-{}\" playOrder=\"{}\">\n      <navLabel><text>{}</text></navLabel>\n      <content src=\"{}\"/>\n    </navPoint>\n",
-                order, order, escape(&entry.title), escape(&entry.href)
-            ));
-        }
+        let mut play_order = 0;
+        Self::build_ncx_navpoints(&self.toc, &mut ncx, &mut play_order);
+        
         ncx.push_str("  </navMap>\n</ncx>");
         ncx
+    }
+
+    fn build_ncx_navpoints(entries: &[TocEntry], ncx: &mut String, play_order: &mut usize) {
+        for entry in entries {
+            *play_order += 1;
+            let current_order = *play_order;
+            ncx.push_str(&format!(
+                "    <navPoint id=\"navPoint-{}\" playOrder=\"{}\">\n      <navLabel><text>{}</text></navLabel>\n      <content src=\"{}\"/>\n",
+                current_order, current_order, escape(&entry.title), escape(&entry.href)
+            ));
+            
+            if !entry.children.is_empty() {
+                Self::build_ncx_navpoints(&entry.children, ncx, play_order);
+            }
+            
+            ncx.push_str("    </navPoint>\n");
+        }
     }
 
     /// Helper to generate the OPF XML content using quick-xml.
@@ -254,6 +321,30 @@ impl EpubBuilder {
             writer.write_event(Event::Start(id_start))?;
             writer.write_event(Event::Text(BytesText::new("urn:uuid:default-epub-rs-id")))?;
             writer.write_event(Event::End(BytesEnd::new("dc:identifier")))?;
+        }
+
+        if let Some(publisher) = &self.metadata.publisher {
+            Self::write_text_element(&mut writer, "dc:publisher", publisher)?;
+        }
+        if let Some(description) = &self.metadata.description {
+            Self::write_text_element(&mut writer, "dc:description", description)?;
+        }
+        if let Some(date) = &self.metadata.date {
+            Self::write_text_element(&mut writer, "dc:date", date)?;
+        }
+        if let Some(rights) = &self.metadata.rights {
+            Self::write_text_element(&mut writer, "dc:rights", rights)?;
+        }
+        for subject in &self.metadata.subjects {
+            Self::write_text_element(&mut writer, "dc:subject", subject)?;
+        }
+
+        // EPUB 2 Cover Meta
+        if let Some(cover_id) = &self.cover_id {
+            let mut meta_cover = BytesStart::new("meta");
+            meta_cover.push_attribute(("name", "cover"));
+            meta_cover.push_attribute(("content", cover_id.as_str()));
+            writer.write_event(Event::Empty(meta_cover))?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("metadata")))?;

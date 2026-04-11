@@ -163,6 +163,16 @@ impl<R: Read + Seek> EpubArchive<R> {
                             book.metadata.language = Some(text);
                         } else if current_tag.ends_with("identifier") {
                             book.metadata.identifier = Some(text);
+                        } else if current_tag.ends_with("publisher") {
+                            book.metadata.publisher = Some(text);
+                        } else if current_tag.ends_with("description") {
+                            book.metadata.description = Some(text);
+                        } else if current_tag.ends_with("date") {
+                            book.metadata.date = Some(text);
+                        } else if current_tag.ends_with("rights") {
+                            book.metadata.rights = Some(text);
+                        } else if current_tag.ends_with("subject") {
+                            book.metadata.subjects.push(text);
                         }
                     }
                 }

@@ -24,7 +24,11 @@ pub struct Metadata {
     pub creators: Vec<String>,
     pub language: Option<String>,
     pub identifier: Option<String>,
-    // TODO: Add support for subjects, publisher, dates, etc.
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    pub date: Option<String>,
+    pub rights: Option<String>,
+    pub subjects: Vec<String>,
 }
 
 /// Represents an `item` in the `manifest` block of the OPF
