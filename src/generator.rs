@@ -709,3 +709,37 @@ impl EpubBuilder {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_properties() {
+        // Pure text/html should yield no properties
+        assert_eq!(EpubBuilder::infer_properties(b"<html><body><h1>Title</h1></body></html>"), None);
+
+        // Scripts
+        let script = EpubBuilder::infer_properties(b"<html><head><script src='test.js'></script></head></html>");
+        assert_eq!(script.as_deref(), Some("scripted"));
+
+        // Case insensitivity
+        let script_upper = EpubBuilder::infer_properties(b"<SCRIPT>alert(1);</SCRIPT>");
+        assert_eq!(script_upper.as_deref(), Some("scripted"));
+
+        // SVG
+        let svg = EpubBuilder::infer_properties(b"<p>Graphic: <svg></svg></p>");
+        assert_eq!(svg.as_deref(), Some("svg"));
+
+        // MathML
+        let math = EpubBuilder::infer_properties(b"<math xmlns='http://www.w3.org/1998/Math/MathML'><mi>x</mi></math>");
+        assert_eq!(math.as_deref(), Some("mathml"));
+
+        // Multiple properties
+        let combo = EpubBuilder::infer_properties(b"<svg></svg><div><script></script></div>");
+        let combo_str = combo.unwrap();
+        // Since we push to a Vec and join, order matters for the exact string, but typically it's scripted svg mathml
+        assert!(combo_str.contains("scripted"));
+        assert!(combo_str.contains("svg"));
+    }
+}
