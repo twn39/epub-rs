@@ -340,32 +340,33 @@ fn search_node(node: &NodeRef, base_cfi: &str, current_path: &str, pattern: &reg
     }
 }
 
+pub struct PositionContext<'a> {
+    pub base_cfi: &'a str,
+    pub chars_per_position: usize,
+    pub spine_index: usize,
+    pub href: &'a str,
+}
+
 pub fn extract_positions(
     html: &str,
-    base_cfi: &str,
-    chars_per_position: usize,
+    ctx: &PositionContext,
     char_counter: &mut usize,
     positions: &mut Vec<Position>,
     global_pos: &mut usize,
-    spine_index: usize,
-    href: &str,
 ) {
     let document = kuchikiki::parse_html().one(html);
     if let Ok(html_node) = document.select_first("html") {
-        traverse_for_positions(html_node.as_node(), base_cfi, "", chars_per_position, char_counter, positions, global_pos, spine_index, href);
+        traverse_for_positions(html_node.as_node(), ctx, "", char_counter, positions, global_pos);
     }
 }
 
 fn traverse_for_positions(
     node: &NodeRef,
-    base_cfi: &str,
+    ctx: &PositionContext,
     current_path: &str,
-    chars_per_position: usize,
     char_counter: &mut usize,
     positions: &mut Vec<Position>,
     global_pos: &mut usize,
-    spine_index: usize,
-    href: &str,
 ) {
     let mut child_index = 0;
     
@@ -380,19 +381,19 @@ fn traverse_for_positions(
             };
             let child_path = format!("{}/{}{}", current_path, child_index, assertion_str);
             
-            traverse_for_positions(&child, base_cfi, &child_path, chars_per_position, char_counter, positions, global_pos, spine_index, href);
+            traverse_for_positions(&child, ctx, &child_path, char_counter, positions, global_pos);
         } else if let Some(text_node) = child.as_text() {
             let text = text_node.borrow();
             let text_len = text.chars().count();
             let cfi_text_idx = child_index + 1;
             
             let mut offset = 0;
-            while *char_counter + (text_len - offset) >= chars_per_position {
-                let chars_needed = chars_per_position - *char_counter;
+            while *char_counter + (text_len - offset) >= ctx.chars_per_position {
+                let chars_needed = ctx.chars_per_position - *char_counter;
                 offset += chars_needed;
                 
                 *global_pos += 1;
-                let mut stripped_base = base_cfi.to_string();
+                let mut stripped_base = ctx.base_cfi.to_string();
                 if stripped_base.ends_with('!') {
                     stripped_base.pop();
                 }
@@ -401,8 +402,8 @@ fn traverse_for_positions(
                 let cfi = format!("epubcfi({}!{}/{}:{})", stripped_base, current_path, cfi_text_idx, offset);
                 
                 positions.push(Position {
-                    spine_index,
-                    href: href.to_string(),
+                    spine_index: ctx.spine_index,
+                    href: ctx.href.to_string(),
                     cfi,
                     global_position: *global_pos,
                     chapter_progression: 0.0,

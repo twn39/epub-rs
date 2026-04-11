@@ -221,8 +221,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                             let key = String::from_utf8_lossy(attr.key.into_inner());
                             if key == "refines" {
                                 let val = String::from_utf8_lossy(&attr.value).into_owned();
-                                if val.starts_with('#') {
-                                    refines = Some(val[1..].to_string());
+                                if let Some(stripped) = val.strip_prefix('#') {
+                                    refines = Some(stripped.to_string());
                                 }
                             } else if key == "property" {
                                 property = Some(String::from_utf8_lossy(&attr.value).into_owned());
@@ -583,15 +583,19 @@ impl<P: EpubProvider> EpubArchive<P> {
             if let Ok(raw_html) = self.get_resource_by_id(book, &item.idref) {
                 let html_str = String::from_utf8_lossy(&raw_html);
                 
+                let ctx = crate::processor::PositionContext {
+                    base_cfi: &base_cfi,
+                    chars_per_position,
+                    spine_index: i,
+                    href: &href,
+                };
+
                 crate::processor::extract_positions(
                     &html_str, 
-                    &base_cfi, 
-                    chars_per_position, 
+                    &ctx, 
                     &mut char_counter,
                     &mut chapter_positions, 
-                    &mut global_pos, 
-                    i, 
-                    &href
+                    &mut global_pos
                 );
             }
 

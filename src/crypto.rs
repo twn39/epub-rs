@@ -83,10 +83,10 @@ impl<'a> Read for DeobfuscatingReader<'a> {
         if self.current_offset < self.obfuscation_length {
             let key_len = self.key.len();
             if key_len > 0 {
-                for i in 0..bytes_read {
+                for (i, byte) in buf.iter_mut().enumerate().take(bytes_read) {
                     let pos = self.current_offset + i;
                     if pos < self.obfuscation_length {
-                        buf[i] ^= self.key[pos % key_len];
+                        *byte ^= self.key[pos % key_len];
                     } else {
                         break;
                     }

@@ -206,7 +206,7 @@ fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
     }
     
     // Skip first slash if it exists
-    let path = if path.starts_with('/') { &path[1..] } else { path };
+    let path = path.strip_prefix('/').unwrap_or(path);
     
     for part in path.split('/') {
         if part.is_empty() {
