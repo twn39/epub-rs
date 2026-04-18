@@ -6,6 +6,11 @@ It provides an end-to-end toolchain to **parse, process, deobfuscate, and genera
 
 ## Features
 
+### 🌐 WebAssembly (WASM) Support
+* **Browser-Native EPUB Engine**: Compile the entire parsing and generation engine to `wasm32-unknown-unknown` to run directly in the browser or Node.js.
+* **Zero-FS Architecture**: Parse binary `Uint8Array` EPUB buffers completely in memory without requiring a virtual file system.
+* **JS-Interop FFI**: Full `wasm-bindgen` FFI bindings (`EpubParser`, `EpubGenerator`, `compare_cfi`, `decrypt_font`) with `serde` integration for passing complex metadata and multi-level TOC JSON seamlessly between JS and Rust.
+
 ### 📖 Robust Parsing
 * **Multiple Renditions**: Support for fetching and parsing multiple `.opf` rootfiles from a single EPUB container.
 * **Storage Agnostic**: `EpubProvider` trait allows extracting resources from traditional `.epub` ZIP files or exploded local directories without memory bloat.
@@ -119,6 +124,13 @@ Built on Cloudflare's `lol_html` and `zip-rs`, `epub-rs` processes DOMs in a sin
 
 * **~20 µs**: Open ZIP, parse OPF, setup Domain Models (10 chapters).
 * **~140 µs**: Build, assemble, and compress a full EPUB to memory.
+* **~30 µs**: Find 50 regex text matches and reverse-map them to exact CFI ranges.
+
+*(Benchmarks executed on Apple Silicon M-series via `cargo bench`)*
+
+## License
+MIT License
+s**: Build, assemble, and compress a full EPUB to memory.
 * **~30 µs**: Find 50 regex text matches and reverse-map them to exact CFI ranges.
 
 *(Benchmarks executed on Apple Silicon M-series via `cargo bench`)*
