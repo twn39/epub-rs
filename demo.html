@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>epub-rs WASM Demo</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        #output { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; font-family: monospace; max-height: 500px; overflow-y: auto;}
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+        button, input::file-selector-button { padding: 8px 12px; border: none; border-radius: 4px; background: #007acc; color: white; cursor: pointer; font-weight: bold; }
+        button:hover, input::file-selector-button:hover { background: #005999; }
+    </style>
+</head>
+<body>
+    <h1>epub-rs WebAssembly Demo</h1>
+    <p>This demo runs the complete <code>epub-rs</code> parsing and generation engine entirely in your browser using WebAssembly.</p>
+    
+    <div class="controls">
+        <input type="file" id="fileInput" accept=".epub" />
+        <span>OR</span>
+        <button id="generateBtn">Generate Empty EPUB</button>
+    </div>
+    
+    <h2>Output:</h2>
+    <pre id="output">Loading WASM...</pre>
+
+    <script type="module">
+        import init, { parse_epub, generate_empty_epub } from './pkg/epub_rs.js';
+
+        const output = document.getElementById('output');
+        const fileInput = document.getElementById('fileInput');
+        const generateBtn = document.getElementById('generateBtn');
+
+        async function run() {
+            try {
+                // Initialize the WASM module
+                await init();
+                output.textContent = "✅ WASM engine loaded successfully!\n\nPlease select an EPUB file to parse, or click 'Generate'.";
+
+                fileInput.addEventListener('change', async (event) => {
+                    const file = event.target.files[0];
+                    if (!file) return;
+
+                    output.textContent = `Reading ${file.name} (${file.size} bytes)...`;
+                    const arrayBuffer = await file.arrayBuffer();
+                    const uint8Array = new Uint8Array(arrayBuffer);
+
+                    try {
+                        output.textContent = "Parsing EPUB with epub-rs (WASM)...";
+                        const start = performance.now();
+                        
+                        // Call the Rust function
+                        const resultJson = parse_epub(uint8Array);
+                        const parsedObj = JSON.parse(resultJson);
+                        
+                        const end = performance.now();
+                        output.textContent = `✅ Successfully parsed in ${(end - start).toFixed(2)} ms!\n\n` + JSON.stringify(parsedObj, null, 2);
+                    } catch (e) {
+                        output.textContent = "❌ Error parsing EPUB:\n" + e;
+                    }
+                });
+
+                generateBtn.addEventListener('click', () => {
+                    try {
+                        output.textContent = "Generating EPUB with epub-rs (WASM)...";
+                        const start = performance.now();
+                        
+                        // Call the Rust function
+                        const epubBytes = generate_empty_epub();
+                        
+                        const end = performance.now();
+                        
+                        // Create a blob and trigger download
+                        const blob = new Blob([epubBytes], { type: 'application/epub+zip' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = "epub-rs-generated.epub";
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        
+                        output.textContent = `✅ Empty EPUB generated in ${(end - start).toFixed(2)} ms and download triggered! (${epubBytes.length} bytes)`;
+                    } catch (e) {
+                        output.textContent = "❌ Error generating EPUB:\n" + e;
+                    }
+                });
+            } catch (err) {
+                output.textContent = "❌ Failed to load WASM module:\n" + err;
+            }
+        }
+
+        run();
+    </script>
+</body>
+</html>

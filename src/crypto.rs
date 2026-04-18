@@ -7,7 +7,7 @@ use sha1::{Digest, Sha1};
 use std::io::{Read, Result};
 
 /// Recognized obfuscation algorithms for EPUB resources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObfuscationAlgorithm {
     /// IDPF Font Obfuscation algorithm (`http://www.idpf.org/2008/embedding`)
     Idpf,

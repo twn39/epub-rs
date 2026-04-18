@@ -1,7 +1,9 @@
 //! EPUB Archive Providers (Storage Layer)
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
 use std::io::{Read, Seek};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use zip::ZipArchive;
 
@@ -34,10 +36,12 @@ impl<R: Read + Seek> EpubProvider for ZipProvider<R> {
 }
 
 /// A provider that reads EPUB files directly from an unzipped, exploded directory.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct DirProvider {
     root: PathBuf,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl DirProvider {
     pub fn new<P: AsRef<Path>>(root: P) -> Self {
         Self {
@@ -46,6 +50,7 @@ impl DirProvider {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl EpubProvider for DirProvider {
     fn read_file<'a>(&'a mut self, path: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
         let full_path = self.root.join(path);

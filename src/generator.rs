@@ -5,6 +5,7 @@ use quick_xml::Writer;
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use std::io::{Read, Seek, Write};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 use zip::CompressionMethod;
 use zip::ZipWriter;
@@ -319,6 +320,7 @@ impl EpubBuilder {
     /// Add a chapter from an HTML file. Automatically discovers `<img src="...">` and
     /// `<link href="style.css">` tags, loads those files from the local disk, adds them to
     /// the EPUB manifest, and rewrites the HTML to point to the new internal EPUB paths.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn add_chapter_from_html_file<P: AsRef<Path>>(
         mut self,
         id: impl Into<String>,

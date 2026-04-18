@@ -2,7 +2,9 @@
 
 use crate::error::EpubError;
 use crate::model::{EpubBook, ManifestItem, Position, TocEntry};
-use crate::provider::{DirProvider, EpubProvider, ZipProvider};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::provider::DirProvider;
+use crate::provider::{EpubProvider, ZipProvider};
 use kuchikiki::traits::*;
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -21,6 +23,7 @@ impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl EpubArchive<DirProvider> {
     /// Create a new `EpubArchive` from an unzipped local directory
     pub fn from_dir<P: AsRef<std::path::Path>>(path: P) -> Self {
@@ -888,7 +891,7 @@ mod tests {
         </ncx>
         "#;
 
-        let entries = EpubArchive::<crate::provider::DirProvider>::parse_ncx(xml).unwrap();
+        let entries = EpubArchive::<crate::provider::ZipProvider<std::io::Cursor<Vec<u8>>>>::parse_ncx(xml).unwrap();
 
         assert_eq!(entries.len(), 2); // Chapter 1, Chapter 2
 
