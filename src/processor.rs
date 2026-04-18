@@ -265,7 +265,7 @@ fn traverse_and_inject(node: &NodeRef, base_cfi: &str, current_path: &str) {
 }
 
 /// A search result mapped to its exact Canonical Fragment Identifier (CFI) range.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
 pub struct SearchResult {
     /// The excerpt of text where the match was found.
     pub excerpt: String,
