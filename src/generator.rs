@@ -131,6 +131,63 @@ impl EpubBuilder {
         self
     }
 
+    /// Check if the current EPUB setup is compliant and contains no broken links.
+    /// Returns a consolidated list of errors if validation fails.
+    pub fn validate(&self) -> Result<(), EpubError> {
+        let mut errors = Vec::new();
+
+        // 1. Mandatory Metadata
+        if self.metadata.title.as_deref().unwrap_or("").trim().is_empty() {
+            errors.push("Missing mandatory metadata: <dc:title>".to_string());
+        }
+        if self.metadata.identifier.as_deref().unwrap_or("").trim().is_empty() {
+            errors.push("Missing mandatory metadata: <dc:identifier>".to_string());
+        }
+        if self.metadata.language.as_deref().unwrap_or("").trim().is_empty() {
+            errors.push("Missing mandatory metadata: <dc:language>".to_string());
+        }
+
+        // 2. Resource Lookups
+        use std::collections::HashSet;
+        let resource_ids: HashSet<&str> = self.resources.iter().map(|r| r.id.as_str()).collect();
+        let resource_hrefs: HashSet<&str> = self.resources.iter().map(|r| r.href.as_str()).collect();
+
+        // 3. Spine Connectivity
+        if self.spine.is_empty() {
+            errors.push("The spine (reading order) is completely empty.".to_string());
+        }
+        for item in &self.spine {
+            if !resource_ids.contains(item.idref.as_str()) {
+                errors.push(format!("Spine item idref '{}' does not exist in resources.", item.idref));
+            }
+        }
+
+        // 4. TOC Nav Links
+        fn validate_toc(entries: &[TocEntry], valid_hrefs: &HashSet<&str>, errors: &mut Vec<String>) {
+            for entry in entries {
+                let base_href = entry.href.split('#').next().unwrap_or(&entry.href);
+                if !valid_hrefs.contains(base_href) {
+                    errors.push(format!("TOC entry '{}' points to missing file: {}", entry.title, base_href));
+                }
+                validate_toc(&entry.children, valid_hrefs, errors);
+            }
+        }
+        validate_toc(&self.toc, &resource_hrefs, &mut errors);
+
+        // 5. Cover verification
+        if let Some(ref cover_id) = self.cover_id {
+            if !resource_ids.contains(cover_id.as_str()) {
+                errors.push(format!("Cover image id '{}' is missing in resources.", cover_id));
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(EpubError::ValidationFailed(errors));
+        }
+
+        Ok(())
+    }
+
     /// Set the global built-in theme. If set to anything other than `None`,
     /// it will automatically inject a CSS file and link it into all added HTML chapters.
     pub fn theme(mut self, theme: Theme) -> Self {
@@ -469,6 +526,8 @@ impl EpubBuilder {
 
     /// Build the EPUB and write it to the provided writer (e.g., `std::fs::File` or `Vec<u8>`).
     pub fn generate<W: Write + Seek>(mut self, writer: W) -> Result<(), EpubError> {
+        self.validate()?;
+        
         let mut zip = ZipWriter::new(writer);
 
         let mut theme_href = None;

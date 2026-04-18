@@ -27,4 +27,7 @@ pub enum EpubError {
 
     #[error("HTML processing error: {0}")]
     HtmlParse(String),
+
+    #[error("EPUB validation failed:\n{}", .0.join("\n"))]
+    ValidationFailed(Vec<String>),
 }
