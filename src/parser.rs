@@ -51,6 +51,77 @@ impl<P: EpubProvider> EpubArchive<P> {
         Ok(book)
     }
 
+    /// Generate virtual pages (locations) for the entire EPUB based on a character limit.
+    /// Returns a list of precise `Position` anchors useful for rendering accurate progress bars.
+    pub fn generate_locations(
+        &mut self,
+        book: &EpubBook,
+        chars_per_location: usize,
+    ) -> Result<Vec<crate::model::Position>, EpubError> {
+        let mut locations = Vec::new();
+        
+        let mut global_char_counter = 0; // Cross-chapter character remainder
+        let mut global_pos_index = 0;    // Virtual global page number
+
+        for (spine_index, item) in book.spine.iter().enumerate() {
+            let manifest_item = book
+                .manifest
+                .get(&item.idref)
+                .ok_or_else(|| EpubError::InvalidFormat(format!("Missing manifest item: {}", item.idref)))?;
+
+            // Read the chapter HTML
+            let mut html = String::new();
+            let mut file = match self.provider.read_file(&manifest_item.href) {
+                Ok(f) => f,
+                Err(_) => continue, // Skip unreadable chapters (e.g. external links or missing files)
+            };
+            if file.read_to_string(&mut html).is_err() {
+                continue;
+            }
+
+            // Estimate the base CFI path for this spine item. 
+            // In EPUB 3 CFI, the spine starts at /6, and its children (itemrefs) are even-numbered starting at 2.
+            let base_cfi = format!("/6/{}!", (spine_index + 1) * 2);
+
+            let ctx = crate::processor::PositionContext {
+                base_cfi: &base_cfi,
+                chars_per_position: chars_per_location,
+                spine_index,
+                href: &manifest_item.href,
+            };
+
+            let start_len = locations.len();
+
+            // Recursively traverse the AST and push new Positions at the threshold
+            crate::processor::extract_positions(
+                &html,
+                &ctx,
+                &mut global_char_counter,
+                &mut locations,
+                &mut global_pos_index,
+            );
+
+            // Post-processing: Calculate relative chapter progress (0.0 to 1.0)
+            let end_len = locations.len();
+            let chapter_locations = end_len - start_len;
+            if chapter_locations > 0 {
+                for (i, loc) in locations[start_len..end_len].iter_mut().enumerate() {
+                    loc.chapter_progression = i as f32 / chapter_locations as f32;
+                }
+            }
+        }
+
+        // Post-processing: Calculate total book progress (0.0 to 1.0)
+        let total_locations = locations.len();
+        if total_locations > 0 {
+            for (i, loc) in locations.iter_mut().enumerate() {
+                loc.total_progression = i as f32 / total_locations as f32;
+            }
+        }
+
+        Ok(locations)
+    }
+
     /// Reads `META-INF/encryption.xml` to find obfuscated resources
     fn parse_encryption(
         &mut self,
@@ -175,6 +246,8 @@ impl<P: EpubProvider> EpubArchive<P> {
 
         let mut reader = Reader::from_str(&buf);
         reader.config_mut().trim_text(true);
+
+        // ... (rest of parse_opf will remain unchanged below)
 
         let mut book = EpubBook::default();
         if let Some(pos) = opf_path.rfind('/') {
