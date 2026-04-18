@@ -345,4 +345,91 @@ mod tests {
         let html_content = parser.get_file_string("OEBPS/ch1.xhtml").expect("Failed to extract chapter string");
         assert!(html_content.contains("<h1>Chapter 1</h1>"), "Extracted HTML should match the input");
     }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_advanced_metadata_and_toc() {
+        let mut generator = EpubGenerator::new();
+        
+        // 1. Test set_metadata with JSON
+        let metadata_json = r#"{
+            "title": "Advanced WASM Meta",
+            "creators": [{"name": "Jane Doe", "role": "aut"}],
+            "language": "en",
+            "identifier": "urn:uuid:7777",
+            "subjects": ["Rust", "WASM"],
+            "layout": "Reflowable"
+        }"#;
+        // In actual JS this would be an Object, but for tests we parse from string using serde_wasm_bindgen
+        let meta_obj: crate::model::Metadata = serde_json::from_str(metadata_json).unwrap();
+        let meta_js = serde_wasm_bindgen::to_value(&meta_obj).unwrap();
+        generator.set_metadata(meta_js).expect("Failed to set full metadata via JSON");
+        
+        // 2. Test set_toc with nested JSON
+        let toc_json = r#"[
+            {
+                "title": "Part 1",
+                "href": "part1.xhtml",
+                "children": [
+                    { "title": "Chapter 1", "href": "ch1.xhtml", "children": [] }
+                ]
+            }
+        ]"#;
+        let toc_obj: Vec<crate::model::TocEntry> = serde_json::from_str(toc_json).unwrap();
+        let toc_js = serde_wasm_bindgen::to_value(&toc_obj).unwrap();
+        generator.set_toc(toc_js).expect("Failed to set TOC via JSON");
+
+        // 3. Test landmarks and pages
+        generator.add_landmark("cover", "cover.xhtml", "Cover Page");
+        generator.add_page("1", "ch1.xhtml#p1");
+
+        let bytes = generator.generate().expect("Failed to generate EPUB with advanced metadata");
+        let mut parser = EpubParser::new(&bytes);
+        let book_js = parser.parse().unwrap();
+        
+        // We verify that the metadata survived the roundtrip
+        let book: crate::model::EpubBook = serde_wasm_bindgen::from_value(book_js).unwrap();
+        assert_eq!(book.metadata.title.unwrap(), "Advanced WASM Meta");
+        assert_eq!(book.metadata.subjects.len(), 2);
+    }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_cfi_utilities() {
+        let start_cfi = "epubcfi(/6/4[chap01ref]!/4[body01]/10[para05]/2/1:3)";
+        let end_cfi = "epubcfi(/6/4[chap01ref]!/4[body01]/10[para05],/2/1:1,/3:4)";
+        
+        // Compare same strings
+        let cmp = compare_cfi(start_cfi, start_cfi).unwrap();
+        assert_eq!(cmp, 0);
+
+        let range = generate_cfi_range(start_cfi, end_cfi).expect("Failed to generate range CFI");
+        assert!(range.starts_with("epubcfi("));
+        assert!(range.ends_with(')'));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_crypto_decrypt() {
+        // IDPF Key logic (SHA1 of identifier stripped of spaces)
+        let identifier = "urn:uuid:test-obfuscation";
+        let expected_key = crate::crypto::generate_idpf_key(identifier);
+        
+        // Dummy encrypted payload
+        let mut encrypted_data = vec![0u8; 1040]; // minimum IDPF block size
+        for (i, byte) in encrypted_data.iter_mut().enumerate().take(1040) {
+            *byte = (i % 256) as u8 ^ expected_key[i % 20];
+        }
+
+        // Add some trailing unencrypted data
+        encrypted_data.push(0xAA);
+        encrypted_data.push(0xBB);
+
+        let decrypted_bytes = decrypt_font(&encrypted_data, identifier, true).expect("WASM decryption failed");
+        
+        assert_eq!(decrypted_bytes.len(), 1042);
+        // The first 1040 bytes should be a linear sequence 0..255 due to XOR logic inversion
+        assert_eq!(decrypted_bytes[0], 0);
+        assert_eq!(decrypted_bytes[1], 1);
+        // Trailing data should be unchanged
+        assert_eq!(decrypted_bytes[1040], 0xAA);
+        assert_eq!(decrypted_bytes[1041], 0xBB);
+    }
 }
