@@ -88,6 +88,22 @@ impl EpubParser {
         
         Ok(new_html)
     }
+
+    /// Calculate and generate an array of virtual page locations (CFI snapshots) 
+    /// for the entire EPUB. Returns a JSON array of `Position` objects.
+    /// `chars_per_location` defines how many characters constitute a "page" (default recommended: 1000).
+    #[wasm_bindgen]
+    pub fn generate_locations(&self, chars_per_location: usize) -> Result<JsValue, JsValue> {
+        let cursor = Cursor::new(&self.buffer);
+        let mut archive = EpubArchive::new(cursor).map_err(|e| e.to_string())?;
+        let book = archive.parse().map_err(|e| e.to_string())?;
+        
+        let locations = archive
+            .generate_locations(&book, chars_per_location)
+            .map_err(|e| e.to_string())?;
+            
+        serde_wasm_bindgen::to_value(&locations).map_err(|e| e.to_string().into())
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -549,5 +565,39 @@ mod tests {
         // Attempt to generate, which should now fail due to TOC link and empty spine
         let gen_err = generator.generate().unwrap_err().as_string().unwrap();
         assert!(gen_err.contains("TOC entry 'Ghost' points to missing file: ghost.xhtml"));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_generate_locations() {
+        let mut generator = EpubGenerator::new();
+        generator.set_title("WASM Locations Test");
+        generator.set_language("en");
+        generator.set_identifier("urn:uuid:loc-123");
+        
+        let long_text = "This is a long sentence designed to be split. ".repeat(50);
+        generator.add_chapter("chapter1", "ch1.xhtml", &format!("<html><body><p>{}</p></body></html>", long_text));
+        generator.add_chapter("chapter2", "ch2.xhtml", &format!("<html><body><p>{}</p></body></html>", long_text));
+        
+        let bytes = generator.generate().expect("Failed to generate EPUB bytes");
+        let parser = EpubParser::new(&bytes);
+        
+        // Generate locations, roughly every 50 characters
+        let locations_js = parser.generate_locations(10).expect("Failed to generate locations");
+        let locations: Vec<crate::model::Position> = serde_wasm_bindgen::from_value(locations_js).unwrap();
+        
+        // Spot check the first location if any
+        if !locations.is_empty() {
+            let first_loc = &locations[0];
+            assert_eq!(first_loc.spine_index, 0);
+            assert_eq!(first_loc.global_position, 1);
+            assert!(first_loc.cfi.starts_with("epubcfi(/6/2!"));
+        }
+        
+        // Spot check middle location (should be in chapter 2) if possible
+        if locations.len() > 10 {
+            let middle_loc = &locations[locations.len() / 2 + 5];
+            assert_eq!(middle_loc.spine_index, 1);
+            assert!(middle_loc.total_progression > 0.4 && middle_loc.total_progression < 0.6);
+        }
     }
 }
