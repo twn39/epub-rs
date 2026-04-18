@@ -221,3 +221,46 @@ pub fn search_text_in_chapter(html: &str, base_cfi: &str, query: &str) -> Result
     let results = processor::search_chapter(html, base_cfi, &regex).map_err(|e| e.to_string())?;
     serde_wasm_bindgen::to_value(&results).map_err(|e| e.to_string().into())
 }
+
+// -----------------------------------------------------------------------------
+// WebAssembly Unit Tests
+// -----------------------------------------------------------------------------
+#[cfg(test)]
+#[cfg(target_arch = "wasm32")]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    // Run tests in a Node.js environment since we don't rely on the DOM
+    wasm_bindgen_test_configure!(run_in_node_experimental);
+
+    #[wasm_bindgen_test]
+    fn test_epub_generator_and_parser() {
+        let mut generator = EpubGenerator::new();
+        
+        // Setup metadata
+        generator.set_title("WASM Test Book");
+        generator.set_language("en");
+        generator.add_author("AI Engineer", Some("aut".to_string()));
+        generator.set_identifier("urn:uuid:wasm-test-1234");
+        
+        // Add content
+        generator.add_chapter("chapter1", "ch1.xhtml", "<html><body><h1>Chapter 1</h1><p>Content</p></body></html>");
+        
+        // Generate the EPUB byte array
+        let bytes = generator.generate().expect("Failed to generate EPUB bytes");
+        assert!(!bytes.is_empty(), "Generated EPUB should not be empty");
+
+        // Now, pass the bytes into the parser
+        let mut parser = EpubParser::new(&bytes);
+        
+        // Parse metadata into a JS object
+        let book_js_val = parser.parse().expect("Failed to parse the generated EPUB");
+        assert!(!book_js_val.is_null());
+        assert!(!book_js_val.is_undefined());
+        
+        // Try extracting the chapter content
+        let html_content = parser.get_file_string("OEBPS/ch1.xhtml").expect("Failed to extract chapter string");
+        assert!(html_content.contains("<h1>Chapter 1</h1>"), "Extracted HTML should match the input");
+    }
+}
