@@ -459,4 +459,57 @@ mod tests {
         assert_eq!(decrypted_bytes[1040], 0xAA);
         assert_eq!(decrypted_bytes[1041], 0xBB);
     }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_rewrite_assets() {
+        let mut generator = EpubGenerator::new();
+        
+        // Setup metadata
+        generator.set_title("WASM Rewrite Test");
+        
+        // Add content: An image and a chapter referencing it using relative path
+        // The generator uses "OEBPS/" internally, so the href provided here should not have it.
+        generator.add_image("img1", "Images/cover.jpg", "image/jpeg", &[1, 2, 3, 4]);
+        generator.add_chapter("chapter1", "Text/ch1.xhtml", r#"
+            <html>
+                <body>
+                    <img src="../Images/cover.jpg" alt="Cover" />
+                    <a href="ch2.xhtml#section1">Link</a>
+                    <link href="http://external.css" rel="stylesheet" />
+                </body>
+            </html>
+        "#);
+        
+        // Generate the EPUB byte array
+        let bytes = generator.generate().expect("Failed to generate EPUB bytes");
+        let mut parser = EpubParser::new(&bytes);
+        parser.parse().unwrap();
+        
+        // Note: The generator prefixes "OEBPS/" automatically for resources and chapters
+        // so "OEBPS/Images/cover.jpg" becomes "OEBPS/OEBPS/Images/cover.jpg" in the archive if not handled properly.
+        // Based on epub-rs builder internal structure, everything gets put under a base folder (usually "OEBPS/").
+        // We will just rewrite based on the generated path format.
+        
+        let cb = js_sys::Function::new_with_args(
+            "path",
+            r#"
+                if (path === "OEBPS/Images/cover.jpg") {
+                    return "blob:http://fake-blob-url";
+                } else if (path === "OEBPS/Text/ch2.xhtml") {
+                    return "app://ch2";
+                }
+                return null;
+            "#
+        );
+
+        let rewritten_html = parser.get_chapter_with_rewritten_assets("OEBPS/Text/ch1.xhtml", cb)
+            .expect("Failed to rewrite assets");
+
+        // The image src should be rewritten to the blob URL
+        assert!(rewritten_html.contains(r#"src="blob:http://fake-blob-url""#));
+        // The link href should be rewritten but keep the anchor
+        assert!(rewritten_html.contains(r#"href="app://ch2#section1""#));
+        // External URLs should be left alone
+        assert!(rewritten_html.contains(r#"href="http://external.css""#));
+    }
 }
