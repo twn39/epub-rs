@@ -54,15 +54,15 @@ struct Resource {
 
 /// A Builder for creating EPUB files.
 pub struct EpubBuilder {
-    version: EpubVersion,
-    metadata: Metadata,
-    theme: Theme,
-    resources: Vec<Resource>,
-    spine: Vec<SpineItem>, // list of spine items
-    toc: Vec<TocEntry>,
-    landmarks: Vec<Landmark>,
-    page_list: Vec<PageListEntry>,
-    cover_id: Option<String>,
+    pub version: EpubVersion,
+    pub metadata: Metadata,
+    pub theme: Theme,
+    pub resources: Vec<Resource>,
+    pub spine: Vec<SpineItem>,
+    pub toc: Vec<TocEntry>,
+    pub landmarks: Vec<Landmark>,
+    pub page_list: Vec<PageListEntry>,
+    pub cover_id: Option<String>,
 }
 
 impl Default for EpubBuilder {
