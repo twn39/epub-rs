@@ -130,6 +130,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn test_parse_from_directory() {
         use epub_rs::parser::EpubArchive;
         use std::fs;
