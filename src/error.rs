@@ -24,4 +24,7 @@ pub enum EpubError {
 
     #[error("Invalid EPUB format: {0}")]
     InvalidFormat(String),
+
+    #[error("HTML processing error: {0}")]
+    HtmlParse(String),
 }

@@ -9,6 +9,156 @@ use lol_html::{HtmlRewriter, Settings, element, text};
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
+use std::path::{Component, Path, PathBuf};
+
+/// Normalizes a relative URL path against a base directory within the EPUB archive.
+/// Example: `OEBPS/Text` + `../Images/cover.jpg` -> `OEBPS/Images/cover.jpg`
+pub fn normalize_path(base_dir: &str, rel_path: &str) -> String {
+    let mut path = PathBuf::from(base_dir);
+    
+    for component in Path::new(rel_path).components() {
+        match component {
+            Component::ParentDir => {
+                path.pop();
+            }
+            Component::Normal(c) => {
+                path.push(c);
+            }
+            // RootDir or CurDir ('.') are mostly ignored or handled inherently
+            _ => {}
+        }
+    }
+    
+    // Convert back to string, replacing Windows backslashes if they somehow appear (EPUB uses forward slashes)
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Helper to check if a URL is external (http/https/data/mailto etc.)
+fn is_external_url(url: &str) -> bool {
+    url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("data:")
+        || url.starts_with("mailto:")
+        || url.starts_with("ftp:")
+        || url.starts_with("//") // Protocol-relative URLs
+}
+
+/// Rewrite resources (images, css, links) in an HTML document using a provided resolver callback.
+/// The resolver receives the absolute path within the EPUB (e.g. `OEBPS/Images/pic.jpg`)
+/// and should return `Some(new_url)` if it wants to rewrite it, or `None` to leave it unchanged.
+pub fn rewrite_resources<F>(
+    html: &str,
+    base_file_path: &str,
+    resolver: F,
+) -> Result<String, EpubError>
+where
+    F: FnMut(&str) -> Option<String> + 'static,
+{
+    // The base directory is the folder containing the HTML file
+    let base_dir = match base_file_path.rfind('/') {
+        Some(idx) => &base_file_path[..idx],
+        None => "",
+    };
+
+    let mut output = Vec::new();
+    let resolver_rc = Rc::new(RefCell::new(resolver));
+
+    let mut rewriter = HtmlRewriter::new(
+        Settings {
+            element_content_handlers: vec![
+                // 1. Rewrite media sources
+                element!("img, video, audio, source, track", {
+                    let resolver = resolver_rc.clone();
+                    move |el| {
+                        if let Some(src) = el.get_attribute("src") {
+                            if !is_external_url(&src) && !src.starts_with('#') {
+                                let abs_path = normalize_path(base_dir, &src);
+                                if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                    el.set_attribute("src", &new_url).unwrap();
+                                }
+                            }
+                        }
+                        if let Some(poster) = el.get_attribute("poster") {
+                            if !is_external_url(&poster) && !poster.starts_with('#') {
+                                let abs_path = normalize_path(base_dir, &poster);
+                                if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                    el.set_attribute("poster", &new_url).unwrap();
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                }),
+                // 2. Rewrite object data
+                element!("object", {
+                    let resolver = resolver_rc.clone();
+                    move |el| {
+                        if let Some(data) = el.get_attribute("data") {
+                            if !is_external_url(&data) && !data.starts_with('#') {
+                                let abs_path = normalize_path(base_dir, &data);
+                                if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                    el.set_attribute("data", &new_url).unwrap();
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                }),
+                // 3. Rewrite SVG images
+                element!("image", {
+                    let resolver = resolver_rc.clone();
+                    move |el| {
+                        for attr in &["href", "xlink:href"] {
+                            if let Some(href) = el.get_attribute(attr) {
+                                if !is_external_url(&href) && !href.starts_with('#') {
+                                    let abs_path = normalize_path(base_dir, &href);
+                                    if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                        el.set_attribute(attr, &new_url).unwrap();
+                                    }
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                }),
+                // 4. Rewrite stylesheets and hyperlinks
+                element!("link, a, area", {
+                    let resolver = resolver_rc.clone();
+                    move |el| {
+                        if let Some(href) = el.get_attribute("href") {
+                            // Skip external links and pure local anchors (e.g. href="#chapter1")
+                            if !is_external_url(&href) && !href.starts_with('#') {
+                                // Extract path and anchor (e.g. `ch2.xhtml#section1` -> `ch2.xhtml`, `#section1`)
+                                let (path_part, anchor_part) = match href.find('#') {
+                                    Some(idx) => (&href[..idx], &href[idx..]),
+                                    None => (href.as_str(), ""),
+                                };
+                                
+                                // We only resolve the file path part
+                                if !path_part.is_empty() {
+                                    let abs_path = normalize_path(base_dir, path_part);
+                                    if let Some(mut new_url) = (resolver.borrow_mut())(&abs_path) {
+                                        // Append the anchor back if it existed
+                                        new_url.push_str(anchor_part);
+                                        el.set_attribute("href", &new_url).unwrap();
+                                    }
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                }),
+            ],
+            ..Settings::default()
+        },
+        |c: &[u8]| output.extend_from_slice(c),
+    );
+
+    rewriter.write(html.as_bytes()).map_err(|e| EpubError::HtmlParse(e.to_string()))?;
+    rewriter.end().map_err(|e| EpubError::HtmlParse(e.to_string()))?;
+
+    String::from_utf8(output).map_err(|e| EpubError::HtmlParse(format!("Invalid UTF-8: {}", e)))
+}
 
 /// Extracts plain text from an HTML byte slice.
 pub fn extract_text(html: &[u8]) -> Result<String, EpubError> {

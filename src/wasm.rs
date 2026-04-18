@@ -61,6 +61,33 @@ impl EpubParser {
         let bytes = self.get_file_bytes(path)?;
         String::from_utf8(bytes).map_err(|e| format!("Failed to parse UTF-8: {}", e).into())
     }
+
+    /// Extract an HTML chapter and rewrite all internal assets (images, css, links) using a JS callback.
+    /// The resolver function receives the absolute internal EPUB path (e.g. `OEBPS/Images/cover.jpg`)
+    /// and should return a new URL (like a `blob://` URI or a base64 string) to replace it.
+    /// Return `null` or `undefined` from JS to leave the link unchanged.
+    #[wasm_bindgen]
+    pub fn get_chapter_with_rewritten_assets(
+        &mut self,
+        html_path: &str,
+        resolver: js_sys::Function,
+    ) -> Result<String, JsValue> {
+        let html_string = self.get_file_string(html_path)?;
+        
+        let new_html = processor::rewrite_resources(
+            &html_string,
+            html_path,
+            move |abs_path| {
+                let js_abs_path = JsValue::from_str(abs_path);
+                match resolver.call1(&JsValue::NULL, &js_abs_path) {
+                    Ok(val) => val.as_string(),
+                    Err(_) => None,
+                }
+            }
+        ).map_err(|e| e.to_string())?;
+        
+        Ok(new_html)
+    }
 }
 
 // -----------------------------------------------------------------------------
