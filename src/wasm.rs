@@ -154,6 +154,13 @@ impl EpubGenerator {
         self.builder = builder;
     }
 
+    /// Check if the current EPUB setup is compliant and contains no broken links.
+    /// Will throw a JS error with a formatted array of strings if broken.
+    #[wasm_bindgen]
+    pub fn validate(&self) -> Result<(), JsValue> {
+        self.builder.validate().map_err(|e| e.to_string().into())
+    }
+
     /// Add a CSS stylesheet to the EPUB.
     #[wasm_bindgen]
     pub fn add_stylesheet(&mut self, id: &str, href: &str, css_content: &str) {
@@ -391,7 +398,11 @@ mod tests {
         let meta_js = serde_wasm_bindgen::to_value(&meta_obj).unwrap();
         generator.set_metadata(meta_js).expect("Failed to set full metadata via JSON");
         
-        // 2. Test set_toc with nested JSON
+        // 2. Add chapters before TOC to pass validation
+        generator.add_chapter("part1", "part1.xhtml", "<html>Part 1</html>");
+        generator.add_chapter("ch1", "ch1.xhtml", "<html>Chapter 1</html>");
+        
+        // 3. Test set_toc with nested JSON
         let toc_json = r#"[
             {
                 "title": "Part 1",
@@ -405,7 +416,9 @@ mod tests {
         let toc_js = serde_wasm_bindgen::to_value(&toc_obj).unwrap();
         generator.set_toc(toc_js).expect("Failed to set TOC via JSON");
 
-        // 3. Test landmarks and pages
+        // 4. Test landmarks and pages
+        generator.add_image("cover", "cover.jpg", "image/jpeg", &[1,2,3]);
+        generator.add_chapter("cover_xhtml", "cover.xhtml", "<html><img src='cover.jpg'/></html>");
         generator.add_landmark("cover", "cover.xhtml", "Cover Page");
         generator.add_page("1", "ch1.xhtml#p1");
 
@@ -466,6 +479,8 @@ mod tests {
         
         // Setup metadata
         generator.set_title("WASM Rewrite Test");
+        generator.set_language("en");
+        generator.set_identifier("urn:uuid:rewrite-123");
         
         // Add content: An image and a chapter referencing it using relative path
         // The generator uses "OEBPS/" internally, so the href provided here should not have it.
@@ -511,5 +526,28 @@ mod tests {
         assert!(rewritten_html.contains(r#"href="app://ch2#section1""#));
         // External URLs should be left alone
         assert!(rewritten_html.contains(r#"href="http://external.css""#));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_wasm_validation_errors() {
+        let mut generator = EpubGenerator::new();
+        
+        // Empty generator should fail validation (missing metadata and spine)
+        let err = generator.validate().unwrap_err().as_string().unwrap();
+        assert!(err.contains("Missing mandatory metadata: <dc:title>"));
+        assert!(err.contains("The spine (reading order) is completely empty."));
+        
+        // Partially fix metadata
+        generator.set_title("Valid Book");
+        generator.set_language("en");
+        generator.set_identifier("uuid:12345");
+        
+        // Add a TOC pointing to a non-existent file
+        let toc_json = r#"[{"title": "Ghost", "href": "ghost.xhtml", "children": []}]"#;
+        generator.set_toc(serde_wasm_bindgen::to_value(&serde_json::from_str::<Vec<crate::model::TocEntry>>(toc_json).unwrap()).unwrap()).unwrap();
+        
+        // Attempt to generate, which should now fail due to TOC link and empty spine
+        let gen_err = generator.generate().unwrap_err().as_string().unwrap();
+        assert!(gen_err.contains("TOC entry 'Ghost' points to missing file: ghost.xhtml"));
     }
 }
