@@ -10,3 +10,6 @@ pub mod provider;
 pub use cfi::EpubCfi;
 pub use error::EpubError;
 pub use model::EpubBook;
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;

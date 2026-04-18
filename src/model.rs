@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 /// Specifies the version of the EPUB standard to target during generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EpubVersion {
     /// EPUB 2.0 (Compatible with older e-readers, relies on NCX)
     V20,
@@ -13,7 +13,7 @@ pub enum EpubVersion {
 }
 
 /// The layout rendition type of the EPUB.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LayoutType {
     /// Content flows dynamically to fit the screen (default).
     #[default]
@@ -23,7 +23,7 @@ pub enum LayoutType {
 }
 
 /// Hints for how a fixed-layout spine item should be displayed in a synthetic spread.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageSpread {
     None,
     Left,
@@ -32,7 +32,7 @@ pub enum PageSpread {
 }
 
 /// Represents an item in the reading order (spine).
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, Debug, Clone)]
 pub struct SpineItem {
     /// The ID reference to the manifest item
     pub idref: String,
@@ -57,7 +57,7 @@ impl SpineItem {
 }
 
 /// A synthetic reading position (virtual page).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
 pub struct Position {
     /// The index of the spine item this position belongs to.
     pub spine_index: usize,
@@ -75,7 +75,7 @@ pub struct Position {
 
 /// A structured, semantic representation of a content block (e.g., a paragraph or heading).
 /// Useful for Text-To-Speech (TTS), accessibility (A11Y), or advanced reading interfaces.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
 pub struct ContentElement {
     /// The plain text content of the element.
     pub text: String,
@@ -88,7 +88,7 @@ pub struct ContentElement {
 }
 
 /// The central EPUB document structure
-#[derive(Debug, Default, Clone)]
+#[derive(serde::Serialize, Debug, Default, Clone)]
 pub struct EpubBook {
     /// EPUB metadata (title, creators, etc.)
     pub metadata: Metadata,
@@ -105,7 +105,7 @@ pub struct EpubBook {
 }
 
 /// Represents a creator or contributor to the EPUB.
-#[derive(Debug, Default, Clone)]
+#[derive(serde::Serialize, Debug, Default, Clone)]
 pub struct Creator {
     pub name: String,
     /// An optional role, such as "aut" (Author), "trl" (Translator), "ill" (Illustrator).
@@ -125,7 +125,7 @@ impl Creator {
 }
 
 /// Represents a table of contents entry.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
 pub struct TocEntry {
     pub title: String,
     pub href: String,
@@ -148,7 +148,7 @@ impl TocEntry {
 }
 
 /// Represents the `metadata` block in the OPF
-#[derive(Debug, Default, Clone)]
+#[derive(serde::Serialize, Debug, Default, Clone)]
 pub struct Metadata {
     pub title: Option<String>,
     pub creators: Vec<Creator>,
@@ -166,7 +166,7 @@ pub struct Metadata {
 }
 
 /// Represents an `item` in the `manifest` block of the OPF
-#[derive(Debug, Clone)]
+#[derive(serde::Serialize, Debug, Clone)]
 pub struct ManifestItem {
     pub id: String,
     pub href: String,
