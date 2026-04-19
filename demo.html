@@ -4,86 +4,215 @@
     <meta charset="UTF-8">
     <title>epub-rs WASM Demo</title>
     <style>
-        body { font-family: system-ui, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
-        #output { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; font-family: monospace; max-height: 500px; overflow-y: auto;}
-        .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+        body { font-family: system-ui, sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; line-height: 1.5; }
+        .container { display: flex; gap: 20px; flex-wrap: wrap; }
+        .panel { flex: 1; min-width: 400px; background: #f5f5f5; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
+        h1, h2 { color: #333; margin-top: 0; }
+        #output, #renderArea { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; font-family: monospace; max-height: 500px; overflow-y: auto; margin-top: 10px; }
+        #renderArea { background: white; color: black; font-family: serif; border: 1px solid #ccc; position: relative; }
+        .controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+        .row { display: flex; gap: 10px; align-items: center; }
         button, input::file-selector-button { padding: 8px 12px; border: none; border-radius: 4px; background: #007acc; color: white; cursor: pointer; font-weight: bold; }
         button:hover, input::file-selector-button:hover { background: #005999; }
+        input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; flex: 1; }
+        .highlight { background-color: yellow; color: black; }
     </style>
 </head>
 <body>
     <h1>epub-rs WebAssembly Demo</h1>
-    <p>This demo runs the complete <code>epub-rs</code> parsing and generation engine entirely in your browser using WebAssembly.</p>
+    <p>This demo runs the complete <code>epub-rs</code> parsing, processing, and generation engine entirely in your browser.</p>
     
-    <div class="controls">
-        <input type="file" id="fileInput" accept=".epub" />
-        <span>OR</span>
-        <button id="generateBtn">Generate Empty EPUB</button>
+    <div class="container">
+        <!-- Parsing Panel -->
+        <div class="panel">
+            <h2>1. Parse & Inspect EPUB</h2>
+            <div class="controls">
+                <input type="file" id="fileInput" accept=".epub" />
+                <div class="row" id="chapterControls" style="display: none;">
+                    <button id="renderBtn">Render Chapter 1 (Inline Assets)</button>
+                    <button id="locBtn">Generate Locations</button>
+                </div>
+            </div>
+            <pre id="output">Loading WASM module...</pre>
+        </div>
+
+        <!-- Generation Panel -->
+        <div class="panel">
+            <h2>2. Generate EPUB</h2>
+            <p>Construct a compliant EPUB 3 archive in memory and download it.</p>
+            <div class="controls">
+                <div class="row">
+                    <input type="text" id="bookTitle" value="WASM Magic Book" placeholder="Book Title" />
+                    <input type="text" id="bookAuthor" value="Rustacean" placeholder="Author" />
+                </div>
+                <button id="generateBtn">Generate & Download EPUB</button>
+            </div>
+            
+            <h2>3. Browser Rendition</h2>
+            <p>Live view of the chapter with images/CSS proxied via Rust <code>HtmlRewriter</code> and Blob URIs.</p>
+            <div id="renderArea">Waiting for an EPUB to be parsed...</div>
+        </div>
     </div>
-    
-    <h2>Output:</h2>
-    <pre id="output">Loading WASM...</pre>
 
     <script type="module">
-        import init, { parse_epub, generate_empty_epub } from './pkg/epub_rs.js';
+        import init, { EpubParser, EpubGenerator } from './pkg/epub_rs.js';
 
         const output = document.getElementById('output');
         const fileInput = document.getElementById('fileInput');
+        const renderBtn = document.getElementById('renderBtn');
+        const locBtn = document.getElementById('locBtn');
+        const chapterControls = document.getElementById('chapterControls');
         const generateBtn = document.getElementById('generateBtn');
+        const renderArea = document.getElementById('renderArea');
+
+        let currentParser = null;
+        let activeBook = null;
+        let blobUrls = [];
+
+        // Helper to format JSON output
+        function log(obj, prefix = "") {
+            output.textContent = prefix + (typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2));
+        }
+        
+        function cleanupBlobs() {
+            blobUrls.forEach(URL.revokeObjectURL);
+            blobUrls = [];
+        }
 
         async function run() {
             try {
-                // Initialize the WASM module
                 await init();
-                output.textContent = "✅ WASM engine loaded successfully!\n\nPlease select an EPUB file to parse, or click 'Generate'.";
+                output.textContent = "✅ WASM engine loaded successfully!\n\nPlease select an EPUB file to inspect.";
 
+                // --- 1. Parsing & Metadata ---
                 fileInput.addEventListener('change', async (event) => {
                     const file = event.target.files[0];
                     if (!file) return;
 
+                    cleanupBlobs();
                     output.textContent = `Reading ${file.name} (${file.size} bytes)...`;
+                    
                     const arrayBuffer = await file.arrayBuffer();
                     const uint8Array = new Uint8Array(arrayBuffer);
 
                     try {
-                        output.textContent = "Parsing EPUB with epub-rs (WASM)...";
                         const start = performance.now();
                         
-                        // Call the Rust function
-                        const resultJson = parse_epub(uint8Array);
-                        const parsedObj = JSON.parse(resultJson);
+                        // Instantiate Wasm Parser
+                        currentParser = new EpubParser(uint8Array);
+                        const resultJson = currentParser.parse();
+                        activeBook = resultJson; // Note: wasm-bindgen via serde returns a JS Object now
                         
                         const end = performance.now();
-                        output.textContent = `✅ Successfully parsed in ${(end - start).toFixed(2)} ms!\n\n` + JSON.stringify(parsedObj, null, 2);
+                        log(activeBook, `✅ Parsed in ${(end - start).toFixed(2)} ms!\n\n`);
+                        
+                        if (activeBook.spine && activeBook.spine.length > 0) {
+                            chapterControls.style.display = 'flex';
+                        }
                     } catch (e) {
-                        output.textContent = "❌ Error parsing EPUB:\n" + e;
+                        log(e, "❌ Error parsing EPUB:\n");
                     }
                 });
 
-                generateBtn.addEventListener('click', () => {
+                // --- 2. Live Rendering & Asset Rewriting ---
+                renderBtn.addEventListener('click', () => {
+                    if (!currentParser || !activeBook || activeBook.spine.length === 0) return;
+                    
                     try {
-                        output.textContent = "Generating EPUB with epub-rs (WASM)...";
+                        const firstChapterRef = activeBook.spine[0].idref;
+                        const manifestItem = activeBook.manifest[firstChapterRef];
+                        if (!manifestItem) throw "Manifest item not found";
+
                         const start = performance.now();
                         
-                        // Call the Rust function
-                        const epubBytes = generate_empty_epub();
-                        
+                        // Ask Rust to rewrite the chapter HTML
+                        // The callback receives internal EPUB absolute paths (e.g. OEBPS/Images/cover.jpg)
+                        const rewrittenHtml = currentParser.get_chapter_with_rewritten_assets(manifestItem.href, (epubPath) => {
+                            try {
+                                // Extract raw bytes from memory
+                                const bytes = currentParser.get_file_bytes(epubPath);
+                                
+                                // Guess mime type
+                                let type = "application/octet-stream";
+                                if (epubPath.endsWith(".jpg") || epubPath.endsWith(".jpeg")) type = "image/jpeg";
+                                else if (epubPath.endsWith(".png")) type = "image/png";
+                                else if (epubPath.endsWith(".css")) type = "text/css";
+                                else if (epubPath.endsWith(".svg")) type = "image/svg+xml";
+
+                                const blob = new Blob([bytes], { type });
+                                const blobUrl = URL.createObjectURL(blob);
+                                blobUrls.push(blobUrl);
+                                
+                                return blobUrl; // Tell Rust to replace the src/href with this blob URL
+                            } catch (e) {
+                                console.warn("Failed to load asset:", epubPath);
+                                return null; // Leave link unchanged
+                            }
+                        });
+
                         const end = performance.now();
                         
-                        // Create a blob and trigger download
+                        // Inject the rewritten HTML securely
+                        renderArea.innerHTML = rewrittenHtml;
+                        log(`✅ Rendered chapter with inner assets via Blob URIs in ${(end - start).toFixed(2)} ms.`);
+                        
+                    } catch(e) {
+                        log(e, "❌ Error rendering chapter:\n");
+                    }
+                });
+
+                // --- 3. Progress / Pagination Estimation ---
+                locBtn.addEventListener('click', () => {
+                    if (!currentParser) return;
+                    try {
+                        const start = performance.now();
+                        
+                        // Tell Rust to slice the whole book into virtual pages of ~1000 characters
+                        const locations = currentParser.generate_locations(1000); 
+                        const end = performance.now();
+                        
+                        log(locations, `✅ Generated ${locations.length} virtual page Locations (CFIs) in ${(end - start).toFixed(2)} ms!\n\nSample (Page 2):\n`);
+                    } catch(e) {
+                        log(e, "❌ Error generating locations:\n");
+                    }
+                });
+
+                // --- 4. Generation ---
+                generateBtn.addEventListener('click', () => {
+                    try {
+                        output.textContent = "Generating EPUB with EpubBuilder (WASM)...";
+                        const start = performance.now();
+                        
+                        // Create the builder
+                        let gen = new EpubGenerator();
+                        gen.set_title(document.getElementById('bookTitle').value || "WASM Book");
+                        gen.add_author(document.getElementById('bookAuthor').value || "Author");
+                        gen.set_language("en");
+                        gen.set_identifier(`urn:uuid:${crypto.randomUUID ? crypto.randomUUID() : '12345'}`);
+                        gen.set_theme(true); // Modern theme
+                        
+                        // Add some dummy chapters and TOC
+                        gen.add_chapter_with_nav("ch1", "OEBPS/Text/ch1.xhtml", "The Beginning", "<h1>The Beginning</h1><p>This EPUB was generated entirely in the browser using Rust and WebAssembly.</p>");
+                        gen.add_chapter_with_nav("ch2", "OEBPS/Text/ch2.xhtml", "The End", "<h1>The End</h1><p>No backend server was harmed during the creation of this file.</p>");
+                        
+                        // Generate ZIP bytes
+                        const epubBytes = gen.generate();
+                        const end = performance.now();
+                        
+                        // Trigger download
                         const blob = new Blob([epubBytes], { type: 'application/epub+zip' });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = "epub-rs-generated.epub";
+                        a.download = `${document.getElementById('bookTitle').value || "book"}.epub`;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
                         URL.revokeObjectURL(url);
                         
-                        output.textContent = `✅ Empty EPUB generated in ${(end - start).toFixed(2)} ms and download triggered! (${epubBytes.length} bytes)`;
+                        log(`✅ EPUB generated in ${(end - start).toFixed(2)} ms and download triggered! (${epubBytes.length} bytes)`);
                     } catch (e) {
-                        output.textContent = "❌ Error generating EPUB:\n" + e;
+                        log(e, "❌ Error generating EPUB:\n");
                     }
                 });
             } catch (err) {
