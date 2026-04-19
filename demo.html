@@ -2,283 +2,468 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>epub-rs WASM Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>epub-rs Wasm Demo</title>
     <style>
-        body { font-family: system-ui, sans-serif; padding: 20px; max-width: 900px; margin: 0 auto; line-height: 1.5; }
-        .container { display: flex; gap: 20px; flex-wrap: wrap; }
-        .panel { flex: 1; min-width: 400px; background: #f5f5f5; padding: 20px; border-radius: 8px; border: 1px solid #ddd; }
-        h1, h2 { color: #333; margin-top: 0; }
-        #output, #renderArea { background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; font-family: monospace; max-height: 500px; overflow-y: auto; margin-top: 10px; }
-        #renderArea { background: white; color: black; font-family: serif; border: 1px solid #ccc; position: relative; }
-        .controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
-        .row { display: flex; gap: 10px; align-items: center; }
-        button, input::file-selector-button { padding: 8px 12px; border: none; border-radius: 4px; background: #007acc; color: white; cursor: pointer; font-weight: bold; }
-        button:hover, input::file-selector-button:hover { background: #005999; }
-        input[type="text"] { padding: 8px; border: 1px solid #ccc; border-radius: 4px; flex: 1; }
-        .highlight { background-color: yellow; color: black; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background-color: #f4f4f5;
+        }
+
+        header {
+            background-color: #fff;
+            padding: 10px 20px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 18px;
+            color: #333;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        button {
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            background-color: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: #f0f0f0;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #file-input {
+            font-size: 14px;
+        }
+
+        #page-info {
+            font-size: 14px;
+            color: #666;
+            min-width: 120px;
+            text-align: center;
+        }
+
+        main {
+            flex-grow: 1;
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+            overflow: hidden;
+            gap: 20px;
+        }
+
+        #sidebar {
+            width: 250px;
+            background: #fff;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow-y: auto;
+            padding: 15px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #sidebar h2 {
+            font-size: 16px;
+            margin-top: 0;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+            color: #333;
+        }
+
+        .toc-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            font-size: 14px;
+        }
+
+        .toc-list .toc-list {
+            padding-left: 15px;
+        }
+
+        .toc-list li {
+            margin-bottom: 6px;
+        }
+
+        .toc-list li a {
+            text-decoration: none;
+            color: #007BFF;
+            cursor: pointer;
+            display: block;
+        }
+
+        .toc-list li a:hover {
+            text-decoration: underline;
+        }
+
+        #viewer-container {
+            width: 100%;
+            max-width: 800px;
+            background: #fff;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        iframe {
+            flex-grow: 1;
+            border: none;
+            width: 100%;
+            height: 100%;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 18px;
+            color: #666;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
     </style>
 </head>
 <body>
-    <h1>epub-rs WebAssembly Demo</h1>
-    <p>This demo runs the complete <code>epub-rs</code> parsing, processing, and generation engine entirely in your browser.</p>
+    <header>
+        <h1>epub-rs Reader Demo</h1>
+        <div class="controls">
+            <input type="file" id="file-input" accept=".epub" />
+            <button id="prev-btn" class="hidden" disabled>Previous</button>
+            <span id="page-info" class="hidden"></span>
+            <button id="next-btn" class="hidden" disabled>Next</button>
+        </div>
+    </header>
     
-    <div class="container">
-        <!-- Parsing Panel -->
-        <div class="panel">
-            <h2>1. Parse & Inspect EPUB</h2>
-            <div class="controls">
-                <input type="file" id="fileInput" accept=".epub" />
-                <div class="row" id="chapterControls" style="display: none;">
-                    <button id="renderBtn">Render Chapter 1 (Inline Assets)</button>
-                    <button id="locBtn">Generate Locations</button>
-                </div>
-            </div>
-            <pre id="output">Loading WASM module...</pre>
+    <main>
+        <aside id="sidebar" class="hidden">
+            <h2>Table of Contents</h2>
+            <div id="toc-container"></div>
+        </aside>
+        <div id="viewer-container">
+            <div id="loading" class="hidden">Loading...</div>
+            <iframe id="viewer" sandbox="allow-same-origin allow-scripts"></iframe>
         </div>
-
-        <!-- Generation Panel -->
-        <div class="panel">
-            <h2>2. Generate EPUB</h2>
-            <p>Construct a compliant EPUB 3 archive in memory and download it.</p>
-            <div class="controls">
-                <div class="row">
-                    <input type="text" id="bookTitle" value="WASM Magic Book" placeholder="Book Title" />
-                    <input type="text" id="bookAuthor" value="Rustacean" placeholder="Author" />
-                </div>
-                <button id="generateBtn">Generate & Download EPUB</button>
-            </div>
-            
-            <h2>3. Browser Rendition</h2>
-            <p>Live view of the chapter with images/CSS proxied via Rust <code>HtmlRewriter</code> and Blob URIs.</p>
-            <div id="renderArea" style="min-height: 400px; padding: 0;">Waiting for an EPUB to be parsed...</div>
-        </div>
-    </div>
+    </main>
 
     <script type="module">
-        import init, { EpubParser, EpubGenerator } from './pkg/epub_rs.js';
+        import init, { EpubParser } from './pkg/epub_rs.js';
 
-        const output = document.getElementById('output');
-        const fileInput = document.getElementById('fileInput');
-        const renderBtn = document.getElementById('renderBtn');
-        const locBtn = document.getElementById('locBtn');
-        const chapterControls = document.getElementById('chapterControls');
-        const generateBtn = document.getElementById('generateBtn');
-        const renderArea = document.getElementById('renderArea');
-
-        let currentParser = null;
-        let activeBook = null;
+        let parser = null;
+        let book = null;
+        let currentSpineIndex = 0;
         let blobUrls = [];
 
-        // Helper to format JSON output
-        function log(obj, prefix = "") {
-            output.textContent = prefix + (typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2));
-        }
-        
-        function cleanupBlobs() {
-            blobUrls.forEach(URL.revokeObjectURL);
-            blobUrls = [];
-        }
+        const fileInput = document.getElementById('file-input');
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        const pageInfo = document.getElementById('page-info');
+        const viewer = document.getElementById('viewer');
+        const loading = document.getElementById('loading');
 
+        // Initialize Wasm
         async function run() {
             try {
                 await init();
-                output.textContent = "✅ WASM engine loaded successfully!\n\nPlease select an EPUB file to inspect.";
+                console.log("WASM initialized successfully.");
+            } catch (e) {
+                console.error("Failed to initialize WASM:", e);
+                alert("Failed to initialize WebAssembly. See console for details.");
+            }
+        }
+        run();
 
-                // --- 1. Parsing & Metadata ---
-                fileInput.addEventListener('change', async (event) => {
-                    const file = event.target.files[0];
-                    if (!file) return;
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
 
-                    cleanupBlobs();
-                    output.textContent = `Reading ${file.name} (${file.size} bytes)...`;
-                    
-                    const arrayBuffer = await file.arrayBuffer();
-                    const uint8Array = new Uint8Array(arrayBuffer);
+            showLoading();
 
-                    try {
-                        const start = performance.now();
-                        
-                        // Instantiate Wasm Parser
-                        currentParser = new EpubParser(uint8Array);
-                        const resultJson = currentParser.parse();
-                        activeBook = resultJson; // Note: wasm-bindgen via serde returns a JS Object now
-                        
-                        const end = performance.now();
-                        log(activeBook, `✅ Parsed in ${(end - start).toFixed(2)} ms!\n\n`);
-                        
-                        if (activeBook.spine && activeBook.spine.length > 0) {
-                            chapterControls.style.display = 'flex';
-                        }
-                    } catch (e) {
-                        log(e, "❌ Error parsing EPUB:\n");
-                    }
-                });
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
 
-                // --- 2. Live Rendering & Asset Rewriting ---
-                renderBtn.addEventListener('click', () => {
-                    if (!currentParser || !activeBook || activeBook.spine.length === 0) return;
-                    
-                    try {
-                        const firstChapterRef = activeBook.spine[0].idref;
-                        // Handle Map vs plain object gracefully depending on serde-wasm-bindgen translation
-                        const manifestItem = activeBook.manifest instanceof Map 
-                            ? activeBook.manifest.get(firstChapterRef) 
-                            : activeBook.manifest[firstChapterRef];
-                            
-                        if (!manifestItem) {
-                            console.error("Available manifest keys:", activeBook.manifest instanceof Map ? Array.from(activeBook.manifest.keys()) : Object.keys(activeBook.manifest));
-                            throw `Manifest item '${firstChapterRef}' not found in manifest`;
-                        }
-
-                        const start = performance.now();
-                        
-                        // Ask Rust to rewrite the chapter HTML
-                        // The callback receives internal EPUB absolute paths (e.g. OEBPS/Images/cover.jpg)
-                        const rewrittenHtml = currentParser.get_chapter_with_rewritten_assets(manifestItem.href, (epubPath) => {
-                            try {
-                                // Extract raw bytes from memory
-                                const bytes = currentParser.get_file_bytes(epubPath);
-                                if (!bytes) throw "No bytes returned";
-                                
-                                // Guess mime type
-                                let type = "application/octet-stream";
-                                if (epubPath.endsWith(".jpg") || epubPath.endsWith(".jpeg")) type = "image/jpeg";
-                                else if (epubPath.endsWith(".png")) type = "image/png";
-                                else if (epubPath.endsWith(".css")) type = "text/css";
-                                else if (epubPath.endsWith(".svg")) type = "image/svg+xml";
-
-                                const blob = new Blob([bytes], { type });
-                                const blobUrl = URL.createObjectURL(blob);
-                                blobUrls.push(blobUrl);
-                                
-                                return blobUrl; // Tell Rust to replace the src/href with this blob URL
-                            } catch (e) {
-                                console.warn("Failed to load asset:", epubPath);
-                                return null; // Leave link unchanged
-                            }
-                        });
-
-                        const end = performance.now();
-                        
-                        renderArea.innerHTML = '';
-                        
-                        // 1. Raw text preview fallback (helpful for debugging blank pages)
-                        const rawTextDiv = document.createElement('div');
-                        rawTextDiv.style.padding = '10px';
-                        rawTextDiv.style.backgroundColor = '#f8f9fa';
-                        rawTextDiv.style.borderBottom = '1px solid #ccc';
-                        rawTextDiv.style.fontFamily = 'monospace';
-                        rawTextDiv.style.whiteSpace = 'pre-wrap';
-                        rawTextDiv.style.maxHeight = '200px';
-                        rawTextDiv.style.overflowY = 'auto';
-                        
-                        // Use a detached DOM node to strip tags securely
-                        const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = rewrittenHtml;
-                        const textContent = tempDiv.textContent || tempDiv.innerText || "";
-                        
-                        if (textContent.trim() === "") {
-                            rawTextDiv.innerHTML = `<span style="color: gray;">[No plain text found. This chapter might only contain images or empty containers.]</span>`;
-                        } else {
-                            rawTextDiv.textContent = textContent.trim();
-                        }
-                        
-                        const debugTitle = document.createElement('div');
-                        debugTitle.style.fontWeight = 'bold';
-                        debugTitle.style.marginBottom = '5px';
-                        debugTitle.innerText = "Raw Text Extraction:";
-                        rawTextDiv.insertBefore(debugTitle, rawTextDiv.firstChild);
-                        
-                        renderArea.appendChild(rawTextDiv);
-
-                        // 2. The isolated iframe for actual visual rendition
-                        const iframe = document.createElement('iframe');
-                        iframe.id = 'chapterIframe';
-                        iframe.style.width = '100%';
-                        iframe.style.height = '600px';
-                        iframe.style.border = 'none';
-                        iframe.style.background = 'white';
-                        
-                        // Add DOCTYPE to prevent Quirks mode which can break CSS layout
-                        const htmlWithDoctype = rewrittenHtml.includes("<!DOCTYPE") || rewrittenHtml.includes("<!doctype") 
-                            ? rewrittenHtml 
-                            : "<!DOCTYPE html>\n" + rewrittenHtml;
-                            
-                        const htmlBlob = new Blob([htmlWithDoctype], { type: 'text/html;charset=utf-8' });
-                        const htmlUrl = URL.createObjectURL(htmlBlob);
-                        blobUrls.push(htmlUrl);
-                        
-                        iframe.src = htmlUrl;
-                        renderArea.appendChild(iframe);
-
-                        log(`✅ Rendered chapter '${firstChapterRef}' with inner assets via Blob URIs in ${(end - start).toFixed(2)} ms.`);
-                        
-                    } catch(e) {
-                        console.error("Rendering error:", e);
-                        log(e instanceof Error ? e.stack || e.message : (typeof e === 'object' ? JSON.stringify(e, null, 2) : e), "❌ Error rendering chapter:\n");
-                    }
-                });
-
-                // --- 3. Progress / Pagination Estimation ---
-                locBtn.addEventListener('click', () => {
-                    if (!currentParser) return;
-                    try {
-                        const start = performance.now();
-                        
-                        // Tell Rust to slice the whole book into virtual pages of ~1000 characters
-                        const locations = currentParser.generate_locations(1000); 
-                        const end = performance.now();
-                        
-                        log(locations, `✅ Generated ${locations.length} virtual page Locations (CFIs) in ${(end - start).toFixed(2)} ms!\n\nSample (Page 2):\n`);
-                    } catch(e) {
-                        log(e, "❌ Error generating locations:\n");
-                    }
-                });
-
-                // --- 4. Generation ---
-                generateBtn.addEventListener('click', () => {
-                    try {
-                        output.textContent = "Generating EPUB with EpubBuilder (WASM)...";
-                        const start = performance.now();
-                        
-                        // Create the builder
-                        let gen = new EpubGenerator();
-                        gen.set_title(document.getElementById('bookTitle').value || "WASM Book");
-                        gen.add_author(document.getElementById('bookAuthor').value || "Author");
-                        gen.set_language("en");
-                        gen.set_identifier(`urn:uuid:${crypto.randomUUID ? crypto.randomUUID() : '12345'}`);
-                        gen.set_theme(true); // Modern theme
-                        
-                        // Add some dummy chapters and TOC
-                        gen.add_chapter_with_nav("ch1", "OEBPS/Text/ch1.xhtml", "The Beginning", "<h1>The Beginning</h1><p>This EPUB was generated entirely in the browser using Rust and WebAssembly.</p>");
-                        gen.add_chapter_with_nav("ch2", "OEBPS/Text/ch2.xhtml", "The End", "<h1>The End</h1><p>No backend server was harmed during the creation of this file.</p>");
-                        
-                        // Generate ZIP bytes
-                        const epubBytes = gen.generate();
-                        const end = performance.now();
-                        
-                        // Trigger download
-                        const blob = new Blob([epubBytes], { type: 'application/epub+zip' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `${document.getElementById('bookTitle').value || "book"}.epub`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                        
-                        log(`✅ EPUB generated in ${(end - start).toFixed(2)} ms and download triggered! (${epubBytes.length} bytes)`);
-                    } catch (e) {
-                        log(e, "❌ Error generating EPUB:\n");
-                    }
-                });
+                // Cleanup previous state
+                cleanupBlobUrls();
+                
+                // Create new parser and parse the EPUB
+                parser = new EpubParser(bytes);
+                book = parser.parse();
+                console.log("Parsed book object:", book);
+                
+                // Set window title if available
+                if (book.metadata && book.metadata.title) {
+                    document.title = book.metadata.title + " - epub-rs Reader Demo";
+                }
+                
+                try {
+                    const toc = parser.get_toc();
+                    console.log("Parsed TOC:", toc);
+                    renderToc(toc);
+                } catch (e) {
+                    console.warn("Failed to get TOC or no TOC available:", e);
+                    document.getElementById('sidebar').classList.add('hidden');
+                }
+                
+                currentSpineIndex = 0;
+                
+                // Skip non-linear items if possible, but for demo we just show all spine items
+                await loadChapter(currentSpineIndex);
+                updateUI();
             } catch (err) {
-                output.textContent = "❌ Failed to load WASM module:\n" + err;
+                console.error("Failed to parse EPUB:", err);
+                alert("Failed to parse EPUB: " + err);
+            } finally {
+                hideLoading();
+            }
+        });
+
+        prevBtn.addEventListener('click', async () => {
+            if (currentSpineIndex > 0) {
+                currentSpineIndex--;
+                showLoading();
+                await loadChapter(currentSpineIndex);
+                updateUI();
+                hideLoading();
+            }
+        });
+
+        nextBtn.addEventListener('click', async () => {
+            if (book && currentSpineIndex < book.spine.length - 1) {
+                currentSpineIndex++;
+                showLoading();
+                await loadChapter(currentSpineIndex);
+                updateUI();
+                hideLoading();
+            }
+        });
+
+        function updateUI() {
+            if (!book) return;
+            
+            prevBtn.classList.remove('hidden');
+            nextBtn.classList.remove('hidden');
+            pageInfo.classList.remove('hidden');
+            
+            prevBtn.disabled = currentSpineIndex === 0;
+            nextBtn.disabled = currentSpineIndex === book.spine.length - 1;
+            
+            pageInfo.textContent = `Section ${currentSpineIndex + 1} / ${book.spine.length}`;
+        }
+
+        function showLoading() {
+            loading.classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            loading.classList.add('hidden');
+        }
+
+        function renderToc(tocEntries) {
+            const sidebar = document.getElementById('sidebar');
+            const container = document.getElementById('toc-container');
+            container.innerHTML = '';
+            
+            if (!tocEntries || tocEntries.length === 0) {
+                sidebar.classList.add('hidden');
+                return;
+            }
+
+            sidebar.classList.remove('hidden');
+            
+            function buildList(entries) {
+                const ul = document.createElement('ul');
+                ul.className = 'toc-list';
+                
+                for (const entry of entries) {
+                    const li = document.createElement('li');
+                    const a = document.createElement('a');
+                    a.textContent = entry.title;
+                    a.onclick = () => navigateToHref(entry.href);
+                    li.appendChild(a);
+                    
+                    if (entry.children && entry.children.length > 0) {
+                        li.appendChild(buildList(entry.children));
+                    }
+                    
+                    ul.appendChild(li);
+                }
+                
+                return ul;
+            }
+
+            container.appendChild(buildList(tocEntries));
+        }
+
+        function navigateToHref(href) {
+            if (!book) return;
+            
+            // The href in TOC might have a hash fragment (e.g. chapter1.xhtml#section1)
+            const parts = href.split('#');
+            const pathOnly = parts[0];
+            const hash = parts.length > 1 ? parts[1] : null;
+            
+            // Find which spine item this path belongs to
+            let foundIndex = -1;
+            for (let i = 0; i < book.spine.length; i++) {
+                const spineItem = book.spine[i];
+                const manifestItem = book.manifest.get(spineItem.idref);
+                if (manifestItem && manifestItem.href === pathOnly) {
+                    foundIndex = i;
+                    break;
+                }
+            }
+            
+            if (foundIndex !== -1) {
+                currentSpineIndex = foundIndex;
+                showLoading();
+                loadChapter(currentSpineIndex).then(() => {
+                    updateUI();
+                    hideLoading();
+                    
+                    // Scroll to the specific section if there's a hash
+                    if (hash) {
+                        // Use a short delay to ensure iframe rendering is fully complete
+                        setTimeout(() => {
+                            try {
+                                const target = viewer.contentDocument.getElementById(hash) || viewer.contentDocument.querySelector(`[name="${hash}"]`);
+                                if (target) {
+                                    target.scrollIntoView({ behavior: 'smooth' });
+                                }
+                            } catch (e) {
+                                console.warn("Could not scroll to hash", hash, e);
+                            }
+                        }, 100);
+                    }
+                });
+            } else {
+                console.warn("Could not find spine item for TOC href:", href);
             }
         }
 
-        run();
+        function cleanupBlobUrls() {
+            blobUrls.forEach(url => URL.revokeObjectURL(url));
+            blobUrls = [];
+        }
+
+        function getMimeType(path) {
+            const ext = path.split('.').pop().toLowerCase();
+            const map = {
+                'jpg': 'image/jpeg', 
+                'jpeg': 'image/jpeg', 
+                'png': 'image/png',
+                'gif': 'image/gif', 
+                'svg': 'image/svg+xml', 
+                'css': 'text/css',
+                'js': 'application/javascript', 
+                'woff': 'font/woff', 
+                'woff2': 'font/woff2',
+                'ttf': 'font/ttf', 
+                'otf': 'font/otf'
+            };
+            return map[ext] || 'application/octet-stream';
+        }
+
+        function resolveAsset(absPath) {
+            try {
+                // Remove URI fragments if any
+                const pathOnly = absPath.split('#')[0].split('?')[0];
+                const bytes = parser.get_file_bytes(pathOnly);
+                const blob = new Blob([bytes], { type: getMimeType(pathOnly) });
+                const url = URL.createObjectURL(blob);
+                blobUrls.push(url);
+                return url;
+            } catch (e) {
+                console.warn(`Failed to resolve asset ${absPath}:`, e);
+                return null;
+            }
+        }
+
+        async function loadChapter(index) {
+            if (!book || !parser) return;
+
+            const spineItem = book.spine[index];
+            const manifestItem = book.manifest.get(spineItem.idref);
+            
+            if (!manifestItem) {
+                viewer.srcdoc = `<h1 style="color:red">Error</h1><p>Manifest item not found for idref: ${spineItem.idref}</p>`;
+                return;
+            }
+
+            // Construct the full path within the ZIP
+            let fullPath = manifestItem.href;
+            if (book.opf_dir && book.opf_dir !== "") {
+                fullPath = book.opf_dir + "/" + manifestItem.href;
+            }
+
+            try {
+                // Rewrite internal links, images, and stylesheets
+                const newHtml = parser.get_chapter_with_rewritten_assets(fullPath, (absPath) => {
+                    // We only rewrite if it's not an external URL (the wasm handles that mostly, but we double check)
+                    return resolveAsset(absPath);
+                });
+                
+                // We add a little bit of CSS to make it fit nicely in the iframe
+                const styleToInject = `
+                    <style>
+                        body { max-width: 100%; overflow-x: hidden; padding: 20px; box-sizing: border-box; }
+                        img { max-width: 100%; height: auto; }
+                    </style>
+                `;
+                
+                let injectedHtml = newHtml;
+                if (injectedHtml.includes('</head>')) {
+                    injectedHtml = injectedHtml.replace('</head>', styleToInject + '</head>');
+                } else if (injectedHtml.includes('<body>')) {
+                    injectedHtml = injectedHtml.replace('<body>', '<body>' + styleToInject);
+                } else {
+                    injectedHtml = styleToInject + injectedHtml;
+                }
+
+                viewer.srcdoc = injectedHtml;
+                
+                // Wait a tiny bit for the iframe to render
+                await new Promise(r => setTimeout(r, 50));
+            } catch (e) {
+                console.error("Failed to load chapter:", e);
+                viewer.srcdoc = `<h1 style="color:red">Failed to load chapter</h1><pre>${e}</pre>`;
+            }
+        }
     </script>
 </body>
 </html>

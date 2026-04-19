@@ -59,15 +59,14 @@ impl<P: EpubProvider> EpubArchive<P> {
         chars_per_location: usize,
     ) -> Result<Vec<crate::model::Position>, EpubError> {
         let mut locations = Vec::new();
-        
+
         let mut global_char_counter = 0; // Cross-chapter character remainder
-        let mut global_pos_index = 0;    // Virtual global page number
+        let mut global_pos_index = 0; // Virtual global page number
 
         for (spine_index, item) in book.spine.iter().enumerate() {
-            let manifest_item = book
-                .manifest
-                .get(&item.idref)
-                .ok_or_else(|| EpubError::InvalidFormat(format!("Missing manifest item: {}", item.idref)))?;
+            let manifest_item = book.manifest.get(&item.idref).ok_or_else(|| {
+                EpubError::InvalidFormat(format!("Missing manifest item: {}", item.idref))
+            })?;
 
             // Read the chapter HTML
             let mut html = String::new();
@@ -79,7 +78,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                 continue;
             }
 
-            // Estimate the base CFI path for this spine item. 
+            // Estimate the base CFI path for this spine item.
             // In EPUB 3 CFI, the spine starts at /6, and its children (itemrefs) are even-numbered starting at 2.
             let base_cfi = format!("/6/{}!", (spine_index + 1) * 2);
 
@@ -964,7 +963,9 @@ mod tests {
         </ncx>
         "#;
 
-        let entries = EpubArchive::<crate::provider::ZipProvider<std::io::Cursor<Vec<u8>>>>::parse_ncx(xml).unwrap();
+        let entries =
+            EpubArchive::<crate::provider::ZipProvider<std::io::Cursor<Vec<u8>>>>::parse_ncx(xml)
+                .unwrap();
 
         assert_eq!(entries.len(), 2); // Chapter 1, Chapter 2
 

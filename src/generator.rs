@@ -44,7 +44,7 @@ pub struct PageListEntry {
 }
 
 /// Represents a file to be added to the EPUB archive.
-struct Resource {
+pub struct Resource {
     id: String,
     href: String,
     media_type: String,
@@ -137,20 +137,42 @@ impl EpubBuilder {
         let mut errors = Vec::new();
 
         // 1. Mandatory Metadata
-        if self.metadata.title.as_deref().unwrap_or("").trim().is_empty() {
+        if self
+            .metadata
+            .title
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
             errors.push("Missing mandatory metadata: <dc:title>".to_string());
         }
-        if self.metadata.identifier.as_deref().unwrap_or("").trim().is_empty() {
+        if self
+            .metadata
+            .identifier
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
             errors.push("Missing mandatory metadata: <dc:identifier>".to_string());
         }
-        if self.metadata.language.as_deref().unwrap_or("").trim().is_empty() {
+        if self
+            .metadata
+            .language
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
             errors.push("Missing mandatory metadata: <dc:language>".to_string());
         }
 
         // 2. Resource Lookups
         use std::collections::HashSet;
         let resource_ids: HashSet<&str> = self.resources.iter().map(|r| r.id.as_str()).collect();
-        let resource_hrefs: HashSet<&str> = self.resources.iter().map(|r| r.href.as_str()).collect();
+        let resource_hrefs: HashSet<&str> =
+            self.resources.iter().map(|r| r.href.as_str()).collect();
 
         // 3. Spine Connectivity
         if self.spine.is_empty() {
@@ -158,16 +180,26 @@ impl EpubBuilder {
         }
         for item in &self.spine {
             if !resource_ids.contains(item.idref.as_str()) {
-                errors.push(format!("Spine item idref '{}' does not exist in resources.", item.idref));
+                errors.push(format!(
+                    "Spine item idref '{}' does not exist in resources.",
+                    item.idref
+                ));
             }
         }
 
         // 4. TOC Nav Links
-        fn validate_toc(entries: &[TocEntry], valid_hrefs: &HashSet<&str>, errors: &mut Vec<String>) {
+        fn validate_toc(
+            entries: &[TocEntry],
+            valid_hrefs: &HashSet<&str>,
+            errors: &mut Vec<String>,
+        ) {
             for entry in entries {
                 let base_href = entry.href.split('#').next().unwrap_or(&entry.href);
                 if !valid_hrefs.contains(base_href) {
-                    errors.push(format!("TOC entry '{}' points to missing file: {}", entry.title, base_href));
+                    errors.push(format!(
+                        "TOC entry '{}' points to missing file: {}",
+                        entry.title, base_href
+                    ));
                 }
                 validate_toc(&entry.children, valid_hrefs, errors);
             }
@@ -175,10 +207,13 @@ impl EpubBuilder {
         validate_toc(&self.toc, &resource_hrefs, &mut errors);
 
         // 5. Cover verification
-        if let Some(ref cover_id) = self.cover_id {
-            if !resource_ids.contains(cover_id.as_str()) {
-                errors.push(format!("Cover image id '{}' is missing in resources.", cover_id));
-            }
+        if let Some(ref cover_id) = self.cover_id
+            && !resource_ids.contains(cover_id.as_str())
+        {
+            errors.push(format!(
+                "Cover image id '{}' is missing in resources.",
+                cover_id
+            ));
         }
 
         if !errors.is_empty() {
@@ -527,7 +562,7 @@ impl EpubBuilder {
     /// Build the EPUB and write it to the provided writer (e.g., `std::fs::File` or `Vec<u8>`).
     pub fn generate<W: Write + Seek>(mut self, writer: W) -> Result<(), EpubError> {
         self.validate()?;
-        
+
         let mut zip = ZipWriter::new(writer);
 
         let mut theme_href = None;
@@ -1029,6 +1064,8 @@ mod tests {
 
         let metadata = Metadata {
             title: Some("Me & You <3".to_string()),
+            identifier: Some("urn:uuid:12345".to_string()),
+            language: Some("en".to_string()),
             ..Default::default()
         };
 
