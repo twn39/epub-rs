@@ -120,8 +120,15 @@
                     
                     try {
                         const firstChapterRef = activeBook.spine[0].idref;
-                        const manifestItem = activeBook.manifest[firstChapterRef];
-                        if (!manifestItem) throw "Manifest item not found";
+                        // Handle Map vs plain object gracefully depending on serde-wasm-bindgen translation
+                        const manifestItem = activeBook.manifest instanceof Map 
+                            ? activeBook.manifest.get(firstChapterRef) 
+                            : activeBook.manifest[firstChapterRef];
+                            
+                        if (!manifestItem) {
+                            console.error("Available manifest keys:", activeBook.manifest instanceof Map ? Array.from(activeBook.manifest.keys()) : Object.keys(activeBook.manifest));
+                            throw `Manifest item '${firstChapterRef}' not found in manifest`;
+                        }
 
                         const start = performance.now();
                         
