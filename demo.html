@@ -160,25 +160,15 @@
 
                         const end = performance.now();
                         
-                        // Inject the rewritten HTML securely
-                        
-                        // We use an iframe to isolate the CSS styles of the chapter from our demo app
-                        let iframe = document.getElementById('chapterIframe');
-                        if (!iframe) {
-                            iframe = document.createElement('iframe');
-                            iframe.id = 'chapterIframe';
-                            iframe.style.width = '100%';
-                            iframe.style.height = '600px';
-                            iframe.style.border = 'none';
-                            renderArea.innerHTML = '';
-                            renderArea.appendChild(iframe);
-                        }
-                        
-                        // Write the rewritten HTML into the iframe document
-                        const doc = iframe.contentDocument || iframe.contentWindow.document;
-                        doc.open();
-                        doc.write(rewrittenHtml);
-                        doc.close();
+                        // Inject the rewritten HTML securely using an isolated iframe
+                        renderArea.innerHTML = '';
+                        const iframe = document.createElement('iframe');
+                        iframe.id = 'chapterIframe';
+                        iframe.style.width = '100%';
+                        iframe.style.height = '600px';
+                        iframe.style.border = 'none';
+                        iframe.srcdoc = rewrittenHtml;
+                        renderArea.appendChild(iframe);
 
                         log(`✅ Rendered chapter '${firstChapterRef}' with inner assets via Blob URIs in ${(end - start).toFixed(2)} ms.`);
                         
