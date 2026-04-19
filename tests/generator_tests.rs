@@ -17,6 +17,7 @@ mod tests {
 
         let metadata = Metadata {
             title: Some("Test Generated Book".to_string()),
+            identifier: Some("urn:uuid:test-12345".to_string()),
             creators: vec![author, translator],
             language: Some("zh-CN".to_string()),
             publisher: Some("Gemini Press".to_string()),
@@ -198,6 +199,8 @@ mod tests {
 
         let metadata = Metadata {
             title: Some("Legacy Book".to_string()),
+            identifier: Some("urn:uuid:v2-12345".to_string()),
+            language: Some("en".to_string()),
             creators: vec![author],
             ..Default::default()
         };
@@ -232,6 +235,8 @@ mod tests {
 
         let metadata = Metadata {
             title: Some("Comic Book".to_string()),
+            identifier: Some("urn:isbn:9781234567890".to_string()),
+            language: Some("en".to_string()),
             layout: LayoutType::PrePaginated,
             ..Default::default()
         };

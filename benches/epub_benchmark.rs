@@ -10,9 +10,16 @@ use std::hint::black_box;
 use std::io::Cursor;
 
 fn generate_dummy_epub(chapter_count: usize) -> Vec<u8> {
+    let metadata = Metadata {
+        title: Some("Benchmark EPUB".to_string()),
+        identifier: Some("urn:uuid:bench-123".to_string()),
+        language: Some("en".to_string()),
+        ..Default::default()
+    };
+
     let mut builder = EpubBuilder::new()
         .version(EpubVersion::V30)
-        .metadata(Metadata::default());
+        .metadata(metadata);
 
     let chapter_html = r#"<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -60,9 +67,16 @@ fn bench_generate_epub(c: &mut Criterion) {
 
     c.bench_function("generate_epub (10 chapters)", |b| {
         b.iter(|| {
+            let metadata = Metadata {
+                title: Some("Bench Generate".to_string()),
+                identifier: Some("urn:uuid:bench-generate-123".to_string()),
+                language: Some("en".to_string()),
+                ..Default::default()
+            };
+
             let mut builder = EpubBuilder::new()
                 .version(EpubVersion::V30)
-                .metadata(Metadata::default());
+                .metadata(metadata);
 
             for i in 0..10 {
                 builder = builder.add_chapter(

@@ -8,8 +8,8 @@ use kuchikiki::traits::*;
 use lol_html::{HtmlRewriter, Settings, element, text};
 use std::cell::RefCell;
 use std::io::{Read, Write};
-use std::rc::Rc;
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 
 /// Normalizes a relative URL path against a base directory within the EPUB archive.
 /// Automatically handles URL-decoding (e.g. `%20` -> ` `) and stripping of URL query strings or hashes.
@@ -40,7 +40,7 @@ pub fn normalize_path(base_dir: &str, rel_path: &str) -> String {
             _ => {}
         }
     }
-    
+
     // Convert back to string, replacing Windows backslashes if they somehow appear (EPUB uses forward slashes)
     path.to_string_lossy().replace('\\', "/")
 }
@@ -82,20 +82,22 @@ where
                 element!("img, video, audio, source, track", {
                     let resolver = resolver_rc.clone();
                     move |el| {
-                        if let Some(src) = el.get_attribute("src") {
-                            if !is_external_url(&src) && !src.starts_with('#') {
-                                let abs_path = normalize_path(base_dir, &src);
-                                if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
-                                    el.set_attribute("src", &new_url).unwrap();
-                                }
+                        if let Some(src) = el.get_attribute("src")
+                            && !is_external_url(&src)
+                            && !src.starts_with('#')
+                        {
+                            let abs_path = normalize_path(base_dir, &src);
+                            if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                el.set_attribute("src", &new_url).unwrap();
                             }
                         }
-                        if let Some(poster) = el.get_attribute("poster") {
-                            if !is_external_url(&poster) && !poster.starts_with('#') {
-                                let abs_path = normalize_path(base_dir, &poster);
-                                if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
-                                    el.set_attribute("poster", &new_url).unwrap();
-                                }
+                        if let Some(poster) = el.get_attribute("poster")
+                            && !is_external_url(&poster)
+                            && !poster.starts_with('#')
+                        {
+                            let abs_path = normalize_path(base_dir, &poster);
+                            if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                el.set_attribute("poster", &new_url).unwrap();
                             }
                         }
                         Ok(())
@@ -105,12 +107,13 @@ where
                 element!("object", {
                     let resolver = resolver_rc.clone();
                     move |el| {
-                        if let Some(data) = el.get_attribute("data") {
-                            if !is_external_url(&data) && !data.starts_with('#') {
-                                let abs_path = normalize_path(base_dir, &data);
-                                if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
-                                    el.set_attribute("data", &new_url).unwrap();
-                                }
+                        if let Some(data) = el.get_attribute("data")
+                            && !is_external_url(&data)
+                            && !data.starts_with('#')
+                        {
+                            let abs_path = normalize_path(base_dir, &data);
+                            if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                el.set_attribute("data", &new_url).unwrap();
                             }
                         }
                         Ok(())
@@ -121,12 +124,13 @@ where
                     let resolver = resolver_rc.clone();
                     move |el| {
                         for attr in &["href", "xlink:href"] {
-                            if let Some(href) = el.get_attribute(attr) {
-                                if !is_external_url(&href) && !href.starts_with('#') {
-                                    let abs_path = normalize_path(base_dir, &href);
-                                    if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
-                                        el.set_attribute(attr, &new_url).unwrap();
-                                    }
+                            if let Some(href) = el.get_attribute(attr)
+                                && !is_external_url(&href)
+                                && !href.starts_with('#')
+                            {
+                                let abs_path = normalize_path(base_dir, &href);
+                                if let Some(new_url) = (resolver.borrow_mut())(&abs_path) {
+                                    el.set_attribute(attr, &new_url).unwrap();
                                 }
                             }
                         }
@@ -145,7 +149,7 @@ where
                                     Some(idx) => (&href[..idx], &href[idx..]),
                                     None => (href.as_str(), ""),
                                 };
-                                
+
                                 // We only resolve the file path part
                                 if !path_part.is_empty() {
                                     let abs_path = normalize_path(base_dir, path_part);
@@ -166,8 +170,12 @@ where
         |c: &[u8]| output.extend_from_slice(c),
     );
 
-    rewriter.write(html.as_bytes()).map_err(|e| EpubError::HtmlParse(e.to_string()))?;
-    rewriter.end().map_err(|e| EpubError::HtmlParse(e.to_string()))?;
+    rewriter
+        .write(html.as_bytes())
+        .map_err(|e| EpubError::HtmlParse(e.to_string()))?;
+    rewriter
+        .end()
+        .map_err(|e| EpubError::HtmlParse(e.to_string()))?;
 
     String::from_utf8(output).map_err(|e| EpubError::HtmlParse(format!("Invalid UTF-8: {}", e)))
 }
