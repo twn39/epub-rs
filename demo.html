@@ -50,7 +50,7 @@
             
             <h2>3. Browser Rendition</h2>
             <p>Live view of the chapter with images/CSS proxied via Rust <code>HtmlRewriter</code> and Blob URIs.</p>
-            <div id="renderArea">Waiting for an EPUB to be parsed...</div>
+            <div id="renderArea" style="min-height: 400px; padding: 0;">Waiting for an EPUB to be parsed...</div>
         </div>
     </div>
 
@@ -138,6 +138,7 @@
                             try {
                                 // Extract raw bytes from memory
                                 const bytes = currentParser.get_file_bytes(epubPath);
+                                if (!bytes) throw "No bytes returned";
                                 
                                 // Guess mime type
                                 let type = "application/octet-stream";
@@ -160,11 +161,30 @@
                         const end = performance.now();
                         
                         // Inject the rewritten HTML securely
-                        renderArea.innerHTML = rewrittenHtml;
-                        log(`✅ Rendered chapter with inner assets via Blob URIs in ${(end - start).toFixed(2)} ms.`);
+                        
+                        // We use an iframe to isolate the CSS styles of the chapter from our demo app
+                        let iframe = document.getElementById('chapterIframe');
+                        if (!iframe) {
+                            iframe = document.createElement('iframe');
+                            iframe.id = 'chapterIframe';
+                            iframe.style.width = '100%';
+                            iframe.style.height = '600px';
+                            iframe.style.border = 'none';
+                            renderArea.innerHTML = '';
+                            renderArea.appendChild(iframe);
+                        }
+                        
+                        // Write the rewritten HTML into the iframe document
+                        const doc = iframe.contentDocument || iframe.contentWindow.document;
+                        doc.open();
+                        doc.write(rewrittenHtml);
+                        doc.close();
+
+                        log(`✅ Rendered chapter '${firstChapterRef}' with inner assets via Blob URIs in ${(end - start).toFixed(2)} ms.`);
                         
                     } catch(e) {
-                        log(e, "❌ Error rendering chapter:\n");
+                        console.error("Rendering error:", e);
+                        log(e instanceof Error ? e.stack || e.message : (typeof e === 'object' ? JSON.stringify(e, null, 2) : e), "❌ Error rendering chapter:\n");
                     }
                 });
 
