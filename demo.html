@@ -160,8 +160,38 @@
 
                         const end = performance.now();
                         
-                        // Inject the rewritten HTML securely using an isolated iframe
                         renderArea.innerHTML = '';
+                        
+                        // 1. Raw text preview fallback (helpful for debugging blank pages)
+                        const rawTextDiv = document.createElement('div');
+                        rawTextDiv.style.padding = '10px';
+                        rawTextDiv.style.backgroundColor = '#f8f9fa';
+                        rawTextDiv.style.borderBottom = '1px solid #ccc';
+                        rawTextDiv.style.fontFamily = 'monospace';
+                        rawTextDiv.style.whiteSpace = 'pre-wrap';
+                        rawTextDiv.style.maxHeight = '200px';
+                        rawTextDiv.style.overflowY = 'auto';
+                        
+                        // Use a detached DOM node to strip tags securely
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = rewrittenHtml;
+                        const textContent = tempDiv.textContent || tempDiv.innerText || "";
+                        
+                        if (textContent.trim() === "") {
+                            rawTextDiv.innerHTML = `<span style="color: gray;">[No plain text found. This chapter might only contain images or empty containers.]</span>`;
+                        } else {
+                            rawTextDiv.textContent = textContent.trim();
+                        }
+                        
+                        const debugTitle = document.createElement('div');
+                        debugTitle.style.fontWeight = 'bold';
+                        debugTitle.style.marginBottom = '5px';
+                        debugTitle.innerText = "Raw Text Extraction:";
+                        rawTextDiv.insertBefore(debugTitle, rawTextDiv.firstChild);
+                        
+                        renderArea.appendChild(rawTextDiv);
+
+                        // 2. The isolated iframe for actual visual rendition
                         const iframe = document.createElement('iframe');
                         iframe.id = 'chapterIframe';
                         iframe.style.width = '100%';
@@ -169,9 +199,12 @@
                         iframe.style.border = 'none';
                         iframe.style.background = 'white';
                         
-                        // The most bulletproof way to render sandboxed HTML with blob URIs in modern browsers 
-                        // is to create a Blob URL for the entire HTML document itself, and set it as the iframe src.
-                        const htmlBlob = new Blob([rewrittenHtml], { type: 'text/html;charset=utf-8' });
+                        // Add DOCTYPE to prevent Quirks mode which can break CSS layout
+                        const htmlWithDoctype = rewrittenHtml.includes("<!DOCTYPE") || rewrittenHtml.includes("<!doctype") 
+                            ? rewrittenHtml 
+                            : "<!DOCTYPE html>\n" + rewrittenHtml;
+                            
+                        const htmlBlob = new Blob([htmlWithDoctype], { type: 'text/html;charset=utf-8' });
                         const htmlUrl = URL.createObjectURL(htmlBlob);
                         blobUrls.push(htmlUrl);
                         
