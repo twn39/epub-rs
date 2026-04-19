@@ -168,14 +168,15 @@
                         iframe.style.height = '600px';
                         iframe.style.border = 'none';
                         iframe.style.background = 'white';
-                        renderArea.appendChild(iframe);
                         
-                        // Using srcdoc sometimes limits internal blob access depending on browser security,
-                        // so we use document.write but properly close it to trigger rendering
-                        const doc = iframe.contentWindow.document;
-                        doc.open();
-                        doc.write(rewrittenHtml);
-                        doc.close();
+                        // The most bulletproof way to render sandboxed HTML with blob URIs in modern browsers 
+                        // is to create a Blob URL for the entire HTML document itself, and set it as the iframe src.
+                        const htmlBlob = new Blob([rewrittenHtml], { type: 'text/html;charset=utf-8' });
+                        const htmlUrl = URL.createObjectURL(htmlBlob);
+                        blobUrls.push(htmlUrl);
+                        
+                        iframe.src = htmlUrl;
+                        renderArea.appendChild(iframe);
 
                         log(`✅ Rendered chapter '${firstChapterRef}' with inner assets via Blob URIs in ${(end - start).toFixed(2)} ms.`);
                         
