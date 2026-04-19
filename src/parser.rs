@@ -212,13 +212,11 @@ impl<P: EpubProvider> EpubArchive<P> {
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
-                Event::Empty(ref e) | Event::Start(ref e) => {
-                    if e.name().as_ref() == b"rootfile" {
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            if attr.key.as_ref() == b"full-path" {
-                                rootfiles.push(String::from_utf8_lossy(&attr.value).into_owned());
-                            }
+                Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"rootfile" => {
+                    for attr in e.attributes() {
+                        let attr = attr?;
+                        if attr.key.as_ref() == b"full-path" {
+                            rootfiles.push(String::from_utf8_lossy(&attr.value).into_owned());
                         }
                     }
                 }
@@ -434,49 +432,47 @@ impl<P: EpubProvider> EpubArchive<P> {
                         }
                     }
                 }
-                Event::Text(e) => {
-                    if in_metadata {
-                        let text = String::from_utf8_lossy(&e).into_owned();
-                        if current_tag.ends_with("title") {
-                            book.metadata.title = Some(text);
-                        } else if current_tag.ends_with("creator") {
-                            let creator = crate::model::Creator::new(&text);
-                            // If this creator tag had an ID, remember its index
-                            if let Some(id) = &current_id {
-                                creator_id_to_idx.insert(id.clone(), book.metadata.creators.len());
-                            }
-                            book.metadata.creators.push(creator);
-                        } else if current_tag.ends_with("language") {
-                            book.metadata.language = Some(text);
-                        } else if current_tag.ends_with("identifier") {
-                            book.metadata.identifier = Some(text);
-                        } else if current_tag.ends_with("publisher") {
-                            book.metadata.publisher = Some(text);
-                        } else if current_tag.ends_with("description") {
-                            book.metadata.description = Some(text);
-                        } else if current_tag.ends_with("date") {
-                            book.metadata.date = Some(text);
-                        } else if current_tag.ends_with("rights") {
-                            book.metadata.rights = Some(text);
-                        } else if current_tag.ends_with("subject") {
-                            book.metadata.subjects.push(text);
-                        } else if current_tag.starts_with("meta_refines_") {
-                            if let Some(refined_id) = &current_id {
-                                let property = current_tag
-                                    .strip_prefix("meta_refines_")
-                                    .unwrap()
-                                    .to_string();
-                                let entry = refinements.entry(refined_id.clone()).or_default();
-                                entry.insert(property, text);
-                            }
-                        } else if current_tag.starts_with("meta_global_") {
-                            let property = current_tag.strip_prefix("meta_global_").unwrap();
-                            if property == "rendition:layout" {
-                                if text == "pre-paginated" {
-                                    book.metadata.layout = crate::model::LayoutType::PrePaginated;
-                                } else {
-                                    book.metadata.layout = crate::model::LayoutType::Reflowable;
-                                }
+                Event::Text(e) if in_metadata => {
+                    let text = String::from_utf8_lossy(&e).into_owned();
+                    if current_tag.ends_with("title") {
+                        book.metadata.title = Some(text);
+                    } else if current_tag.ends_with("creator") {
+                        let creator = crate::model::Creator::new(&text);
+                        // If this creator tag had an ID, remember its index
+                        if let Some(id) = &current_id {
+                            creator_id_to_idx.insert(id.clone(), book.metadata.creators.len());
+                        }
+                        book.metadata.creators.push(creator);
+                    } else if current_tag.ends_with("language") {
+                        book.metadata.language = Some(text);
+                    } else if current_tag.ends_with("identifier") {
+                        book.metadata.identifier = Some(text);
+                    } else if current_tag.ends_with("publisher") {
+                        book.metadata.publisher = Some(text);
+                    } else if current_tag.ends_with("description") {
+                        book.metadata.description = Some(text);
+                    } else if current_tag.ends_with("date") {
+                        book.metadata.date = Some(text);
+                    } else if current_tag.ends_with("rights") {
+                        book.metadata.rights = Some(text);
+                    } else if current_tag.ends_with("subject") {
+                        book.metadata.subjects.push(text);
+                    } else if current_tag.starts_with("meta_refines_") {
+                        if let Some(refined_id) = &current_id {
+                            let property = current_tag
+                                .strip_prefix("meta_refines_")
+                                .unwrap()
+                                .to_string();
+                            let entry = refinements.entry(refined_id.clone()).or_default();
+                            entry.insert(property, text);
+                        }
+                    } else if current_tag.starts_with("meta_global_") {
+                        let property = current_tag.strip_prefix("meta_global_").unwrap();
+                        if property == "rendition:layout" {
+                            if text == "pre-paginated" {
+                                book.metadata.layout = crate::model::LayoutType::PrePaginated;
+                            } else {
+                                book.metadata.layout = crate::model::LayoutType::Reflowable;
                             }
                         }
                     }
