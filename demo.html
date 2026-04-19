@@ -167,8 +167,15 @@
                         iframe.style.width = '100%';
                         iframe.style.height = '600px';
                         iframe.style.border = 'none';
-                        iframe.srcdoc = rewrittenHtml;
+                        iframe.style.background = 'white';
                         renderArea.appendChild(iframe);
+                        
+                        // Using srcdoc sometimes limits internal blob access depending on browser security,
+                        // so we use document.write but properly close it to trigger rendering
+                        const doc = iframe.contentWindow.document;
+                        doc.open();
+                        doc.write(rewrittenHtml);
+                        doc.close();
 
                         log(`✅ Rendered chapter '${firstChapterRef}' with inner assets via Blob URIs in ${(end - start).toFixed(2)} ms.`);
                         
