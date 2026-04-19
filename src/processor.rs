@@ -12,11 +12,23 @@ use std::rc::Rc;
 use std::path::{Component, Path, PathBuf};
 
 /// Normalizes a relative URL path against a base directory within the EPUB archive.
-/// Example: `OEBPS/Text` + `../Images/cover.jpg` -> `OEBPS/Images/cover.jpg`
+/// Automatically handles URL-decoding (e.g. `%20` -> ` `) and stripping of URL query strings or hashes.
+/// Example: `OEBPS/Text` + `../Images/cover%20image.jpg?v=1` -> `OEBPS/Images/cover image.jpg`
 pub fn normalize_path(base_dir: &str, rel_path: &str) -> String {
+    // 1. Strip query string or hash suffix from the URL
+    let mut path_only = rel_path;
+    if let Some(idx) = path_only.find('?') {
+        path_only = &path_only[..idx];
+    }
+    if let Some(idx) = path_only.find('#') {
+        path_only = &path_only[..idx];
+    }
+
+    // 2. URL decode
+    let decoded = percent_encoding::percent_decode_str(path_only).decode_utf8_lossy();
+
     let mut path = PathBuf::from(base_dir);
-    
-    for component in Path::new(rel_path).components() {
+    for component in Path::new(decoded.as_ref()).components() {
         match component {
             Component::ParentDir => {
                 path.pop();
