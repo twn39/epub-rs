@@ -75,3 +75,15 @@ mod tests {
         );
     }
 }
+#[test]
+fn test_cfi_escape_parsing() {
+    use std::str::FromStr;
+    let cfi = epub_rs::cfi::EpubCfi::from_str("epubcfi(/2/4[section^/1^:2^]])").unwrap();
+    if let epub_rs::cfi::EpubCfi::Point(path) = cfi {
+        assert_eq!(path.steps.len(), 2);
+        assert_eq!(path.steps[1].index, 4);
+        assert_eq!(path.steps[1].assertion.as_deref(), Some("section/1:2]"));
+    } else {
+        panic!("Expected Point");
+    }
+}

@@ -360,16 +360,40 @@ fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
 }
 
 fn parse_steps_and_offset(s: &str) -> Result<(Vec<CfiStep>, Option<u32>), EpubError> {
+    // We must find the colon that denotes the character offset.
+    // However, colons can appear inside `[id:assert]` or be escaped `^:`.
+    // We scan from the end or just do a single pass parsing.
     let mut offset = None;
     let mut path_str = s;
-    if let Some(colon_idx) = s.find(':') {
-        let offset_str = &s[colon_idx + 1..];
+
+    // Find unescaped ':' that is not inside an assertion '[' ']'
+    let mut in_assertion = false;
+    let mut is_escaped = false;
+    let mut colon_idx = None;
+
+    for (i, c) in s.char_indices() {
+        if is_escaped {
+            is_escaped = false;
+        } else if c == '^' {
+            is_escaped = true;
+        } else if c == '[' {
+            in_assertion = true;
+        } else if c == ']' {
+            in_assertion = false;
+        } else if c == ':' && !in_assertion {
+            colon_idx = Some(i);
+            break;
+        }
+    }
+
+    if let Some(idx) = colon_idx {
+        let offset_str = &s[idx + 1..];
         offset = Some(
             offset_str
                 .parse::<u32>()
                 .map_err(|_| EpubError::InvalidFormat("Invalid character offset".to_string()))?,
         );
-        path_str = &s[..colon_idx];
+        path_str = &s[..idx];
     }
 
     let steps = parse_steps(path_str)?;
@@ -382,30 +406,59 @@ fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
         return Ok(steps);
     }
 
-    // Skip first slash if it exists
-    let path = path.strip_prefix('/').unwrap_or(path);
+    let mut chars = path.chars().peekable();
 
-    for part in path.split('/') {
-        if part.is_empty() {
+    // Skip leading slash if present
+    if chars.peek() == Some(&'/') {
+        chars.next();
+    }
+
+    while chars.peek().is_some() {
+        let mut index_str = String::new();
+        let mut assertion_buf = String::new();
+        let mut has_assertion = false;
+        let mut in_assertion = false;
+        let mut is_escaped = false;
+
+        for c in chars.by_ref() {
+            if is_escaped {
+                if in_assertion {
+                    assertion_buf.push(c);
+                } else {
+                    index_str.push(c);
+                }
+                is_escaped = false;
+            } else if c == '^' {
+                is_escaped = true;
+            } else if c == '/' && !in_assertion {
+                break; // End of this step
+            } else if c == '[' && !in_assertion {
+                in_assertion = true;
+            } else if c == ']' && in_assertion {
+                in_assertion = false;
+                has_assertion = true;
+            } else {
+                if in_assertion {
+                    assertion_buf.push(c);
+                } else {
+                    index_str.push(c);
+                }
+            }
+        }
+
+        if index_str.is_empty() && !has_assertion {
             continue;
         }
 
-        // Check for assertions `[id]`
-        let (index_str, assertion) = if let Some(bracket_start) = part.find('[') {
-            if let Some(bracket_end) = part.find(']') {
-                let index_str = &part[..bracket_start];
-                let assertion = &part[bracket_start + 1..bracket_end];
-                (index_str, Some(assertion.to_string()))
-            } else {
-                (part, None)
-            }
-        } else {
-            (part, None)
-        };
-
         let index = index_str
             .parse::<u32>()
-            .map_err(|_| EpubError::InvalidFormat(format!("Invalid CFI index: {}", index_str)))?;
+            .map_err(|_| EpubError::InvalidFormat(format!("Invalid CFI index: '{}'", index_str)))?;
+
+        let assertion = if has_assertion {
+            Some(assertion_buf)
+        } else {
+            None
+        };
         steps.push(CfiStep::new(index, assertion));
     }
 
