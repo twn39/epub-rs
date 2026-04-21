@@ -357,7 +357,7 @@ pub fn search_text_in_chapter(html: &str, base_cfi: &str, query: &str) -> Result
 
 /// Compare two CFI strings numerically (step by step) as per the EPUB CFI spec.
 /// Returns -1 if cfi_a < cfi_b, 0 if equal, +1 if cfi_a > cfi_b.
-/// Both CFIs must be Point CFIs; comparing Range CFIs returns an error.
+/// Compare two parsed CFIs for ordering (Returns -1, 0, or 1). Supports both Point and Range CFIs.
 #[wasm_bindgen]
 pub fn compare_cfi(cfi_a: &str, cfi_b: &str) -> Result<i32, JsValue> {
     let a: crate::EpubCfi =
@@ -365,11 +365,10 @@ pub fn compare_cfi(cfi_a: &str, cfi_b: &str) -> Result<i32, JsValue> {
     let b: crate::EpubCfi =
         std::str::FromStr::from_str(cfi_b).map_err(|e: crate::error::EpubError| e.to_string())?;
 
-    match a.partial_cmp(&b) {
-        Some(std::cmp::Ordering::Less) => Ok(-1),
-        Some(std::cmp::Ordering::Equal) => Ok(0),
-        Some(std::cmp::Ordering::Greater) => Ok(1),
-        None => Err("compare_cfi: cannot compare Range CFIs — provide two Point CFIs".into()),
+    match a.cmp(&b) {
+        std::cmp::Ordering::Less => Ok(-1),
+        std::cmp::Ordering::Equal => Ok(0),
+        std::cmp::Ordering::Greater => Ok(1),
     }
 }
 
