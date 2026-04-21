@@ -68,6 +68,29 @@ impl EpubParser {
         String::from_utf8(bytes).map_err(|e| format!("Failed to parse UTF-8: {}", e).into())
     }
 
+    /// Retrieve the cover image of the EPUB.
+    /// Returns a JS Array where [0] is the Uint8Array of the image bytes, and [1] is the MIME type string.
+    #[wasm_bindgen]
+    pub fn get_cover_image(&mut self) -> Result<js_sys::Array, JsValue> {
+        if self.book.is_none() {
+            let book = self.archive.parse().map_err(|e| e.to_string())?;
+            self.book = Some(book);
+        }
+
+        let (bytes, mime) = self
+            .archive
+            .get_cover_image(self.book.as_ref().unwrap())
+            .map_err(|e| e.to_string())?;
+
+        let uint8arr = js_sys::Uint8Array::from(&bytes[..]);
+        let mime_str = JsValue::from_str(&mime);
+
+        let arr = js_sys::Array::new();
+        arr.push(&uint8arr);
+        arr.push(&mime_str);
+        Ok(arr)
+    }
+
     /// Retrieve the Table of Contents (TOC) of the EPUB.
     #[wasm_bindgen]
     pub fn get_toc(&mut self) -> Result<JsValue, JsValue> {
@@ -199,7 +222,7 @@ impl EpubGenerator {
     /// Will throw a JS error with a formatted array of strings if broken.
     #[wasm_bindgen]
     pub fn validate(&self) -> Result<(), JsValue> {
-        self.builder.validate().map_err(|e| e.to_string().into())
+        self.builder.as_ref().unwrap().validate().map_err(|e| e.to_string().into())
     }
 
     /// Add a CSS stylesheet to the EPUB.
