@@ -123,13 +123,9 @@ mod tests {
 
         let ch2_item = book.manifest.get("chapter1_1").unwrap();
         assert!(
-            ch2_item
-                .properties
-                .as_deref()
-                .unwrap_or("")
-                .contains("scripted")
+            ch2_item.properties.contains(&"scripted".to_string())
         );
-        assert!(ch2_item.properties.as_deref().unwrap_or("").contains("svg"));
+        assert!(ch2_item.properties.contains(&"svg".to_string()));
 
         // Verify Spine
         assert_eq!(book.spine.len(), 2);
