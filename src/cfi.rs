@@ -113,7 +113,7 @@ impl fmt::Display for CfiPath {
 }
 
 /// Represents a Canonical Fragment Identifier (CFI), which can be a single point or a range.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EpubCfi {
     /// A single point in the EPUB.
     Point(CfiPath),
@@ -123,17 +123,6 @@ pub enum EpubCfi {
         start: CfiPath,
         end: CfiPath,
     },
-}
-
-/// Point CFIs are compared by their full path. Range CFIs and cross-type comparisons return `None`.
-impl PartialOrd for EpubCfi {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match (self, other) {
-            (EpubCfi::Point(a), EpubCfi::Point(b)) => Some(a.cmp(b)),
-            // Comparing a range to a point or two ranges is not well-defined by spec.
-            _ => None,
-        }
-    }
 }
 
 impl Default for EpubCfi {

@@ -705,7 +705,7 @@ impl EpubBuilder {
 <!DOCTYPE html>
 ",
             )
-            .map_err(|e| EpubError::Io(e))?;
+            .map_err(EpubError::Io)?;
 
         let mut html = BytesStart::new("html");
         html.push_attribute(("xmlns", "http://www.w3.org/1999/xhtml"));
