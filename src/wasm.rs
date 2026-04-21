@@ -1,5 +1,5 @@
 use crate::generator::{EpubBuilder, Theme};
-use crate::model::Creator;
+use crate::model::{Creator, EpubBook};
 use crate::parser::EpubArchive;
 use crate::processor;
 use crate::provider::{EpubProvider, ZipProvider};
@@ -13,41 +13,43 @@ use wasm_bindgen::prelude::*;
 /// A WebAssembly wrapper for parsing EPUB archives directly from memory.
 #[wasm_bindgen]
 pub struct EpubParser {
-    // Store the underlying data stream in a memory buffer since WebAssembly does not have a local filesystem.
-    buffer: Vec<u8>,
+    // Maintain the Zip archive connection to avoid re-scanning the central directory.
+    archive: EpubArchive<ZipProvider<Cursor<Vec<u8>>>>,
+    // Cache the parsed EPUB metadata model to avoid re-parsing the XML.
+    book: Option<EpubBook>,
 }
 
 #[wasm_bindgen]
 impl EpubParser {
     /// Create a new `EpubParser` from a Uint8Array containing the EPUB ZIP data.
     #[wasm_bindgen(constructor)]
-    pub fn new(data: &[u8]) -> Self {
-        Self {
-            buffer: data.to_vec(),
-        }
+    pub fn new(data: &[u8]) -> Result<EpubParser, JsValue> {
+        let cursor = Cursor::new(data.to_vec());
+        let archive = EpubArchive::new(cursor).map_err(|e| e.to_string())?;
+
+        Ok(Self {
+            archive,
+            book: None,
+        })
     }
 
     /// Parse the entire EPUB metadata, manifest, and spine into a JSON object.
     /// This returns a JavaScript object representing the `EpubBook` model.
     #[wasm_bindgen]
-    pub fn parse(&self) -> Result<JsValue, JsValue> {
-        let cursor = Cursor::new(&self.buffer);
-        let mut archive = EpubArchive::new(cursor).map_err(|e| e.to_string())?;
+    pub fn parse(&mut self) -> Result<JsValue, JsValue> {
+        if self.book.is_none() {
+            let book = self.archive.parse().map_err(|e| e.to_string())?;
+            self.book = Some(book);
+        }
 
-        let book = archive.parse().map_err(|e| e.to_string())?;
-
-        serde_wasm_bindgen::to_value(&book).map_err(|e| e.to_string().into())
+        serde_wasm_bindgen::to_value(self.book.as_ref().unwrap()).map_err(|e| e.to_string().into())
     }
 
     /// Retrieve the raw byte contents of a specific file inside the EPUB.
     /// E.g., `OEBPS/images/cover.jpg`. Returns a Uint8Array.
     #[wasm_bindgen]
-    pub fn get_file_bytes(&self, path: &str) -> Result<Vec<u8>, JsValue> {
-        let cursor = Cursor::new(&self.buffer);
-        let mut provider = ZipProvider::new(cursor).map_err(|e| e.to_string())?;
-
-        // We do this manually to avoid lifetime issues with `EpubProvider::read_file`
-        let mut file = EpubProvider::read_file(&mut provider, path).map_err(|e| e.to_string())?;
+    pub fn get_file_bytes(&mut self, path: &str) -> Result<Vec<u8>, JsValue> {
+        let mut file = self.archive.provider.read_file(path).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
 
@@ -57,19 +59,20 @@ impl EpubParser {
     /// Retrieve the contents of a specific file inside the EPUB as a UTF-8 string.
     /// E.g., `OEBPS/Text/chapter1.xhtml`.
     #[wasm_bindgen]
-    pub fn get_file_string(&self, path: &str) -> Result<String, JsValue> {
+    pub fn get_file_string(&mut self, path: &str) -> Result<String, JsValue> {
         let bytes = self.get_file_bytes(path)?;
         String::from_utf8(bytes).map_err(|e| format!("Failed to parse UTF-8: {}", e).into())
     }
 
     /// Retrieve the Table of Contents (TOC) of the EPUB.
     #[wasm_bindgen]
-    pub fn get_toc(&self) -> Result<JsValue, JsValue> {
-        let cursor = Cursor::new(&self.buffer);
-        let mut archive = EpubArchive::new(cursor).map_err(|e| e.to_string())?;
-        let book = archive.parse().map_err(|e| e.to_string())?;
+    pub fn get_toc(&mut self) -> Result<JsValue, JsValue> {
+        if self.book.is_none() {
+            let book = self.archive.parse().map_err(|e| e.to_string())?;
+            self.book = Some(book);
+        }
 
-        let toc = archive.get_toc(&book).map_err(|e| e.to_string())?;
+        let toc = self.archive.get_toc(self.book.as_ref().unwrap()).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&toc).map_err(|e| e.to_string().into())
     }
 
@@ -79,7 +82,7 @@ impl EpubParser {
     /// Return `null` or `undefined` from JS to leave the link unchanged.
     #[wasm_bindgen]
     pub fn get_chapter_with_rewritten_assets(
-        &self,
+        &mut self,
         html_path: &str,
         resolver: js_sys::Function,
     ) -> Result<String, JsValue> {
@@ -101,13 +104,14 @@ impl EpubParser {
     /// for the entire EPUB. Returns a JSON array of `Position` objects.
     /// `chars_per_location` defines how many characters constitute a "page" (default recommended: 1000).
     #[wasm_bindgen]
-    pub fn generate_locations(&self, chars_per_location: usize) -> Result<JsValue, JsValue> {
-        let cursor = Cursor::new(&self.buffer);
-        let mut archive = EpubArchive::new(cursor).map_err(|e| e.to_string())?;
-        let book = archive.parse().map_err(|e| e.to_string())?;
+    pub fn generate_locations(&mut self, chars_per_location: usize) -> Result<JsValue, JsValue> {
+        if self.book.is_none() {
+            let book = self.archive.parse().map_err(|e| e.to_string())?;
+            self.book = Some(book);
+        }
 
-        let locations = archive
-            .generate_locations(&book, chars_per_location)
+        let locations = self.archive
+            .generate_locations(self.book.as_ref().unwrap(), chars_per_location)
             .map_err(|e| e.to_string())?;
 
         serde_wasm_bindgen::to_value(&locations).map_err(|e| e.to_string().into())
