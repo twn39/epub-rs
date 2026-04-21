@@ -10,6 +10,26 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[allow(clippy::type_complexity)]
+fn make_end_tag_handler<F>(
+    f: F,
+) -> Box<
+    dyn for<'a, 'b> FnOnce(
+            &'a mut lol_html::html_content::EndTag<'b>,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+        + 'static,
+>
+where
+    F: for<'a, 'b> FnOnce(
+            &'a mut lol_html::html_content::EndTag<'b>,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+        + 'static,
+{
+    Box::new(f)
+}
+
 /// Normalizes a relative URL path against a base directory within the EPUB archive.
 /// Automatically handles URL-decoding (e.g. `%20` -> ` `) and stripping of URL query strings or hashes.
 /// Example: `OEBPS/Text` + `../Images/cover%20image.jpg?v=1` -> `OEBPS/Images/cover image.jpg`
@@ -190,13 +210,33 @@ pub fn extract_text_stream<R: Read>(mut reader: R) -> Result<String, EpubError> 
     let extracted_text = Arc::new(Mutex::new(String::new()));
     let text_clone = Arc::clone(&extracted_text);
 
+    let ignore_text = Arc::new(AtomicBool::new(false));
+
     let mut rewriter = HtmlRewriter::new(
         Settings {
             element_content_handlers: vec![
-                element!("script, style", |_el| { Ok(()) }),
-                text!("body", |t| {
-                    text_clone.lock().unwrap().push_str(t.as_str());
-                    Ok(())
+                element!("script, style", {
+                    let ignore = Arc::clone(&ignore_text);
+                    move |el| {
+                        ignore.store(true, Ordering::SeqCst);
+                        let ignore_end = Arc::clone(&ignore);
+                        el.end_tag_handlers()
+                            .unwrap()
+                            .push(make_end_tag_handler(move |_| {
+                                ignore_end.store(false, Ordering::SeqCst);
+                                Ok(())
+                            }));
+                        Ok(())
+                    }
+                }),
+                text!("body", {
+                    let ignore = Arc::clone(&ignore_text);
+                    move |t| {
+                        if !ignore.load(Ordering::SeqCst) {
+                            text_clone.lock().unwrap().push_str(t.as_str());
+                        }
+                        Ok(())
+                    }
                 }),
             ],
             ..Settings::default()
