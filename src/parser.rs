@@ -892,12 +892,15 @@ impl<P: EpubProvider> EpubArchive<P> {
                 .is_some_and(|e| e.name.local.to_string() == "li")
         }) {
             if let Ok(a_node) = li.select_first("a") {
-                let href = a_node
+                let raw_href = a_node
                     .attributes
                     .borrow()
                     .get("href")
                     .unwrap_or("")
                     .to_string();
+                let href = percent_encoding::percent_decode_str(&raw_href)
+                    .decode_utf8_lossy()
+                    .into_owned();
                 let title = a_node.text_contents().trim().to_string();
 
                 let mut entry = TocEntry::new(title, href);
@@ -949,7 +952,10 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 && attr.key.as_ref() == b"src"
                                 && let Some(state) = stack.last_mut()
                             {
-                                state.href = String::from_utf8_lossy(&attr.value).into_owned();
+                                let raw_href = String::from_utf8_lossy(&attr.value);
+                                state.href = percent_encoding::percent_decode_str(&raw_href)
+                                    .decode_utf8_lossy()
+                                    .into_owned();
                             }
                         }
                     }
