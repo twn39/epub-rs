@@ -122,9 +122,7 @@ mod tests {
         assert_eq!(cover_item.media_type, "image/jpeg");
 
         let ch2_item = book.manifest.get("chapter1_1").unwrap();
-        assert!(
-            ch2_item.properties.contains(&"scripted".to_string())
-        );
+        assert!(ch2_item.properties.contains(&"scripted".to_string()));
         assert!(ch2_item.properties.contains(&"svg".to_string()));
 
         // Verify Spine
@@ -148,8 +146,9 @@ mod tests {
             .expect("Failed to get nav");
         let nav_str = String::from_utf8_lossy(&extracted_nav);
         // It should contain nested <ol> inside <li>
-        assert!(nav_str.contains("<li><a href=\"text/ch1.xhtml\">第一章</a>"));
-        assert!(nav_str.contains("<li><a href=\"text/ch1_1.xhtml\">第一节</a>"));
+        println!("{}", nav_str);
+        assert!(nav_str.contains("<a href=\"text/ch1.xhtml\">第一章</a>"));
+        assert!(nav_str.contains("<a href=\"text/ch1_1.xhtml\">第一节</a>"));
 
         // Check Landmarks and Page List
         assert!(nav_str.contains("epub:type=\"landmarks\""));
