@@ -133,7 +133,7 @@ impl EpubParser {
 /// A WebAssembly wrapper for constructing new EPUB 3 archives purely in memory.
 #[wasm_bindgen]
 pub struct EpubGenerator {
-    builder: EpubBuilder,
+    builder: Option<EpubBuilder>,
 }
 
 #[wasm_bindgen]
@@ -142,52 +142,57 @@ impl EpubGenerator {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
-            builder: EpubBuilder::new(),
+            builder: Some(EpubBuilder::new()),
         }
     }
 
     /// Set the title of the EPUB.
     #[wasm_bindgen]
     pub fn set_title(&mut self, title: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder.metadata.title = Some(title.to_string());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Set the language of the EPUB (e.g., `en`, `zh-CN`).
     #[wasm_bindgen]
     pub fn set_language(&mut self, lang: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder.metadata.language = Some(lang.to_string());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Add an author/creator to the EPUB metadata.
     #[wasm_bindgen]
     pub fn add_author(&mut self, name: &str, role: Option<String>) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         let mut creator = Creator::new(name);
         if let Some(r) = role {
             creator.role = Some(r);
         }
         builder.metadata.creators.push(creator);
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Set the EPUB's unique identifier (e.g., ISBN or UUID).
     #[wasm_bindgen]
     pub fn set_identifier(&mut self, id: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder.metadata.identifier = Some(id.to_string());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Set a default theme (e.g., `None`, `Modern`)
     #[wasm_bindgen]
     pub fn set_theme(&mut self, modern: bool) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.theme(if modern { Theme::Modern } else { Theme::None });
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Check if the current EPUB setup is compliant and contains no broken links.
@@ -200,51 +205,57 @@ impl EpubGenerator {
     /// Add a CSS stylesheet to the EPUB.
     #[wasm_bindgen]
     pub fn add_stylesheet(&mut self, id: &str, href: &str, css_content: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.add_resource(id, href, "text/css", css_content.as_bytes().to_vec());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Add an image to the EPUB (e.g., `image/jpeg`, `image/png`).
     #[wasm_bindgen]
     pub fn add_image(&mut self, id: &str, href: &str, media_type: &str, data: &[u8]) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.add_resource(id, href, media_type, data.to_vec());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Set the cover image of the EPUB. The image must have been added via `add_image` first,
     /// or you can provide the raw bytes directly here to do both.
     #[wasm_bindgen]
     pub fn set_cover_image(&mut self, href: &str, media_type: &str, data: &[u8]) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.set_cover(href, media_type, data.to_vec());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Add a chapter (HTML/XHTML) to the EPUB manifest AND append it to the spine (reading order).
     #[wasm_bindgen]
     pub fn add_chapter(&mut self, id: &str, href: &str, html_content: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.add_chapter(id, href, html_content.as_bytes().to_vec());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Add a chapter to the spine AND the Table of Contents (Nav Map).
     #[wasm_bindgen]
     pub fn add_chapter_with_nav(&mut self, id: &str, href: &str, title: &str, html_content: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.add_chapter_with_nav(id, href, title, html_content.as_bytes().to_vec());
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Set the EPUB's complete multi-level Table of Contents via JSON.
     #[wasm_bindgen]
     pub fn set_toc(&mut self, toc_js: JsValue) -> Result<(), JsValue> {
         let toc: Vec<crate::model::TocEntry> = serde_wasm_bindgen::from_value(toc_js)?;
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.set_toc(toc);
-        self.builder = builder;
+
+        self.builder = Some(builder);
         Ok(())
     }
 
@@ -252,32 +263,35 @@ impl EpubGenerator {
     #[wasm_bindgen]
     pub fn set_metadata(&mut self, metadata_js: JsValue) -> Result<(), JsValue> {
         let metadata: crate::model::Metadata = serde_wasm_bindgen::from_value(metadata_js)?;
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.metadata(metadata);
-        self.builder = builder;
+
+        self.builder = Some(builder);
         Ok(())
     }
 
     /// Add a landmark (structural reference like `cover`, `toc`, `bodymatter`).
     #[wasm_bindgen]
     pub fn add_landmark(&mut self, epub_type: &str, href: &str, title: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.add_landmark(epub_type, href, title);
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Add a physical page mapping entry (for academic/textbook parity).
     #[wasm_bindgen]
     pub fn add_page(&mut self, name: &str, href: &str) {
-        let mut builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let mut builder = self.builder.take().unwrap();
         builder = builder.add_page(name, href);
-        self.builder = builder;
+
+        self.builder = Some(builder);
     }
 
     /// Build the EPUB and return it as a Uint8Array.
     #[wasm_bindgen]
     pub fn generate(&mut self) -> Result<Vec<u8>, JsValue> {
-        let builder = std::mem::replace(&mut self.builder, EpubBuilder::new());
+        let builder = self.builder.take().unwrap();
         let mut output = Cursor::new(Vec::new());
         builder.generate(&mut output).map_err(|e| e.to_string())?;
         Ok(output.into_inner())
