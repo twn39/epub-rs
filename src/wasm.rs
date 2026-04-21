@@ -49,7 +49,11 @@ impl EpubParser {
     /// E.g., `OEBPS/images/cover.jpg`. Returns a Uint8Array.
     #[wasm_bindgen]
     pub fn get_file_bytes(&mut self, path: &str) -> Result<Vec<u8>, JsValue> {
-        let mut file = self.archive.provider.read_file(path).map_err(|e| e.to_string())?;
+        let mut file = self
+            .archive
+            .provider
+            .read_file(path)
+            .map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
 
@@ -72,7 +76,10 @@ impl EpubParser {
             self.book = Some(book);
         }
 
-        let toc = self.archive.get_toc(self.book.as_ref().unwrap()).map_err(|e| e.to_string())?;
+        let toc = self
+            .archive
+            .get_toc(self.book.as_ref().unwrap())
+            .map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&toc).map_err(|e| e.to_string().into())
     }
 
@@ -110,7 +117,8 @@ impl EpubParser {
             self.book = Some(book);
         }
 
-        let locations = self.archive
+        let locations = self
+            .archive
             .generate_locations(self.book.as_ref().unwrap(), chars_per_location)
             .map_err(|e| e.to_string())?;
 
