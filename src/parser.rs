@@ -6,6 +6,24 @@ use crate::model::{EpubBook, ManifestItem, Position, TocEntry};
 use crate::provider::DirProvider;
 use crate::provider::{EpubProvider, ZipProvider};
 use kuchikiki::traits::*;
+
+#[derive(Debug, Clone)]
+enum OpfState {
+    None,
+    Title,
+    Creator(Option<String>),
+    Contributor(Option<String>),
+    Language,
+    Identifier,
+    Publisher,
+    Description,
+    Date,
+    Rights,
+    Subject,
+    MetaRefines { ref_id: String, property: String },
+    MetaGlobal { property: String },
+}
+
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use std::io::{Read, Seek};
@@ -256,8 +274,7 @@ impl<P: EpubProvider> EpubArchive<P> {
 
         // State tracking
         let mut in_metadata = false;
-        let mut current_tag = String::new();
-        let mut current_id = None; // For elements like <dc:creator id="creator1">
+        let mut state = OpfState::None;
 
         // A temporary map to store metadata refinements (refines -> property -> value)
         let mut refinements: std::collections::HashMap<
@@ -273,39 +290,48 @@ impl<P: EpubProvider> EpubArchive<P> {
                 Event::Start(ref e) => {
                     let name = e.name();
                     let name_str = String::from_utf8_lossy(name.into_inner()).into_owned();
-                    current_tag = name_str.clone();
 
                     if name_str.ends_with("metadata") {
                         in_metadata = true;
                     } else if name_str.ends_with("spine") {
-                        // Extract toc attribute from spine
-                        for attr in e.attributes() {
-                            let attr = attr?;
+                        for attr in e.attributes().flatten() {
                             let key = String::from_utf8_lossy(attr.key.into_inner());
                             if key == "toc" {
                                 book.toc_id =
                                     Some(String::from_utf8_lossy(&attr.value).into_owned());
                             }
                         }
-                    } else if current_tag.ends_with("creator") {
-                        current_id = None;
-                        for attr in e.attributes() {
-                            let attr = attr?;
-                            let key = String::from_utf8_lossy(attr.key.into_inner());
-                            if key == "id" {
-                                current_id =
-                                    Some(String::from_utf8_lossy(&attr.value).into_owned());
-                            } else if key == "opf:role" {
-                                // EPUB 2 style role attribute
-                                // We'll handle this in the Event::Text section by updating the last creator
-                            }
+                    } else if name_str.ends_with("title") {
+                        state = OpfState::Title;
+                    } else if name_str.ends_with("creator") || name_str.ends_with("contributor") {
+                        let id = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| a.key.as_ref() == b"id")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                        if name_str.ends_with("creator") {
+                            state = OpfState::Creator(id);
+                        } else {
+                            state = OpfState::Contributor(id);
                         }
-                    } else if current_tag == "meta" {
-                        // Check for EPUB 3 refinements
+                    } else if name_str.ends_with("language") {
+                        state = OpfState::Language;
+                    } else if name_str.ends_with("identifier") {
+                        state = OpfState::Identifier;
+                    } else if name_str.ends_with("publisher") {
+                        state = OpfState::Publisher;
+                    } else if name_str.ends_with("description") {
+                        state = OpfState::Description;
+                    } else if name_str.ends_with("date") {
+                        state = OpfState::Date;
+                    } else if name_str.ends_with("rights") {
+                        state = OpfState::Rights;
+                    } else if name_str.ends_with("subject") {
+                        state = OpfState::Subject;
+                    } else if name_str.ends_with("meta") {
                         let mut refines = None;
                         let mut property = None;
-                        for attr in e.attributes() {
-                            let attr = attr?;
+                        for attr in e.attributes().flatten() {
                             let key = String::from_utf8_lossy(attr.key.into_inner());
                             if key == "refines" {
                                 let val = String::from_utf8_lossy(&attr.value).into_owned();
@@ -316,17 +342,16 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 property = Some(String::from_utf8_lossy(&attr.value).into_owned());
                             }
                         }
-                        let ref_id = refines.clone();
-                        let p_name = property.clone();
-                        if let (Some(r), Some(p)) = (ref_id, p_name) {
-                            // We don't have the text yet, store the state to catch in Event::Text
-                            current_id = Some(r); // repurpose current_id to hold the target refines ID
-                            current_tag = format!("meta_refines_{}", p);
+                        if let (Some(r), Some(p)) = (refines, property.clone()) {
+                            state = OpfState::MetaRefines {
+                                ref_id: r,
+                                property: p,
+                            };
                         } else if let Some(p) = property {
-                            // Global properties like rendition:layout
-                            current_tag = format!("meta_global_{}", p);
+                            state = OpfState::MetaGlobal { property: p };
                         } else {
-                            // Check EPUB 2 cover
+                            // Try EPUB 2 cover for `<meta name="cover" content="id"/>`
+                            // though it's technically more correct to handle this in Event::Empty since meta is often self-closing
                             let mut is_cover = false;
                             let mut content = None;
                             for attr in e.attributes().flatten() {
@@ -348,7 +373,22 @@ impl<P: EpubProvider> EpubArchive<P> {
                     let name = e.name();
                     let name_str = String::from_utf8_lossy(name.into_inner()).into_owned();
 
-                    if name_str.ends_with("item") {
+                    if name_str.ends_with("meta") && in_metadata {
+                        let mut is_cover = false;
+                        let mut content = None;
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.into_inner());
+                            let val = String::from_utf8_lossy(&attr.value).into_owned();
+                            if key == "name" && val == "cover" {
+                                is_cover = true;
+                            } else if key == "content" {
+                                content = Some(val);
+                            }
+                        }
+                        if is_cover && content.is_some() {
+                            book.metadata.cover_id = content;
+                        }
+                    } else if name_str.ends_with("item") {
                         // Extract manifest item
                         let mut id = String::new();
                         let mut href = String::new();
@@ -437,48 +477,52 @@ impl<P: EpubProvider> EpubArchive<P> {
                 }
                 Event::Text(e) if in_metadata => {
                     let text = String::from_utf8_lossy(&e).into_owned();
-                    if current_tag.ends_with("title") {
-                        book.metadata.title = Some(text);
-                    } else if current_tag.ends_with("creator") {
-                        let creator = crate::model::Creator::new(&text);
-                        // If this creator tag had an ID, remember its index
-                        if let Some(id) = &current_id {
-                            creator_id_to_idx.insert(id.clone(), book.metadata.creators.len());
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+
+                    match &state {
+                        OpfState::Title => book.metadata.title = Some(text),
+                        OpfState::Creator(id) => {
+                            let creator = crate::model::Creator::new(&text);
+                            if let Some(id_str) = id {
+                                creator_id_to_idx
+                                    .insert(id_str.clone(), book.metadata.creators.len());
+                            }
+                            book.metadata.creators.push(creator);
                         }
-                        book.metadata.creators.push(creator);
-                    } else if current_tag.ends_with("language") {
-                        book.metadata.language = Some(text);
-                    } else if current_tag.ends_with("identifier") {
-                        book.metadata.identifier = Some(text);
-                    } else if current_tag.ends_with("publisher") {
-                        book.metadata.publisher = Some(text);
-                    } else if current_tag.ends_with("description") {
-                        book.metadata.description = Some(text);
-                    } else if current_tag.ends_with("date") {
-                        book.metadata.date = Some(text);
-                    } else if current_tag.ends_with("rights") {
-                        book.metadata.rights = Some(text);
-                    } else if current_tag.ends_with("subject") {
-                        book.metadata.subjects.push(text);
-                    } else if current_tag.starts_with("meta_refines_") {
-                        if let Some(refined_id) = &current_id {
-                            let property = current_tag
-                                .strip_prefix("meta_refines_")
-                                .unwrap()
-                                .to_string();
-                            let entry = refinements.entry(refined_id.clone()).or_default();
-                            entry.insert(property, text);
+                        OpfState::Contributor(id) => {
+                            let creator = crate::model::Creator::new(&text);
+                            if let Some(id_str) = id {
+                                creator_id_to_idx
+                                    .insert(id_str.clone(), book.metadata.creators.len());
+                            }
+                            book.metadata.creators.push(creator);
                         }
-                    } else if current_tag.starts_with("meta_global_") {
-                        let property = current_tag.strip_prefix("meta_global_").unwrap();
-                        if property == "rendition:layout" {
-                            if text == "pre-paginated" {
-                                book.metadata.layout = crate::model::LayoutType::PrePaginated;
-                            } else {
-                                book.metadata.layout = crate::model::LayoutType::Reflowable;
+                        OpfState::Language => book.metadata.language = Some(text),
+                        OpfState::Identifier => book.metadata.identifier = Some(text),
+                        OpfState::Publisher => book.metadata.publisher = Some(text),
+                        OpfState::Description => book.metadata.description = Some(text),
+                        OpfState::Date => book.metadata.date = Some(text),
+                        OpfState::Rights => book.metadata.rights = Some(text),
+                        OpfState::Subject => book.metadata.subjects.push(text),
+                        OpfState::MetaRefines { ref_id, property } => {
+                            let entry = refinements.entry(ref_id.clone()).or_default();
+                            entry.insert(property.clone(), text);
+                        }
+                        OpfState::MetaGlobal { property } => {
+                            if property == "rendition:layout" {
+                                if text == "pre-paginated" {
+                                    book.metadata.layout = crate::model::LayoutType::PrePaginated;
+                                } else {
+                                    book.metadata.layout = crate::model::LayoutType::Reflowable;
+                                }
                             }
                         }
+                        OpfState::None => {}
                     }
+                    // Consume state so it doesn't accidentally pick up stray text nodes inside same tag wrapper
+                    state = OpfState::None;
                 }
                 Event::End(ref e) => {
                     let name = e.name();
@@ -486,8 +530,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                     if name_str.ends_with("metadata") {
                         in_metadata = false;
                     }
-                    current_tag.clear();
-                    current_id = None;
+                    state = OpfState::None;
                 }
                 Event::Eof => break,
                 _ => {}
