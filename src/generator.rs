@@ -755,7 +755,11 @@ impl EpubBuilder {
         let max_page = self.page_list.len(); // A rough estimate for total/max pages
 
         // Use the real EPUB identifier so toc.ncx dtb:uid matches the OPF dc:identifier.
-        let uid = self.metadata.identifier.as_deref().unwrap_or("urn:uuid:epub-rs-default");
+        let uid = self
+            .metadata
+            .identifier
+            .as_deref()
+            .unwrap_or("urn:uuid:epub-rs-default");
         let mut ncx = format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"{}\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"{}\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"{}\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n",
             escape(uid),
@@ -804,19 +808,43 @@ impl EpubBuilder {
 
     /// Helper to infer EPUB 3 properties (scripted, mathml, svg) from HTML content.
     fn infer_properties(content: &[u8]) -> Option<String> {
-        let mut props = Vec::new();
-        // A simple heuristic search. For production, a proper DOM traversal could be used,
-        // but string scanning is much faster and sufficient for detecting these tags.
-        let html_str = String::from_utf8_lossy(content);
-        let lower = html_str.to_lowercase();
+        let mut has_script = false;
+        let mut has_svg = false;
+        let mut has_math = false;
 
-        if lower.contains("<script") {
+        // Zero-allocation, single-pass byte-level heuristic search
+        for i in 0..content.len() {
+            if content[i] == b'<' {
+                let remain = content.len() - i;
+
+                if !has_script && remain >= 7 && content[i..i + 7].eq_ignore_ascii_case(b"<script")
+                {
+                    has_script = true;
+                } else if !has_svg && remain >= 4 && content[i..i + 4].eq_ignore_ascii_case(b"<svg")
+                {
+                    has_svg = true;
+                } else if !has_math
+                    && remain >= 5
+                    && content[i..i + 5].eq_ignore_ascii_case(b"<math")
+                {
+                    has_math = true;
+                }
+
+                // Early exit if all properties are found
+                if has_script && has_svg && has_math {
+                    break;
+                }
+            }
+        }
+
+        let mut props = Vec::new();
+        if has_script {
             props.push("scripted");
         }
-        if lower.contains("<svg") {
+        if has_svg {
             props.push("svg");
         }
-        if lower.contains("<math") {
+        if has_math {
             props.push("mathml");
         }
 
