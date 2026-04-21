@@ -513,9 +513,23 @@ fn search_node(
                     base_cfi, current_path, cfi_text_idx, start, cfi_text_idx, end
                 );
 
-                // Extract a small context excerpt (up to 20 chars around the match)
-                let context_start = start.saturating_sub(20);
-                let context_end = std::cmp::min(text.len(), end + 20);
+                // Extract a small context excerpt (~20 chars) around the match.
+                // The regex returns byte offsets; we must snap to char boundaries to
+                // avoid panicking on multi-byte characters (e.g., CJK text).
+                let context_start = {
+                    let mut idx = start.saturating_sub(20);
+                    while idx > 0 && !text.is_char_boundary(idx) {
+                        idx -= 1;
+                    }
+                    idx
+                };
+                let context_end = {
+                    let mut idx = (end + 20).min(text.len());
+                    while idx < text.len() && !text.is_char_boundary(idx) {
+                        idx += 1;
+                    }
+                    idx
+                };
                 let excerpt = text[context_start..context_end].to_string();
 
                 results.push(SearchResult {

@@ -329,37 +329,35 @@ pub fn search_text_in_chapter(html: &str, base_cfi: &str, query: &str) -> Result
 // CFI and Crypto Utilities Wrapper
 // -----------------------------------------------------------------------------
 
-/// Compare two CFI strings. Returns a negative number if cfi_a < cfi_b, 0 if equal, and a positive number if cfi_a > cfi_b.
+/// Compare two CFI strings numerically (step by step) as per the EPUB CFI spec.
+/// Returns -1 if cfi_a < cfi_b, 0 if equal, +1 if cfi_a > cfi_b.
+/// Both CFIs must be Point CFIs; comparing Range CFIs returns an error.
 #[wasm_bindgen]
 pub fn compare_cfi(cfi_a: &str, cfi_b: &str) -> Result<i32, JsValue> {
-    // Parse to validate they are valid CFIs
-    let _a: crate::EpubCfi =
+    let a: crate::EpubCfi =
         std::str::FromStr::from_str(cfi_a).map_err(|e: crate::error::EpubError| e.to_string())?;
-    let _b: crate::EpubCfi =
+    let b: crate::EpubCfi =
         std::str::FromStr::from_str(cfi_b).map_err(|e: crate::error::EpubError| e.to_string())?;
 
-    // Fallback comparison logic for Wasm bridge since Ord isn't derived on EpubCfi yet.
-    Ok(cfi_a.cmp(cfi_b) as i32)
+    match a.partial_cmp(&b) {
+        Some(std::cmp::Ordering::Less) => Ok(-1),
+        Some(std::cmp::Ordering::Equal) => Ok(0),
+        Some(std::cmp::Ordering::Greater) => Ok(1),
+        None => Err("compare_cfi: cannot compare Range CFIs — provide two Point CFIs".into()),
+    }
 }
 
-/// Combine two parsed CFIs into a CFI range string (e.g. `epubcfi(/2/2!,/4/2,/6/4)`).
+/// Combine two Point CFIs into a spec-compliant CFI range string.
+/// The output format is `epubcfi(shared_path,start_local,end_local)` where the
+/// shared path is the longest common ancestor of both inputs.
 #[wasm_bindgen]
 pub fn generate_cfi_range(start_cfi: &str, end_cfi: &str) -> Result<String, JsValue> {
-    let _start: crate::EpubCfi = std::str::FromStr::from_str(start_cfi)
+    let start: crate::EpubCfi = std::str::FromStr::from_str(start_cfi)
         .map_err(|e: crate::error::EpubError| e.to_string())?;
-    let _end: crate::EpubCfi =
+    let end: crate::EpubCfi =
         std::str::FromStr::from_str(end_cfi).map_err(|e: crate::error::EpubError| e.to_string())?;
 
-    // As generate_range is missing on EpubCfi, construct it manually based on standard EPUB CFI format
-    // A standard CFI range combines two paths: epubcfi(parent_path,start_path,end_path)
-    let start_str = start_cfi
-        .trim_start_matches("epubcfi(")
-        .trim_end_matches(')');
-    let end_str = end_cfi.trim_start_matches("epubcfi(").trim_end_matches(')');
-
-    // For simplicity in this FFI bridge, we do a basic comma joining if they are valid CFIs.
-    // In a real CFI processor we'd calculate their lowest common ancestor.
-    Ok(format!("epubcfi({start_str},{end_str})"))
+    crate::cfi::EpubCfi::generate_range(&start, &end).map_err(|e| e.to_string().into())
 }
 
 /// In browser, decrypt obfuscated font files (.ttf, .woff)

@@ -78,9 +78,9 @@ impl<P: EpubProvider> EpubArchive<P> {
                 continue;
             }
 
-            // Estimate the base CFI path for this spine item.
-            // In EPUB 3 CFI, the spine starts at /6, and its children (itemrefs) are even-numbered starting at 2.
-            let base_cfi = format!("/6/{}!", (spine_index + 1) * 2);
+            // Use the canonical spine base CFI generator so this is consistent
+            // with get_chapter_with_cfi, search_chapter, and get_positions.
+            let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, &item.idref);
 
             let ctx = crate::processor::PositionContext {
                 base_cfi: &base_cfi,
