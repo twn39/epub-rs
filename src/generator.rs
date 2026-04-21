@@ -49,7 +49,7 @@ pub struct Resource {
     href: String,
     media_type: String,
     content: ResourceContent,
-    properties: Option<String>,
+    properties: Vec<String>,
 }
 
 /// A Builder for creating EPUB files.
@@ -280,7 +280,7 @@ impl EpubBuilder {
             href: href.into(),
             media_type: media_type.into(),
             content: ResourceContent::Bytes(content.into()),
-            properties: Some("cover-image".to_string()),
+            properties: vec!["cover-image".to_string()],
         });
         self.cover_id = Some(id);
         self
@@ -300,7 +300,7 @@ impl EpubBuilder {
             href: href.into(),
             media_type: media_type.into(),
             content: ResourceContent::Bytes(content.into()),
-            properties: None,
+            properties: Vec::new(),
         });
         self
     }
@@ -319,7 +319,11 @@ impl EpubBuilder {
             href: href.into(),
             media_type: media_type.into(),
             content: ResourceContent::Bytes(content.into()),
-            properties: Some(properties.into()),
+            properties: properties
+                .into()
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect(),
         });
         self
     }
@@ -338,7 +342,7 @@ impl EpubBuilder {
             href: href.into(),
             media_type: media_type.into(),
             content: ResourceContent::Stream(Box::new(reader)),
-            properties: None,
+            properties: Vec::new(),
         });
         self
     }
@@ -385,7 +389,7 @@ impl EpubBuilder {
             href: href.into(),
             media_type: "application/xhtml+xml".to_string(),
             content: ResourceContent::Bytes(content.into()),
-            properties: None,
+            properties: Vec::new(),
         });
         self
     }
@@ -404,7 +408,7 @@ impl EpubBuilder {
             href: href.into(),
             media_type: "application/xhtml+xml".to_string(),
             content: ResourceContent::Stream(Box::new(reader)),
-            properties: None,
+            properties: Vec::new(),
         });
         self
     }
@@ -489,7 +493,7 @@ impl EpubBuilder {
                     href: internal_path,
                     media_type: mime,
                     content: ResourceContent::Bytes(bytes),
-                    properties: None,
+                    properties: Vec::new(),
                 });
             }
         }
@@ -501,7 +505,7 @@ impl EpubBuilder {
             href: chapter_href,
             media_type: "application/xhtml+xml".to_string(),
             content: ResourceContent::Bytes(html_content),
-            properties: None,
+            properties: Vec::new(),
         });
 
         Ok(self)
@@ -576,7 +580,7 @@ impl EpubBuilder {
                 href: theme_href.unwrap().to_string(),
                 media_type: "text/css".to_string(),
                 content: ResourceContent::Bytes(MODERN_THEME_CSS.as_bytes().to_vec()),
-                properties: None,
+                properties: Vec::new(),
             });
         }
 
@@ -593,7 +597,7 @@ impl EpubBuilder {
                     href: "nav.xhtml".to_string(),
                     media_type: "application/xhtml+xml".to_string(),
                     content: ResourceContent::Bytes(nav_html.into_bytes()),
-                    properties: Some("nav".to_string()),
+                    properties: vec!["nav".to_string()],
                 });
 
                 // Fallback NCX for backwards compatibility
@@ -609,7 +613,7 @@ impl EpubBuilder {
                     href: "toc.ncx".to_string(),
                     media_type: "application/x-dtbncx+xml".to_string(),
                     content: ResourceContent::Bytes(ncx_xml.into_bytes()),
-                    properties: None,
+                    properties: Vec::new(),
                 });
             }
         }
@@ -807,7 +811,7 @@ impl EpubBuilder {
     }
 
     /// Helper to infer EPUB 3 properties (scripted, mathml, svg) from HTML content.
-    fn infer_properties(content: &[u8]) -> Option<String> {
+    fn infer_properties(content: &[u8]) -> Vec<String> {
         let mut has_script = false;
         let mut has_svg = false;
         let mut has_math = false;
@@ -839,20 +843,16 @@ impl EpubBuilder {
 
         let mut props = Vec::new();
         if has_script {
-            props.push("scripted");
+            props.push("scripted".to_string());
         }
         if has_svg {
-            props.push("svg");
+            props.push("svg".to_string());
         }
         if has_math {
-            props.push("mathml");
+            props.push("mathml".to_string());
         }
 
-        if props.is_empty() {
-            None
-        } else {
-            Some(props.join(" "))
-        }
+        props
     }
 
     /// Helper to generate the OPF XML content using quick-xml.
@@ -977,8 +977,9 @@ impl EpubBuilder {
             item.push_attribute(("id", res.id.as_str()));
             item.push_attribute(("href", res.href.as_str()));
             item.push_attribute(("media-type", res.media_type.as_str()));
-            if let Some(prop) = &res.properties {
-                item.push_attribute(("properties", prop.as_str()));
+            if !res.properties.is_empty() {
+                let prop_str = res.properties.join(" ");
+                item.push_attribute(("properties", prop_str.as_str()));
             }
             writer.write_event(Event::Empty(item))?;
         }
@@ -1064,35 +1065,33 @@ mod tests {
         // Pure text/html should yield no properties
         assert_eq!(
             EpubBuilder::infer_properties(b"<html><body><h1>Title</h1></body></html>"),
-            None
+            Vec::<String>::new()
         );
 
         // Scripts
         let script = EpubBuilder::infer_properties(
             b"<html><head><script src='test.js'></script></head></html>",
         );
-        assert_eq!(script.as_deref(), Some("scripted"));
+        assert_eq!(script, vec!["scripted".to_string()]);
 
         // Case insensitivity
         let script_upper = EpubBuilder::infer_properties(b"<SCRIPT>alert(1);</SCRIPT>");
-        assert_eq!(script_upper.as_deref(), Some("scripted"));
+        assert_eq!(script_upper, vec!["scripted".to_string()]);
 
         // SVG
         let svg = EpubBuilder::infer_properties(b"<p>Graphic: <svg></svg></p>");
-        assert_eq!(svg.as_deref(), Some("svg"));
+        assert_eq!(svg, vec!["svg".to_string()]);
 
         // MathML
         let math = EpubBuilder::infer_properties(
             b"<math xmlns='http://www.w3.org/1998/Math/MathML'><mi>x</mi></math>",
         );
-        assert_eq!(math.as_deref(), Some("mathml"));
+        assert_eq!(math, vec!["mathml".to_string()]);
 
         // Multiple properties
         let combo = EpubBuilder::infer_properties(b"<svg></svg><div><script></script></div>");
-        let combo_str = combo.unwrap();
-        // Since we push to a Vec and join, order matters for the exact string, but typically it's scripted svg mathml
-        assert!(combo_str.contains("scripted"));
-        assert!(combo_str.contains("svg"));
+        assert!(combo.contains(&"scripted".to_string()));
+        assert!(combo.contains(&"svg".to_string()));
     }
 
     #[test]

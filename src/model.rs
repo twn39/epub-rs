@@ -171,5 +171,6 @@ pub struct ManifestItem {
     pub id: String,
     pub href: String,
     pub media_type: String,
-    pub properties: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<String>,
 }

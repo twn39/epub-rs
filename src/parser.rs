@@ -353,7 +353,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                         let mut id = String::new();
                         let mut href = String::new();
                         let mut media_type = String::new();
-                        let mut properties = None;
+                        let mut properties = Vec::new();
 
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -370,7 +370,10 @@ impl<P: EpubProvider> EpubArchive<P> {
                                     href = decoded;
                                 }
                                 "media-type" => media_type = value,
-                                "properties" => properties = Some(value),
+                                "properties" => {
+                                    properties =
+                                        value.split_whitespace().map(|s| s.to_string()).collect()
+                                }
                                 _ => {}
                             }
                         }
@@ -593,12 +596,10 @@ impl<P: EpubProvider> EpubArchive<P> {
 
         // 1. Try EPUB 3 properties="cover-image"
         if cover_item.is_none() {
-            cover_item = book.manifest.values().find(|i| {
-                i.properties
-                    .as_deref()
-                    .unwrap_or("")
-                    .contains("cover-image")
-            });
+            cover_item = book
+                .manifest
+                .values()
+                .find(|i| i.properties.iter().any(|p| p == "cover-image"));
         }
 
         // 2. Try EPUB 2 meta name="cover"
@@ -791,7 +792,7 @@ impl<P: EpubProvider> EpubArchive<P> {
         if let Some(nav_item) = book
             .manifest
             .values()
-            .find(|i| i.properties.as_deref().unwrap_or("").contains("nav"))
+            .find(|i| i.properties.iter().any(|p| p == "nav"))
         {
             let html_bytes = self.get_resource_by_id(book, &nav_item.id)?;
             let html = String::from_utf8_lossy(&html_bytes).to_string();
