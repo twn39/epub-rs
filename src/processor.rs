@@ -32,6 +32,7 @@ where
 
 /// Normalizes a relative URL path against a base directory within the EPUB archive.
 /// Automatically handles URL-decoding (e.g. `%20` -> ` `) and stripping of URL query strings or hashes.
+/// The `base_dir` must be the **directory** containing the referencing file, NOT the file path itself.
 /// Example: `OEBPS/Text` + `../Images/cover%20image.jpg?v=1` -> `OEBPS/Images/cover image.jpg`
 pub fn normalize_path(base_dir: &str, rel_path: &str) -> String {
     // 1. Strip query string or hash suffix from the URL
@@ -77,6 +78,9 @@ fn is_external_url(url: &str) -> bool {
 /// Rewrite resources (images, css, links) in an HTML document using a provided resolver callback.
 /// The resolver receives the absolute path within the EPUB (e.g. `OEBPS/Images/pic.jpg`)
 /// and should return `Some(new_url)` if it wants to rewrite it, or `None` to leave it unchanged.
+///
+/// `base_file_path` is the full ZIP path of the HTML file being processed (e.g. `OEBPS/Text/ch1.xhtml`).
+/// The parent directory is extracted from it automatically before resolving relative asset paths.
 pub fn rewrite_resources<F>(
     html: &str,
     base_file_path: &str,
@@ -85,6 +89,12 @@ pub fn rewrite_resources<F>(
 where
     F: FnMut(&str) -> Option<String> + 'static,
 {
+    // Extract the directory containing the HTML file so that relative paths (e.g. `../images/foo.png`)
+    // are resolved against the correct base.  `normalize_path` expects a *directory*, not a file path.
+    let base_dir = match base_file_path.rfind('/') {
+        Some(idx) => base_file_path[..idx].to_string(),
+        None => String::new(), // file is at the archive root
+    };
     let mut output = Vec::new();
     let resolver_arc = Arc::new(Mutex::new(resolver));
 
@@ -94,12 +104,13 @@ where
                 // 1. Rewrite media sources
                 element!("img, video, audio, source, track", {
                     let resolver = Arc::clone(&resolver_arc);
+                    let base_dir = base_dir.clone();
                     move |el| {
                         if let Some(src) = el.get_attribute("src")
                             && !is_external_url(&src)
                             && !src.starts_with('#')
                         {
-                            let abs_path = normalize_path(base_file_path, &src);
+                            let abs_path = normalize_path(&base_dir, &src);
                             if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                 el.set_attribute("src", &new_url).unwrap();
                             }
@@ -108,7 +119,7 @@ where
                             && !is_external_url(&poster)
                             && !poster.starts_with('#')
                         {
-                            let abs_path = normalize_path(base_file_path, &poster);
+                            let abs_path = normalize_path(&base_dir, &poster);
                             if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                 el.set_attribute("poster", &new_url).unwrap();
                             }
@@ -119,12 +130,13 @@ where
                 // 2. Rewrite object data
                 element!("object", {
                     let resolver = Arc::clone(&resolver_arc);
+                    let base_dir = base_dir.clone();
                     move |el| {
                         if let Some(data) = el.get_attribute("data")
                             && !is_external_url(&data)
                             && !data.starts_with('#')
                         {
-                            let abs_path = normalize_path(base_file_path, &data);
+                            let abs_path = normalize_path(&base_dir, &data);
                             if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                 el.set_attribute("data", &new_url).unwrap();
                             }
@@ -135,13 +147,14 @@ where
                 // 3. Rewrite SVG images
                 element!("image", {
                     let resolver = Arc::clone(&resolver_arc);
+                    let base_dir = base_dir.clone();
                     move |el| {
                         for attr in &["href", "xlink:href"] {
                             if let Some(href) = el.get_attribute(attr)
                                 && !is_external_url(&href)
                                 && !href.starts_with('#')
                             {
-                                let abs_path = normalize_path(base_file_path, &href);
+                                let abs_path = normalize_path(&base_dir, &href);
                                 if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                     el.set_attribute(attr, &new_url).unwrap();
                                 }
@@ -153,6 +166,7 @@ where
                 // 4. Rewrite stylesheets and hyperlinks
                 element!("link, a, area", {
                     let resolver = Arc::clone(&resolver_arc);
+                    let base_dir = base_dir.clone();
                     move |el| {
                         if let Some(href) = el.get_attribute("href") {
                             // Skip external links and pure local anchors (e.g. href="#chapter1")
@@ -165,7 +179,7 @@ where
 
                                 // We only resolve the file path part
                                 if !path_part.is_empty() {
-                                    let abs_path = normalize_path(base_file_path, path_part);
+                                    let abs_path = normalize_path(&base_dir, path_part);
                                     if let Some(mut new_url) = (resolver.lock().unwrap())(&abs_path)
                                     {
                                         // Append the anchor back if it existed
@@ -796,5 +810,55 @@ fn traverse_semantic_nodes(
                 traverse_semantic_nodes(&child, base_cfi, &child_path, &current_lang, elements);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_path() {
+        // Simple relative resolution
+        assert_eq!(
+            normalize_path("OEBPS/Text", "../Images/cover.jpg"),
+            "OEBPS/Images/cover.jpg"
+        );
+        // Same directory resolution
+        assert_eq!(
+            normalize_path("OEBPS/Text", "chapter2.xhtml"),
+            "OEBPS/Text/chapter2.xhtml"
+        );
+        // Root directory
+        assert_eq!(normalize_path("", "images/cover.jpg"), "images/cover.jpg");
+        // URL decoding
+        assert_eq!(
+            normalize_path("OEBPS/Text", "../Images/my%20cover.jpg"),
+            "OEBPS/Images/my cover.jpg"
+        );
+        // Stripping query and hash
+        assert_eq!(
+            normalize_path("OEBPS", "css/style.css?v=2.0#section"),
+            "OEBPS/css/style.css"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_resources_resolves_from_parent_directory() {
+        let html = r#"<html><body><img src="../Images/cover.jpg" /></body></html>"#;
+
+        // The base_file_path is the exact path to the CURRENT file (e.g., OEBPS/Text/ch1.xhtml).
+        // rewrite_resources must extract the parent dir "OEBPS/Text" and resolve "../Images/cover.jpg"
+        // against it, resulting in "OEBPS/Images/cover.jpg".
+        let base_file_path = "OEBPS/Text/ch1.xhtml";
+
+        let rewritten = rewrite_resources(html, base_file_path, |abs_path| {
+            // Assert that the processor correctly computed the absolute reference
+            assert_eq!(abs_path, "OEBPS/Images/cover.jpg");
+            Some("blob:12345".to_string())
+        })
+        .unwrap();
+
+        assert!(rewritten.contains(r#"src="blob:12345""#));
     }
 }
