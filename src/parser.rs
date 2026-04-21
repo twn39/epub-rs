@@ -12,7 +12,7 @@ use std::io::{Read, Seek};
 
 /// A struct that handles unpacking and parsing EPUB files.
 pub struct EpubArchive<P: EpubProvider> {
-    provider: P,
+    pub provider: P,
 }
 
 impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
