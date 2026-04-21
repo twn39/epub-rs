@@ -85,12 +85,6 @@ pub fn rewrite_resources<F>(
 where
     F: FnMut(&str) -> Option<String> + 'static,
 {
-    // The base directory is the folder containing the HTML file
-    let base_dir = match base_file_path.rfind('/') {
-        Some(idx) => &base_file_path[..idx],
-        None => "",
-    };
-
     let mut output = Vec::new();
     let resolver_arc = Arc::new(Mutex::new(resolver));
 
@@ -105,7 +99,7 @@ where
                             && !is_external_url(&src)
                             && !src.starts_with('#')
                         {
-                            let abs_path = normalize_path(base_dir, &src);
+                            let abs_path = normalize_path(base_file_path, &src);
                             if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                 el.set_attribute("src", &new_url).unwrap();
                             }
@@ -114,7 +108,7 @@ where
                             && !is_external_url(&poster)
                             && !poster.starts_with('#')
                         {
-                            let abs_path = normalize_path(base_dir, &poster);
+                            let abs_path = normalize_path(base_file_path, &poster);
                             if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                 el.set_attribute("poster", &new_url).unwrap();
                             }
@@ -130,7 +124,7 @@ where
                             && !is_external_url(&data)
                             && !data.starts_with('#')
                         {
-                            let abs_path = normalize_path(base_dir, &data);
+                            let abs_path = normalize_path(base_file_path, &data);
                             if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                 el.set_attribute("data", &new_url).unwrap();
                             }
@@ -147,7 +141,7 @@ where
                                 && !is_external_url(&href)
                                 && !href.starts_with('#')
                             {
-                                let abs_path = normalize_path(base_dir, &href);
+                                let abs_path = normalize_path(base_file_path, &href);
                                 if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
                                     el.set_attribute(attr, &new_url).unwrap();
                                 }
@@ -171,7 +165,7 @@ where
 
                                 // We only resolve the file path part
                                 if !path_part.is_empty() {
-                                    let abs_path = normalize_path(base_dir, path_part);
+                                    let abs_path = normalize_path(base_file_path, path_part);
                                     if let Some(mut new_url) = (resolver.lock().unwrap())(&abs_path)
                                     {
                                         // Append the anchor back if it existed
