@@ -172,6 +172,9 @@
     
     <main>
         <aside id="sidebar" class="hidden">
+            <div id="cover-container" class="hidden">
+                <img id="cover-img" src="" alt="Book Cover" style="width: 100%; border-radius: 4px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);" />
+            </div>
             <h2>Table of Contents</h2>
             <div id="toc-container"></div>
         </aside>
@@ -201,6 +204,7 @@
             try {
                 await init();
                 console.log("WASM initialized successfully.");
+                document.getElementById('loading').classList.add('hidden');
             } catch (e) {
                 console.error("Failed to initialize WASM:", e);
                 alert("Failed to initialize WebAssembly. See console for details.");
@@ -215,6 +219,7 @@
             showLoading();
 
             try {
+                const t0 = performance.now();
                 const arrayBuffer = await file.arrayBuffer();
                 const bytes = new Uint8Array(arrayBuffer);
 
@@ -222,8 +227,11 @@
                 cleanupBlobUrls();
                 
                 // Create new parser and parse the EPUB
+                const t1 = performance.now();
                 parser = new EpubParser(bytes);
+                const t2 = performance.now();
                 book = parser.parse();
+                const t3 = performance.now();
                 console.log("Parsed book object:", book);
                 
                 // Set window title if available
@@ -232,17 +240,48 @@
                 }
                 
                 try {
-                    const toc = parser.get_toc();
+                    const cover_arr = parser.get_cover_image();
+                    if (cover_arr && cover_arr.length === 2) {
+                        const blob = new Blob([cover_arr[0]], { type: cover_arr[1] });
+                        const url = URL.createObjectURL(blob);
+                        blobUrls.push(url);
+                        document.getElementById('cover-img').src = url;
+                        document.getElementById('cover-container').classList.remove('hidden');
+                    }
+                } catch (e) {
+                    console.warn("No cover image found or failed to load:", e);
+                    document.getElementById('cover-container').classList.add('hidden');
+                }
+
+                let toc = [];
+                try {
+                    toc = parser.get_toc();
                     console.log("Parsed TOC:", toc);
                     renderToc(toc);
                 } catch (e) {
                     console.warn("Failed to get TOC or no TOC available:", e);
                     document.getElementById('sidebar').classList.add('hidden');
                 }
+                const t4 = performance.now();
+                
+                const t5 = performance.now();
+                const locations = parser.generate_locations(1000);
+                const t6 = performance.now();
+                console.log(`Generated ${locations.length} CFIs.`);
+                
+                // Print Performance
+                console.log(`--- EPUB Performance Metrics ---`);
+                console.log(`Read ZIP: ${(t2-t1).toFixed(2)}ms`);
+                console.log(`Parse OPF: ${(t3-t2).toFixed(2)}ms`);
+                console.log(`Extract TOC: ${(t4-t3).toFixed(2)}ms`);
+                console.log(`Generate CFIs: ${(t6-t5).toFixed(2)}ms`);
+                console.log(`Total Parse Time: ${(t6-t1).toFixed(2)}ms`);
+                
+                // Set page info placeholder text with metrics
+                document.getElementById('page-info').textContent = `Metrics in Console`;
                 
                 currentSpineIndex = 0;
                 
-                // Skip non-linear items if possible, but for demo we just show all spine items
                 await loadChapter(currentSpineIndex);
                 updateUI();
             } catch (err) {
@@ -299,8 +338,10 @@
             const container = document.getElementById('toc-container');
             container.innerHTML = '';
             
+            const hasCover = !document.getElementById('cover-container').classList.contains('hidden');
+
             if (!tocEntries || tocEntries.length === 0) {
-                sidebar.classList.add('hidden');
+                if (!hasCover) sidebar.classList.add('hidden');
                 return;
             }
 
