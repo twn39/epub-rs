@@ -8,7 +8,7 @@ use crate::error::EpubError;
 use std::fmt;
 
 /// Represents a single step in a Canonical Fragment Identifier path.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfiStep {
     /// The numeric index of the child element (even numbers represent elements, odd numbers represent text/character data)
     pub index: u32,
@@ -19,6 +19,20 @@ pub struct CfiStep {
 impl CfiStep {
     pub fn new(index: u32, assertion: Option<String>) -> Self {
         Self { index, assertion }
+    }
+}
+
+/// CFI steps compare only by their numeric index, as per the EPUB CFI spec.
+/// Assertions are informational and do not affect ordering.
+impl PartialOrd for CfiStep {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CfiStep {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.index.cmp(&other.index)
     }
 }
 
@@ -33,11 +47,51 @@ impl fmt::Display for CfiStep {
 }
 
 /// Represents a path sequence in a CFI.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CfiPath {
     pub steps: Vec<CfiStep>,
     pub local_steps: Option<Vec<CfiStep>>,
     pub character_offset: Option<u32>,
+}
+
+/// CfiPaths are compared step-by-step numerically (base steps, then local steps, then offset).
+impl PartialOrd for CfiPath {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CfiPath {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // 1. Compare base steps numerically
+        for (a, b) in self.steps.iter().zip(other.steps.iter()) {
+            match a.cmp(b) {
+                std::cmp::Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        match self.steps.len().cmp(&other.steps.len()) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+
+        // 2. Compare local steps (path after '!')
+        let self_local = self.local_steps.as_deref().unwrap_or(&[]);
+        let other_local = other.local_steps.as_deref().unwrap_or(&[]);
+        for (a, b) in self_local.iter().zip(other_local.iter()) {
+            match a.cmp(b) {
+                std::cmp::Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        match self_local.len().cmp(&other_local.len()) {
+            std::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+
+        // 3. Compare character offsets
+        self.character_offset.cmp(&other.character_offset)
+    }
 }
 
 impl fmt::Display for CfiPath {
@@ -59,7 +113,7 @@ impl fmt::Display for CfiPath {
 }
 
 /// Represents a Canonical Fragment Identifier (CFI), which can be a single point or a range.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EpubCfi {
     /// A single point in the EPUB.
     Point(CfiPath),
@@ -69,6 +123,17 @@ pub enum EpubCfi {
         start: CfiPath,
         end: CfiPath,
     },
+}
+
+/// Point CFIs are compared by their full path. Range CFIs and cross-type comparisons return `None`.
+impl PartialOrd for EpubCfi {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (EpubCfi::Point(a), EpubCfi::Point(b)) => Some(a.cmp(b)),
+            // Comparing a range to a point or two ranges is not well-defined by spec.
+            _ => None,
+        }
+    }
 }
 
 impl Default for EpubCfi {
@@ -111,15 +176,122 @@ impl EpubCfi {
     }
 
     /// Generates a standard base CFI path for a spine item.
-    /// Assuming a standard OPF structure where `<spine>` is the 3rd element (/6/6).
+    ///
+    /// In EPUB CFI, `/6` refers to the `<spine>` element (3rd child of `<package>`),
+    /// and itemrefs within it are even-numbered starting from 2.
     ///
     /// # Arguments
     /// * `spine_index` - The 0-based index of the item in the spine.
-    /// * `item_id` - The OPF manifest ID of the item for the assertion.
+    /// * `item_id` - The OPF manifest ID of the item, used as the assertion.
     pub fn generate_spine_base_cfi(spine_index: usize, item_id: &str) -> String {
-        // Spine itemref elements are even numbers starting from 2
+        // Spine elements are even-indexed: first item = 2, second = 4, etc.
         let item_cfi_index = (spine_index + 1) * 2;
-        format!("/6/6/{}[{}]!", item_cfi_index, item_id)
+        format!("/6/{}[{}]!", item_cfi_index, item_id)
+    }
+
+    /// Generates a spec-compliant CFI range string from two Point CFIs.
+    ///
+    /// The output format is `epubcfi(shared_path,start_local,end_local)` where `shared_path`
+    /// is the longest common ancestor path of both input CFIs.
+    ///
+    /// # Errors
+    /// Returns `EpubError::InvalidFormat` if either input is a Range CFI (not a Point).
+    pub fn generate_range(start: &EpubCfi, end: &EpubCfi) -> Result<String, EpubError> {
+        let (s, e) = match (start, end) {
+            (EpubCfi::Point(s), EpubCfi::Point(e)) => (s, e),
+            _ => {
+                return Err(EpubError::InvalidFormat(
+                    "generate_range requires two Point CFIs, not Range CFIs".to_string(),
+                ));
+            }
+        };
+
+        // Find the length of the common base path (steps before '!')
+        let common_base_len = s
+            .steps
+            .iter()
+            .zip(e.steps.iter())
+            .take_while(|(a, b)| a.index == b.index)
+            .count();
+
+        let shared_base: String = s.steps[..common_base_len]
+            .iter()
+            .map(|step| step.to_string())
+            .collect();
+
+        if common_base_len == s.steps.len() && common_base_len == e.steps.len() {
+            // Both CFIs share the same base path (same document). Parent includes the `!`.
+            // Find the common prefix of their local steps.
+            let s_local = s.local_steps.as_deref().unwrap_or(&[]);
+            let e_local = e.local_steps.as_deref().unwrap_or(&[]);
+
+            let common_local_len = s_local
+                .iter()
+                .zip(e_local.iter())
+                .take_while(|(a, b)| a.index == b.index)
+                .count();
+
+            let shared_local: String = s_local[..common_local_len]
+                .iter()
+                .map(|step| step.to_string())
+                .collect();
+
+            // Start relative path: diverging local steps + offset
+            let start_rel_steps: String = s_local[common_local_len..]
+                .iter()
+                .map(|step| step.to_string())
+                .collect();
+            let start_offset = s
+                .character_offset
+                .map(|o| format!(":{}", o))
+                .unwrap_or_default();
+            let start_rel = format!("{}{}", start_rel_steps, start_offset);
+
+            // End relative path: diverging local steps + offset
+            let end_rel_steps: String = e_local[common_local_len..]
+                .iter()
+                .map(|step| step.to_string())
+                .collect();
+            let end_offset = e
+                .character_offset
+                .map(|o| format!(":{}", o))
+                .unwrap_or_default();
+            let end_rel = format!("{}{}", end_rel_steps, end_offset);
+
+            Ok(format!(
+                "epubcfi({}!{},{},{})",
+                shared_base, shared_local, start_rel, end_rel
+            ))
+        } else {
+            // Cross-document range: shared path ends at the diverging base step.
+            // Each side includes its full remaining path.
+            let build_full = |path: &CfiPath, after: usize| -> String {
+                let remaining_base: String = path.steps[after..]
+                    .iter()
+                    .map(|step| step.to_string())
+                    .collect();
+                let local: String = path
+                    .local_steps
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|step| step.to_string())
+                    .collect();
+                let offset = path
+                    .character_offset
+                    .map(|o| format!(":{}", o))
+                    .unwrap_or_default();
+                format!("{}!{}{}", remaining_base, local, offset)
+            };
+
+            let start_full = build_full(s, common_base_len);
+            let end_full = build_full(e, common_base_len);
+
+            Ok(format!(
+                "epubcfi({},{},{})",
+                shared_base, start_full, end_full
+            ))
+        }
     }
 }
 
@@ -238,4 +410,78 @@ fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
     }
 
     Ok(steps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_spine_base_cfi_format() {
+        // Verify format: /6/<even_index>[id]!
+        assert_eq!(EpubCfi::generate_spine_base_cfi(0, "ch1"), "/6/2[ch1]!");
+        assert_eq!(EpubCfi::generate_spine_base_cfi(1, "ch2"), "/6/4[ch2]!");
+        assert_eq!(EpubCfi::generate_spine_base_cfi(4, "ch5"), "/6/10[ch5]!");
+    }
+
+    #[test]
+    fn test_cfi_step_numeric_ordering() {
+        let s2 = CfiStep::new(2, None);
+        let s10 = CfiStep::new(10, None);
+        // Numeric: 10 > 2, not lexicographic
+        assert!(s10 > s2);
+        assert!(s2 < s10);
+    }
+
+    #[test]
+    fn test_cfi_path_ordering() {
+        let p4 = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(4, None)],
+            local_steps: None,
+            character_offset: None,
+        };
+        let p10 = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(10, None)],
+            local_steps: None,
+            character_offset: None,
+        };
+        assert!(p4 < p10);
+    }
+
+    #[test]
+    fn test_cfi_point_comparison() {
+        let a = EpubCfi::from_str("epubcfi(/6/2!/4/2:5)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/2!/4/10:1)").unwrap();
+        assert!(a < b);
+
+        let a = EpubCfi::from_str("epubcfi(/6/2!/4/2:5)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/4!/4/2:0)").unwrap();
+        assert!(a < b); // chapter 2 comes before chapter 4
+    }
+
+    #[test]
+    fn test_generate_range_same_document() {
+        let start = EpubCfi::from_str("epubcfi(/6/4[chap01]!/4/2:5)").unwrap();
+        let end = EpubCfi::from_str("epubcfi(/6/4[chap01]!/4/2:10)").unwrap();
+        let range = EpubCfi::generate_range(&start, &end).unwrap();
+        // Both in same document, same local path → parent = /6/4[chap01]!/4/2
+        assert_eq!(range, "epubcfi(/6/4[chap01]!/4/2,:5,:10)");
+    }
+
+    #[test]
+    fn test_generate_range_cross_document() {
+        let start = EpubCfi::from_str("epubcfi(/6/2[ch1]!/4/2:0)").unwrap();
+        let end = EpubCfi::from_str("epubcfi(/6/4[ch2]!/4/2:0)").unwrap();
+        let range = EpubCfi::generate_range(&start, &end).unwrap();
+        // Different base paths → shared = /6
+        assert_eq!(range, "epubcfi(/6,/2[ch1]!/4/2:0,/4[ch2]!/4/2:0)");
+    }
+
+    #[test]
+    fn test_generate_range_requires_points() {
+        let range_cfi = EpubCfi::from_str("epubcfi(/6/4,/2:1,/2:5)").unwrap();
+        let point = EpubCfi::from_str("epubcfi(/6/4!/4/2:5)").unwrap();
+        assert!(EpubCfi::generate_range(&range_cfi, &point).is_err());
+    }
 }

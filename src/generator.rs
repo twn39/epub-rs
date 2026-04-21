@@ -418,6 +418,9 @@ impl EpubBuilder {
         id: impl Into<String>,
         file_path: P,
     ) -> Result<Self, EpubError> {
+        // Capture id early so we can use it for both spine and resource registration.
+        let id_str: String = id.into();
+
         let path = file_path.as_ref();
         let base_dir = path.parent().unwrap_or_else(|| Path::new(""));
 
@@ -491,10 +494,10 @@ impl EpubBuilder {
             }
         }
 
-        // Add the rewritten chapter
-        self.spine.push(SpineItem::new(id.into()));
+        // Add the rewritten chapter using the caller-provided id for both spine and manifest.
+        self.spine.push(SpineItem::new(id_str.clone()));
         self.resources.push(Resource {
-            id: filename.to_string(),
+            id: id_str,
             href: chapter_href,
             media_type: "application/xhtml+xml".to_string(),
             content: ResourceContent::Bytes(html_content),
@@ -751,8 +754,11 @@ impl EpubBuilder {
 
         let max_page = self.page_list.len(); // A rough estimate for total/max pages
 
+        // Use the real EPUB identifier so toc.ncx dtb:uid matches the OPF dc:identifier.
+        let uid = self.metadata.identifier.as_deref().unwrap_or("urn:uuid:epub-rs-default");
         let mut ncx = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"urn:uuid:default-epub-rs-id\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"{}\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"{}\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"{}\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"{}\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"{}\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n",
+            escape(uid),
             max_page,
             max_page,
             escape(title)
@@ -828,9 +834,13 @@ impl EpubBuilder {
         // <?xml version="1.0" encoding="UTF-8"?>
         writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
 
-        // <package version="3.0" unique-identifier="pub-id" xmlns="http://www.idpf.org/2007/opf">
+        // <package version="..." unique-identifier="pub-id" xmlns="http://www.idpf.org/2007/opf">
         let mut package = BytesStart::new("package");
-        package.push_attribute(("version", "3.0"));
+        let version_str = match self.version {
+            EpubVersion::V20 => "2.0",
+            EpubVersion::V30 => "3.0",
+        };
+        package.push_attribute(("version", version_str));
         package.push_attribute(("unique-identifier", "pub-id"));
         package.push_attribute(("xmlns", "http://www.idpf.org/2007/opf"));
         writer.write_event(Event::Start(package.clone()))?;
