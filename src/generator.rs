@@ -2,7 +2,6 @@
 use crate::error::EpubError;
 use crate::model::{EpubVersion, Metadata, SpineItem, TocEntry};
 use quick_xml::Writer;
-use quick_xml::escape::escape;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use std::io::{Read, Seek, Write};
 #[cfg(not(target_arch = "wasm32"))]
@@ -591,7 +590,7 @@ impl EpubBuilder {
         if has_toc {
             // EPUB 3 requires nav.xhtml
             if self.version == EpubVersion::V30 {
-                let nav_html = self.generate_nav_xhtml();
+                let nav_html = self.generate_nav_xhtml()?;
                 self.resources.push(Resource {
                     id: "nav".to_string(),
                     href: "nav.xhtml".to_string(),
@@ -607,7 +606,7 @@ impl EpubBuilder {
             }
 
             if has_ncx {
-                let ncx_xml = self.generate_ncx();
+                let ncx_xml = self.generate_ncx()?;
                 self.resources.push(Resource {
                     id: "ncx".to_string(),
                     href: "toc.ncx".to_string(),
@@ -692,122 +691,257 @@ impl EpubBuilder {
     }
 
     /// Generate EPUB 3 `nav.xhtml`
-    fn generate_nav_xhtml(&self) -> String {
-        let mut html = String::from(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\n<head><title>Navigation</title></head>\n<body>\n<nav epub:type=\"toc\" id=\"toc\">\n<h1>Table of Contents</h1>\n",
-        );
-        Self::build_nav_list(&self.toc, &mut html);
-        html.push_str("</nav>\n");
+    fn generate_nav_xhtml(&self) -> Result<String, EpubError> {
+        let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
 
+        // <?xml version="1.0" encoding="utf-8"?>
+        writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)))?;
+
+        // <!DOCTYPE html>
+        writer
+            .get_mut()
+            .write_all(
+                b"
+<!DOCTYPE html>
+",
+            )
+            .map_err(|e| EpubError::Io(e))?;
+
+        let mut html = BytesStart::new("html");
+        html.push_attribute(("xmlns", "http://www.w3.org/1999/xhtml"));
+        html.push_attribute(("xmlns:epub", "http://www.idpf.org/2007/ops"));
+        writer.write_event(Event::Start(html))?;
+
+        writer.write_event(Event::Start(BytesStart::new("head")))?;
+        writer.write_event(Event::Start(BytesStart::new("title")))?;
+        writer.write_event(Event::Text(BytesText::new("Navigation")))?;
+        writer.write_event(Event::End(BytesEnd::new("title")))?;
+        writer.write_event(Event::End(BytesEnd::new("head")))?;
+
+        writer.write_event(Event::Start(BytesStart::new("body")))?;
+
+        let mut nav_toc = BytesStart::new("nav");
+        nav_toc.push_attribute(("epub:type", "toc"));
+        nav_toc.push_attribute(("id", "toc"));
+        writer.write_event(Event::Start(nav_toc))?;
+
+        writer.write_event(Event::Start(BytesStart::new("h1")))?;
+        writer.write_event(Event::Text(BytesText::new("Table of Contents")))?;
+        writer.write_event(Event::End(BytesEnd::new("h1")))?;
+
+        Self::build_nav_list(&self.toc, &mut writer)?;
+
+        writer.write_event(Event::End(BytesEnd::new("nav")))?;
+
+        // Landmarks
         if !self.landmarks.is_empty() {
-            html.push_str(
-                "<nav epub:type=\"landmarks\" id=\"landmarks\">\n<h2>Landmarks</h2>\n<ol>\n",
-            );
+            let mut nav_landmarks = BytesStart::new("nav");
+            nav_landmarks.push_attribute(("epub:type", "landmarks"));
+            nav_landmarks.push_attribute(("id", "landmarks"));
+            writer.write_event(Event::Start(nav_landmarks))?;
+
+            writer.write_event(Event::Start(BytesStart::new("h2")))?;
+            writer.write_event(Event::Text(BytesText::new("Landmarks")))?;
+            writer.write_event(Event::End(BytesEnd::new("h2")))?;
+
+            writer.write_event(Event::Start(BytesStart::new("ol")))?;
             for landmark in &self.landmarks {
-                html.push_str(&format!(
-                    "  <li><a epub:type=\"{}\" href=\"{}\">{}</a></li>\n",
-                    escape(&landmark.epub_type),
-                    escape(&landmark.href),
-                    escape(&landmark.title)
-                ));
+                writer.write_event(Event::Start(BytesStart::new("li")))?;
+                let mut a = BytesStart::new("a");
+                a.push_attribute(("epub:type", landmark.epub_type.as_str()));
+                a.push_attribute(("href", landmark.href.as_str()));
+                writer.write_event(Event::Start(a))?;
+                writer.write_event(Event::Text(BytesText::new(&landmark.title)))?;
+                writer.write_event(Event::End(BytesEnd::new("a")))?;
+                writer.write_event(Event::End(BytesEnd::new("li")))?;
             }
-            html.push_str("</ol>\n</nav>\n");
+            writer.write_event(Event::End(BytesEnd::new("ol")))?;
+            writer.write_event(Event::End(BytesEnd::new("nav")))?;
         }
 
+        // Page List
         if !self.page_list.is_empty() {
-            html.push_str(
-                "<nav epub:type=\"page-list\" id=\"page-list\">\n<h2>Page List</h2>\n<ol>\n",
-            );
+            let mut nav_pages = BytesStart::new("nav");
+            nav_pages.push_attribute(("epub:type", "page-list"));
+            nav_pages.push_attribute(("id", "page-list"));
+            writer.write_event(Event::Start(nav_pages))?;
+
+            writer.write_event(Event::Start(BytesStart::new("h2")))?;
+            writer.write_event(Event::Text(BytesText::new("Page List")))?;
+            writer.write_event(Event::End(BytesEnd::new("h2")))?;
+
+            writer.write_event(Event::Start(BytesStart::new("ol")))?;
             for page in &self.page_list {
-                html.push_str(&format!(
-                    "  <li><a href=\"{}\">{}</a></li>\n",
-                    escape(&page.href),
-                    escape(&page.name)
-                ));
+                writer.write_event(Event::Start(BytesStart::new("li")))?;
+                let mut a = BytesStart::new("a");
+                a.push_attribute(("href", page.href.as_str()));
+                writer.write_event(Event::Start(a))?;
+                writer.write_event(Event::Text(BytesText::new(&page.name)))?;
+                writer.write_event(Event::End(BytesEnd::new("a")))?;
+                writer.write_event(Event::End(BytesEnd::new("li")))?;
             }
-            html.push_str("</ol>\n</nav>\n");
+            writer.write_event(Event::End(BytesEnd::new("ol")))?;
+            writer.write_event(Event::End(BytesEnd::new("nav")))?;
         }
 
-        html.push_str("</body>\n</html>");
-        html
+        writer.write_event(Event::End(BytesEnd::new("body")))?;
+        writer.write_event(Event::End(BytesEnd::new("html")))?;
+
+        let result = String::from_utf8(writer.into_inner())
+            .map_err(|e| EpubError::InvalidFormat(e.to_string()))?;
+        Ok(result)
     }
 
-    fn build_nav_list(entries: &[TocEntry], html: &mut String) {
+    fn build_nav_list(entries: &[TocEntry], writer: &mut Writer<Vec<u8>>) -> Result<(), EpubError> {
         if entries.is_empty() {
-            return;
+            return Ok(());
         }
-        html.push_str("<ol>\n");
+        writer.write_event(Event::Start(BytesStart::new("ol")))?;
+
         for entry in entries {
-            html.push_str(&format!(
-                "  <li><a href=\"{}\">{}</a>",
-                escape(&entry.href),
-                escape(&entry.title)
-            ));
+            writer.write_event(Event::Start(BytesStart::new("li")))?;
+            let mut a = BytesStart::new("a");
+            a.push_attribute(("href", entry.href.as_str()));
+            writer.write_event(Event::Start(a))?;
+            writer.write_event(Event::Text(BytesText::new(&entry.title)))?;
+            writer.write_event(Event::End(BytesEnd::new("a")))?;
+
             if !entry.children.is_empty() {
-                html.push('\n');
-                Self::build_nav_list(&entry.children, html);
+                Self::build_nav_list(&entry.children, writer)?;
             }
-            html.push_str("</li>\n");
+            writer.write_event(Event::End(BytesEnd::new("li")))?;
         }
-        html.push_str("</ol>\n");
+
+        writer.write_event(Event::End(BytesEnd::new("ol")))?;
+        Ok(())
     }
 
     /// Generate EPUB 2 compatible `toc.ncx`
-    fn generate_ncx(&self) -> String {
+    fn generate_ncx(&self) -> Result<String, EpubError> {
+        let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
+
         let title = self.metadata.title.as_deref().unwrap_or("Untitled");
-
-        let max_page = self.page_list.len(); // A rough estimate for total/max pages
-
-        // Use the real EPUB identifier so toc.ncx dtb:uid matches the OPF dc:identifier.
+        let max_page = self.page_list.len().to_string();
         let uid = self
             .metadata
             .identifier
             .as_deref()
             .unwrap_or("urn:uuid:epub-rs-default");
-        let mut ncx = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n  <head>\n    <meta name=\"dtb:uid\" content=\"{}\"/>\n    <meta name=\"dtb:depth\" content=\"1\"/>\n    <meta name=\"dtb:totalPageCount\" content=\"{}\"/>\n    <meta name=\"dtb:maxPageNumber\" content=\"{}\"/>\n  </head>\n  <docTitle><text>{}</text></docTitle>\n  <navMap>\n",
-            escape(uid),
-            max_page,
-            max_page,
-            escape(title)
-        );
 
+        writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
+
+        let mut ncx = BytesStart::new("ncx");
+        ncx.push_attribute(("xmlns", "http://www.daisy.org/z3986/2005/ncx/"));
+        ncx.push_attribute(("version", "2005-1"));
+        writer.write_event(Event::Start(ncx))?;
+
+        writer.write_event(Event::Start(BytesStart::new("head")))?;
+
+        let mut meta_uid = BytesStart::new("meta");
+        meta_uid.push_attribute(("name", "dtb:uid"));
+        meta_uid.push_attribute(("content", uid));
+        writer.write_event(Event::Empty(meta_uid))?;
+
+        let mut meta_depth = BytesStart::new("meta");
+        meta_depth.push_attribute(("name", "dtb:depth"));
+        meta_depth.push_attribute(("content", "1")); // 1 or dynamic depth
+        writer.write_event(Event::Empty(meta_depth))?;
+
+        let mut meta_total = BytesStart::new("meta");
+        meta_total.push_attribute(("name", "dtb:totalPageCount"));
+        meta_total.push_attribute(("content", max_page.as_str()));
+        writer.write_event(Event::Empty(meta_total))?;
+
+        let mut meta_max = BytesStart::new("meta");
+        meta_max.push_attribute(("name", "dtb:maxPageNumber"));
+        meta_max.push_attribute(("content", max_page.as_str()));
+        writer.write_event(Event::Empty(meta_max))?;
+
+        writer.write_event(Event::End(BytesEnd::new("head")))?;
+
+        writer.write_event(Event::Start(BytesStart::new("docTitle")))?;
+        writer.write_event(Event::Start(BytesStart::new("text")))?;
+        writer.write_event(Event::Text(BytesText::new(title)))?;
+        writer.write_event(Event::End(BytesEnd::new("text")))?;
+        writer.write_event(Event::End(BytesEnd::new("docTitle")))?;
+
+        let navmap = BytesStart::new("navMap");
+        writer.write_event(Event::Start(navmap))?;
         let mut play_order = 0;
-        Self::build_ncx_navpoints(&self.toc, &mut ncx, &mut play_order);
-
-        ncx.push_str("  </navMap>\n");
+        Self::build_ncx_navpoints(&self.toc, &mut writer, &mut play_order)?;
+        writer.write_event(Event::End(BytesEnd::new("navMap")))?;
 
         if !self.page_list.is_empty() {
-            ncx.push_str("  <pageList>\n    <navLabel><text>Pages</text></navLabel>\n");
+            writer.write_event(Event::Start(BytesStart::new("pageList")))?;
+            writer.write_event(Event::Start(BytesStart::new("navLabel")))?;
+            writer.write_event(Event::Start(BytesStart::new("text")))?;
+            writer.write_event(Event::Text(BytesText::new("Pages")))?;
+            writer.write_event(Event::End(BytesEnd::new("text")))?;
+            writer.write_event(Event::End(BytesEnd::new("navLabel")))?;
+
             for (i, page) in self.page_list.iter().enumerate() {
                 play_order += 1;
-                ncx.push_str(&format!(
-                    "    <pageTarget id=\"page-{}\" type=\"normal\" value=\"{}\" playOrder=\"{}\">\n      <navLabel><text>{}</text></navLabel>\n      <content src=\"{}\"/>\n    </pageTarget>\n",
-                    i + 1, escape(&page.name), play_order, escape(&page.name), escape(&page.href)
-                ));
+
+                let mut target = BytesStart::new("pageTarget");
+                target.push_attribute(("id", format!("page-{}", i + 1).as_str()));
+                target.push_attribute(("type", "normal"));
+                target.push_attribute(("value", page.name.as_str()));
+                target.push_attribute(("playOrder", play_order.to_string().as_str()));
+                writer.write_event(Event::Start(target))?;
+
+                writer.write_event(Event::Start(BytesStart::new("navLabel")))?;
+                writer.write_event(Event::Start(BytesStart::new("text")))?;
+                writer.write_event(Event::Text(BytesText::new(&page.name)))?;
+                writer.write_event(Event::End(BytesEnd::new("text")))?;
+                writer.write_event(Event::End(BytesEnd::new("navLabel")))?;
+
+                let mut content = BytesStart::new("content");
+                content.push_attribute(("src", page.href.as_str()));
+                writer.write_event(Event::Empty(content))?;
+
+                writer.write_event(Event::End(BytesEnd::new("pageTarget")))?;
             }
-            ncx.push_str("  </pageList>\n");
+            writer.write_event(Event::End(BytesEnd::new("pageList")))?;
         }
 
-        ncx.push_str("</ncx>");
-        ncx
+        writer.write_event(Event::End(BytesEnd::new("ncx")))?;
+
+        let result = String::from_utf8(writer.into_inner())
+            .map_err(|e| EpubError::InvalidFormat(e.to_string()))?;
+        Ok(result)
     }
 
-    fn build_ncx_navpoints(entries: &[TocEntry], ncx: &mut String, play_order: &mut usize) {
+    fn build_ncx_navpoints(
+        entries: &[TocEntry],
+        writer: &mut Writer<Vec<u8>>,
+        play_order: &mut usize,
+    ) -> Result<(), EpubError> {
         for entry in entries {
             *play_order += 1;
-            let current_order = *play_order;
-            ncx.push_str(&format!(
-                "    <navPoint id=\"navPoint-{}\" playOrder=\"{}\">\n      <navLabel><text>{}</text></navLabel>\n      <content src=\"{}\"/>\n",
-                current_order, current_order, escape(&entry.title), escape(&entry.href)
-            ));
+            let current_order = play_order.to_string();
+
+            let mut nav_point = BytesStart::new("navPoint");
+            nav_point.push_attribute(("id", format!("navPoint-{}", current_order).as_str()));
+            nav_point.push_attribute(("playOrder", current_order.as_str()));
+            writer.write_event(Event::Start(nav_point))?;
+
+            writer.write_event(Event::Start(BytesStart::new("navLabel")))?;
+            writer.write_event(Event::Start(BytesStart::new("text")))?;
+            writer.write_event(Event::Text(BytesText::new(&entry.title)))?;
+            writer.write_event(Event::End(BytesEnd::new("text")))?;
+            writer.write_event(Event::End(BytesEnd::new("navLabel")))?;
+
+            let mut content = BytesStart::new("content");
+            content.push_attribute(("src", entry.href.as_str()));
+            writer.write_event(Event::Empty(content))?;
 
             if !entry.children.is_empty() {
-                Self::build_ncx_navpoints(&entry.children, ncx, play_order);
+                Self::build_ncx_navpoints(&entry.children, writer, play_order)?;
             }
 
-            ncx.push_str("    </navPoint>\n");
+            writer.write_event(Event::End(BytesEnd::new("navPoint")))?;
         }
+        Ok(())
     }
 
     /// Helper to infer EPUB 3 properties (scripted, mathml, svg) from HTML content.
