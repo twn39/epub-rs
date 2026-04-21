@@ -58,16 +58,17 @@ fn safe_join(root: &Path, path: &str) -> Result<PathBuf, EpubError> {
 
     for component in Path::new(path).components() {
         match component {
-            Component::ParentDir => {
+            Component::ParentDir if !resolved.pop() || !resolved.starts_with(root) => {
                 // Pop one level; if we can no longer stay inside root, reject.
-                if !resolved.pop() || !resolved.starts_with(root) {
-                    return Err(EpubError::InvalidFormat(format!(
-                        "Security: path '{}' attempts to escape the EPUB root directory",
-                        path
-                    )));
-                }
+                return Err(EpubError::InvalidFormat(format!(
+                    "Security: path '{}' attempts to escape the EPUB root directory",
+                    path
+                )));
             }
-            Component::Normal(c) => resolved.push(c),
+            Component::ParentDir => {} // Still within bounds after pop
+            Component::Normal(c) => {
+                resolved.push(c);
+            }
             Component::CurDir => {} // '.' — stay where we are
             // RootDir or Prefix would also be suspicious; ignore silently (they can't
             // appear in well-formed relative paths that come from inside a ZIP).
