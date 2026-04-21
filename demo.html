@@ -188,6 +188,7 @@
         import init, { EpubParser } from './pkg/epub_rs.js';
 
         let parser = null;
+        let assetParser = null;
         let book = null;
         let currentSpineIndex = 0;
         let blobUrls = [];
@@ -229,6 +230,7 @@
                 // Create new parser and parse the EPUB
                 const t1 = performance.now();
                 parser = new EpubParser(bytes);
+                assetParser = new EpubParser(bytes); // Separate instance for callbacks to avoid Rust mutable aliasing
                 const t2 = performance.now();
                 book = parser.parse();
                 const t3 = performance.now();
@@ -444,7 +446,8 @@
             try {
                 // Remove URI fragments if any
                 const pathOnly = absPath.split('#')[0].split('?')[0];
-                const bytes = parser.get_file_bytes(pathOnly);
+                // Use assetParser to avoid Wasm re-entrancy panic (borrowing mut self twice)
+                const bytes = assetParser.get_file_bytes(pathOnly);
                 const blob = new Blob([bytes], { type: getMimeType(pathOnly) });
                 const url = URL.createObjectURL(blob);
                 blobUrls.push(url);
