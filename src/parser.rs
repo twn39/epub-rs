@@ -635,44 +635,55 @@ impl<P: EpubProvider> EpubArchive<P> {
     /// Smart API to find and extract the cover image of the EPUB.
     /// Returns the bytes of the image and its media_type (e.g., "image/jpeg").
     pub fn get_cover_image(&mut self, book: &EpubBook) -> Result<(Vec<u8>, String), EpubError> {
-        let mut cover_item = None;
+        let mut best_match = None;
 
-        // 1. Try EPUB 3 properties="cover-image"
-        if cover_item.is_none() {
-            cover_item = book
-                .manifest
-                .values()
-                .find(|i| i.properties.iter().any(|p| p == "cover-image"));
-        }
-
-        // 2. Try EPUB 2 meta name="cover"
-        if cover_item.is_none()
-            && let Some(cover_id) = &book.metadata.cover_id
+        // 1. O(1) Fast path: EPUB 2 meta name="cover"
+        if let Some(cover_id) = &book.metadata.cover_id
+            && let Some(item) = book.manifest.get(cover_id)
         {
-            cover_item = book.manifest.get(cover_id);
+            best_match = Some((&item.id, &item.media_type));
         }
 
-        // 3. Fallback: guess by ID or href for bad formatted books
-        if cover_item.is_none() {
-            cover_item = book.manifest.values().find(|i| {
-                let id_lower = i.id.to_lowercase();
-                let href_lower = i.href.to_lowercase();
-                (id_lower.contains("cover") || href_lower.contains("cover"))
-                    && i.media_type.starts_with("image/")
-            });
+        // 2. O(N) Single-pass scan for EPUB 3 cover or heuristics
+        if best_match.is_none() {
+            let mut fallback_name = None;
+            let mut fallback_any = None;
+
+            for item in book.manifest.values() {
+                // Priority A: Exact EPUB 3 property
+                if item.properties.iter().any(|p| p == "cover-image") {
+                    best_match = Some((&item.id, &item.media_type));
+                    break; // Absolute certainty, we can stop scanning
+                }
+
+                if item.media_type.starts_with("image/") {
+                    // Priority B: Filename heuristic
+                    if fallback_name.is_none() {
+                        let id_lower = item.id.to_lowercase();
+                        let href_lower = item.href.to_lowercase();
+                        if id_lower.contains("cover") || href_lower.contains("cover") {
+                            fallback_name = Some((&item.id, &item.media_type));
+                        }
+                    }
+                    // Priority C: Any image fallback
+                    if fallback_any.is_none() {
+                        fallback_any = Some((&item.id, &item.media_type));
+                    }
+                }
+            }
+
+            if best_match.is_none() {
+                best_match = fallback_name.or(fallback_any);
+            }
         }
 
-        // 4. Extreme Fallback: find the first image in the manifest and hope it's the cover
-        if cover_item.is_none() {
-            cover_item = book
-                .manifest
-                .values()
-                .find(|i| i.media_type.starts_with("image/"));
-        }
+        // Clone the tiny IDs to immediately drop the borrow on `book.manifest`
+        if let Some((id, media_type)) = best_match {
+            let id_clone = id.clone();
+            let media_type_clone = media_type.clone();
 
-        if let Some(item) = cover_item {
-            let bytes = self.get_resource_by_id(book, &item.id)?;
-            Ok((bytes, item.media_type.clone()))
+            let bytes = self.get_resource_by_id(book, &id_clone)?;
+            Ok((bytes, media_type_clone))
         } else {
             Err(EpubError::InvalidFormat(
                 "No cover image found in EPUB".to_string(),
