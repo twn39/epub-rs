@@ -222,7 +222,11 @@ impl EpubGenerator {
     /// Will throw a JS error with a formatted array of strings if broken.
     #[wasm_bindgen]
     pub fn validate(&self) -> Result<(), JsValue> {
-        self.builder.as_ref().unwrap().validate().map_err(|e| e.to_string().into())
+        self.builder
+            .as_ref()
+            .unwrap()
+            .validate()
+            .map_err(|e| e.to_string().into())
     }
 
     /// Add a CSS stylesheet to the EPUB.
