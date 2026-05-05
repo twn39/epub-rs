@@ -2,6 +2,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
+use std::collections::HashMap;
 use std::io::{Read, Seek};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Component, Path, PathBuf};
@@ -25,6 +26,17 @@ pub trait EpubProvider {
 /// A provider that reads EPUB files from a standard ZIP archive.
 pub struct ZipProvider<R: Read + Seek> {
     archive: ZipArchive<R>,
+
+    /// Lazy fallback cache: logical path → resolved ZIP entry name.
+    ///
+    /// Populated **only** when a case-insensitive or extension-alias fallback
+    /// is triggered (i.e., the exact-match fast path missed). For well-formed
+    /// EPUBs this map stays permanently empty — zero memory overhead,
+    /// zero construction cost.
+    ///
+    /// Once a broken path has been resolved via the O(n) scan, the result is
+    /// stored here so all subsequent accesses to the same path are O(1).
+    fallback_cache: HashMap<String, String>,
 }
 
 /// Image file extensions that are considered interchangeable when a path can't be found.
@@ -36,30 +48,56 @@ const IMAGE_EXT_ALIASES: &[&[&str]] = &[&["jpg", "jpeg", "png", "gif", "webp", "
 impl<R: Read + Seek> ZipProvider<R> {
     pub fn new(reader: R) -> Result<Self, EpubError> {
         let archive = ZipArchive::new(reader)?;
-        Ok(Self { archive })
+        Ok(Self {
+            archive,
+            fallback_cache: HashMap::new(),
+        })
     }
 
     /// Resolve a logical path to a real entry name that exists in the archive.
     ///
-    /// Lookup order:
-    /// 1. Exact match (`by_name`).
-    /// 2. Case-insensitive scan across all entries.
-    /// 3. Case-insensitive scan with image-extension aliases (handles mismatched `.jpg`/`.png`).
+    /// # Lookup order and complexity
+    ///
+    /// 1. **Exact match** — O(1) via the zip crate's internal `IndexMap`.
+    ///    This covers 99%+ of calls for well-formed EPUBs; the function returns
+    ///    immediately with no heap allocation.
+    ///
+    /// 2. **Fallback cache** — O(1) `HashMap` lookup. Populated lazily on the
+    ///    first time a broken path is resolved. Subsequent accesses to the same
+    ///    broken path skip the O(n) scan.
+    ///
+    /// 3. **Linear scan** — O(n) over all ZIP entry names, runs **at most once
+    ///    per unique broken path**. Handles both case-insensitive matching and
+    ///    image-extension aliases (`.jpg` ↔ `.png` etc.).
     ///
     /// Returns `None` if no matching entry can be found.
-    fn resolve_zip_name(&self, path: &str) -> Option<String> {
-        // 1. Exact match — cheapest, try first.
+    fn resolve_zip_name(&mut self, path: &str) -> Option<String> {
+        // 1. Exact match — O(1). Fast path for all well-formed EPUBs.
         if self.archive.index_for_name(path).is_some() {
             return Some(path.to_string());
         }
 
-        let path_lower = path.to_lowercase();
+        // 2. Fallback cache — O(1). Avoids re-scanning for previously resolved
+        //    broken paths (e.g. a misnamed cover image accessed many times).
+        if let Some(cached) = self.fallback_cache.get(path) {
+            return Some(cached.clone());
+        }
 
-        // Split the stem and extension for alias fallback.
-        let (stem_lower, ext_lower): (&str, &str) = match path_lower.rfind('.') {
-            Some(dot) => (&path_lower[..dot], &path_lower[dot + 1..]),
-            None => (path_lower.as_str(), ""),
-        };
+        // 3. Linear scan — O(n). Runs at most once per unique broken path.
+        //    Pass &self.archive separately so we can borrow &mut self.fallback_cache
+        //    afterwards (disjoint field borrows, allowed by Rust NLL).
+        let resolved = Self::scan_fallback(&self.archive, path)?;
+        self.fallback_cache.insert(path.to_string(), resolved.clone());
+        Some(resolved)
+    }
+
+    /// O(n) linear scan for case-insensitive and extension-alias fallbacks.
+    ///
+    /// Accepts `&ZipArchive<R>` instead of `&self` so the caller can mutably
+    /// borrow `self.fallback_cache` in the same scope (disjoint field borrow).
+    fn scan_fallback(archive: &ZipArchive<R>, path: &str) -> Option<String> {
+        let path_lower = path.to_lowercase();
+        let (stem_lower, ext_lower) = split_stem_ext(&path_lower);
 
         // Determine the alias group for this extension (if any).
         let alias_group: Option<&[&str]> = IMAGE_EXT_ALIASES
@@ -67,32 +105,28 @@ impl<R: Read + Seek> ZipProvider<R> {
             .find(|group| group.contains(&ext_lower))
             .copied();
 
-        // 2 & 3: Single linear scan over all entry names.
-        // Collect all names then do the comparison (avoids borrow conflict with archive).
-        let names: Vec<String> = self.archive.file_names().map(|s| s.to_string()).collect();
+        // Collect all entry names into an owned Vec to avoid holding an immutable
+        // borrow on `archive` when the caller later calls `archive.by_name()` mutably.
+        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
 
-        for name in &names {
+        names.into_iter().find_map(|name| {
             let name_lower = name.to_lowercase();
 
-            // 2. Case-insensitive exact path match.
+            // Case-insensitive exact path match.
             if name_lower == path_lower {
-                return Some(name.clone());
+                return Some(name);
             }
 
-            // 3. Case-insensitive match with extension alias.
+            // Case-insensitive match with extension alias.
             if let Some(aliases) = alias_group {
-                let (name_stem_lower, name_ext_lower): (&str, &str) = match name_lower.rfind('.') {
-                    Some(dot) => (&name_lower[..dot], &name_lower[dot + 1..]),
-                    None => (name_lower.as_str(), ""),
-                };
-
-                if name_stem_lower == stem_lower && aliases.contains(&name_ext_lower) {
-                    return Some(name.clone());
+                let (name_stem, name_ext) = split_stem_ext(&name_lower);
+                if name_stem == stem_lower && aliases.contains(&name_ext) {
+                    return Some(name);
                 }
             }
-        }
 
-        None
+            None
+        })
     }
 }
 
@@ -115,6 +149,20 @@ impl<R: Read + Seek> EpubProvider for ZipProvider<R> {
         // This matches the Readium `ArchiveEntryLength` strategy expectation:
         // the position count is based on the content length, not the compressed storage size.
         Ok(self.archive.by_name(&resolved)?.size())
+    }
+}
+
+// ── Utility ───────────────────────────────────────────────────────────────────
+
+/// Split a **lowercase** path into `(stem, extension)` where `extension` is the
+/// part after the last `.`, or `""` if no dot is present.
+///
+/// Both slices reference the original string to avoid extra allocations.
+#[inline]
+fn split_stem_ext(lower_path: &str) -> (&str, &str) {
+    match lower_path.rfind('.') {
+        Some(dot) => (&lower_path[..dot], &lower_path[dot + 1..]),
+        None => (lower_path, ""),
     }
 }
 
@@ -207,7 +255,7 @@ mod tests {
     #[test]
     fn test_zip_provider_lookup() {
         let data = create_mock_zip();
-        let provider = ZipProvider::new(Cursor::new(data)).unwrap();
+        let mut provider = ZipProvider::new(Cursor::new(data)).unwrap();
 
         // 1. Exact match
         assert!(provider.resolve_zip_name("OEBPS/image.png").is_some());
@@ -229,6 +277,72 @@ mod tests {
         // 4. Missing file
         assert!(provider.resolve_zip_name("missing.txt").is_none());
     }
+
+    #[test]
+    fn exact_match_does_not_populate_fallback_cache() {
+        // For well-formed EPUBs the fallback_cache must stay empty.
+        let data = create_mock_zip();
+        let mut provider = ZipProvider::new(Cursor::new(data)).unwrap();
+
+        // Exact-match paths must not touch the fallback_cache.
+        provider.resolve_zip_name("OEBPS/image.png");
+        provider.resolve_zip_name("OEBPS/Text/Chapter1.xhtml");
+
+        assert!(
+            provider.fallback_cache.is_empty(),
+            "fallback_cache must stay empty when all lookups are exact matches"
+        );
+    }
+
+    #[test]
+    fn fallback_cache_populated_after_first_broken_path() {
+        // A case-mismatched path triggers the O(n) scan exactly once, then
+        // the result is stored in fallback_cache for O(1) subsequent access.
+        let data = create_mock_zip();
+        let mut provider = ZipProvider::new(Cursor::new(data)).unwrap();
+
+        assert!(provider.fallback_cache.is_empty(), "cache must start empty");
+
+        // First access: triggers O(n) scan, caches result.
+        let resolved = provider.resolve_zip_name("oebps/text/chapter1.xhtml");
+        assert_eq!(resolved.as_deref(), Some("OEBPS/Text/Chapter1.xhtml"));
+        assert_eq!(
+            provider.fallback_cache.len(),
+            1,
+            "cache must contain exactly one entry after first broken-path access"
+        );
+
+        // Second access: hits the cache, no re-scan.
+        let resolved2 = provider.resolve_zip_name("oebps/text/chapter1.xhtml");
+        assert_eq!(resolved2.as_deref(), Some("OEBPS/Text/Chapter1.xhtml"));
+        assert_eq!(
+            provider.fallback_cache.len(),
+            1,
+            "cache size must not grow on repeated access to the same broken path"
+        );
+    }
+
+    #[test]
+    fn fallback_cache_extension_alias_cached() {
+        // Extension-alias fallback is also cached after first resolution.
+        let data = create_mock_zip();
+        let mut provider = ZipProvider::new(Cursor::new(data)).unwrap();
+
+        // First access via alias: scan + cache.
+        let r1 = provider.resolve_zip_name("OEBPS/image.jpg");
+        assert_eq!(r1.as_deref(), Some("OEBPS/image.png"));
+        assert_eq!(provider.fallback_cache.len(), 1);
+
+        // Second access: O(1) cache hit, result identical.
+        let r2 = provider.resolve_zip_name("OEBPS/image.jpg");
+        assert_eq!(r2, r1, "cached alias result must equal initial scan result");
+        assert_eq!(
+            provider.fallback_cache.len(),
+            1,
+            "cache must not grow on repeated alias lookup"
+        );
+    }
+
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
