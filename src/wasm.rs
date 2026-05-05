@@ -247,49 +247,33 @@ impl EpubParser {
 /// It purely parses the CFI string and converts the local path into three
 /// complementary resolution strategies that the JS side can execute:
 ///
-/// ```json
-/// {
-///   "start": {
-///     "spine_index": 1,
-///     "steps": [{"node_type": "element", "index": 1, "id": "body01"}, ...],
-///     "xpath": "./*/*[position()=2 and @id='body01']/...",
-///     "id_shortcut": "para05",
-///     "character_offset": 3,
-///     "is_text_node": true
-///   },
-///   "end": null   // Some({...}) for Range CFIs
-/// }
-/// ```
+/// JSON shape:
 ///
-/// ## JS usage
-/// ```js
-/// const result = resolve_cfi("epubcfi(/6/4[ch1]!/4[body]/10[p5]/2/1:3)");
-/// const { start } = result;
+///     {
+///       "start": {
+///         "spine_index": 1,
+///         "steps": [{"node_type": "element", "index": 1, "id": "body01"}, ...],
+///         "xpath": ".//p[@id='para05']",
+///         "id_shortcut": "para05",
+///         "character_offset": 3,
+///         "is_text_node": true
+///       },
+///       "end": null
+///     }
 ///
-/// // Strategy 1 — O(1) getElementById (fastest)
-/// let node = start.id_shortcut ? doc.getElementById(start.id_shortcut) : null;
+/// JS usage example:
 ///
-/// // Strategy 2 — XPath (semantically exact, element-count aware)
-/// if (!node) node = doc.evaluate(start.xpath, doc, null, 9, null).singleNodeValue;
-///
-/// // Strategy 3 — walkToNode (most faithful fallback)
-/// if (!node) {
-///   node = doc.documentElement;
-///   for (const step of start.steps) {
-///     node = step.node_type === "element"
-///       ? (step.id ? doc.getElementById(step.id) : node.children[step.index])
-///       : textNodes(node)[step.index];
-///     if (!node) break;
-///   }
-/// }
-/// if (start.is_text_node && start.character_offset != null)
-///   range.setStart(node, start.character_offset);
-/// ```
+///     const result = resolve_cfi("epubcfi(/6/4[ch1]!/4[body]/10[p5]/2/1:3)");
+///     const { start } = result;
+///     let node = start.id_shortcut
+///       ? doc.getElementById(start.id_shortcut)
+///       : doc.evaluate(start.xpath, doc, null, 9, null).singleNodeValue;
+///     if (start.is_text_node && start.character_offset != null)
+///       range.setStart(node, start.character_offset);
 ///
 /// **Why no CSS selector?** `*:nth-child(N)` counts all sibling nodes (including
 /// text nodes), while CFI indices count only element siblings via `parent.children`.
 /// This semantic mismatch causes incorrect targeting on mixed-content documents.
-/// See epub.js issue #561 and `walkToNode` for the authoritative approach.
 #[wasm_bindgen]
 pub fn resolve_cfi(cfi_str: &str) -> Result<JsValue, JsValue> {
     use std::str::FromStr;
