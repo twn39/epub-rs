@@ -13,3 +13,7 @@ pub use model::EpubBook;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
+
+/// C FFI layer — enabled when the `ffi` feature is active (native targets only).
+#[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
+pub mod ffi;
