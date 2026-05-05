@@ -18,7 +18,8 @@ use std::io::{Read, Seek};
 
 // Re-export public types that were previously in parser.rs top-level
 pub use positions::{
-    ArchiveEntryLength, BYTES_PER_POSITION, ReflowableStrategy, recommended_reflowable_strategy,
+    ArchiveEntryLength, BYTES_PER_POSITION, PositionIndex, ReflowableStrategy,
+    recommended_reflowable_strategy,
 };
 
 // ── Core struct ───────────────────────────────────────────────────────────────
