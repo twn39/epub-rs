@@ -14,6 +14,12 @@ use crate::error::EpubError;
 pub trait EpubProvider {
     /// Read a file from the package into a reader stream.
     fn read_file<'a>(&'a mut self, path: &str) -> Result<Box<dyn Read + 'a>, EpubError>;
+
+    /// Returns the uncompressed byte size of the entry at `path`.
+    ///
+    /// Used by the byte-based position algorithm (`ArchiveEntryLength` strategy) to determine
+    /// how many reading positions a spine item contributes, without reading its full content.
+    fn entry_length(&mut self, path: &str) -> Result<u64, EpubError>;
 }
 
 /// A provider that reads EPUB files from a standard ZIP archive.
@@ -100,6 +106,16 @@ impl<R: Read + Seek> EpubProvider for ZipProvider<R> {
         let file = self.archive.by_name(&resolved)?;
         Ok(Box::new(file))
     }
+
+    fn entry_length(&mut self, path: &str) -> Result<u64, EpubError> {
+        let resolved = self
+            .resolve_zip_name(path)
+            .ok_or(EpubError::Zip(zip::result::ZipError::FileNotFound))?;
+        // `ZipFile::size()` returns the *uncompressed* byte size of the entry.
+        // This matches the Readium `ArchiveEntryLength` strategy expectation:
+        // the position count is based on the content length, not the compressed storage size.
+        Ok(self.archive.by_name(&resolved)?.size())
+    }
 }
 
 /// A provider that reads EPUB files directly from an unzipped, exploded directory.
@@ -160,6 +176,11 @@ impl EpubProvider for DirProvider {
         let full_path = safe_join(&self.root, path)?;
         let file = File::open(&full_path).map_err(EpubError::Io)?;
         Ok(Box::new(file))
+    }
+
+    fn entry_length(&mut self, path: &str) -> Result<u64, EpubError> {
+        let full_path = safe_join(&self.root, path)?;
+        Ok(std::fs::metadata(&full_path).map_err(EpubError::Io)?.len())
     }
 }
 

@@ -7,6 +7,95 @@
 use crate::error::EpubError;
 use std::fmt;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CFI Resolution types  (CFI → structured DOM descriptors)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Whether a CFI step targets an element node or a text node.
+///
+/// From epub.js `parseStep`: even CFI indices = element, odd = text.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeType {
+    /// The step refers to an element child (even CFI index).
+    /// Traverse using `parent.children[index]` (HTMLCollection, elements only).
+    Element,
+    /// The step refers to a text node (odd CFI index).
+    /// Traverse using `textNodes(parent)[index]` as in epub.js.
+    Text,
+}
+
+/// A single decoded CFI step, ready for JS-side `walkToNode` execution.
+///
+/// Mirrors epub.js's internal step object `{type, index, id}` produced by `parseStep()`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ResolvedStep {
+    /// The DOM node kind to look up.
+    pub node_type: NodeType,
+
+    /// 0-based index within the appropriate sibling collection.
+    ///
+    /// For `Element`: index into `parent.children` (element siblings only).
+    /// Formula: `(cfi_step / 2) - 1`
+    ///
+    /// For `Text`: index into `textNodes(parent)` (text siblings only).
+    /// Formula: `(cfi_step - 1) / 2`
+    pub index: usize,
+
+    /// Optional element `id` from the CFI assertion `[id]`.
+    /// When present, the JS side should prefer `getElementById(id)` for O(1) lookup.
+    pub id: Option<String>,
+}
+
+/// A fully resolved CFI location descriptor for one endpoint (start or end).
+///
+/// Contains three complementary resolution strategies, ordered from fastest to most robust:
+/// 1. `id_shortcut` — `getElementById()` O(1) fast path (when available)
+/// 2. `xpath`       — `doc.evaluate(xpath)` semantically exact, element-only counting
+/// 3. `steps`       — JS `walkToNode` using `children[index]` / `textNodes[index]`
+///
+/// The `css_selector` intentionally omitted: `*:nth-child(N)` counts all sibling nodes
+/// (including text nodes), making it semantically incompatible with CFI's element-only
+/// index. See epub.js issue #561.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CfiResolved {
+    /// 0-based spine index extracted from the CFI base path (`/6/N[id]`).
+    /// Use this to determine which spine document to load before resolving.
+    pub spine_index: usize,
+
+    /// Decoded steps for the local path (after `!`).
+    /// Feed directly to a JS `walkToNode` implementation for precise resolution.
+    /// This is the most semantically faithful representation of the CFI.
+    pub steps: Vec<ResolvedStep>,
+
+    /// Character offset within the final text node (from CFI `:N` terminal).
+    /// Corresponds to epub.js `terminal.offset`. Use with `Range.setStart/setEnd`.
+    pub character_offset: Option<u32>,
+
+    /// Whether the last step targets a text node (odd CFI index).
+    /// When `true`, apply `character_offset` to the resolved text node.
+    pub is_text_node: bool,
+
+    /// XPath expression (semantically correct: `*[N]` counts element siblings only).
+    /// Use with `document.evaluate()` as the primary resolution strategy.
+    /// Equivalent to epub.js `stepsToXpath(steps)`.
+    pub xpath: String,
+
+    /// The `id` attribute of the **deepest** element step that carries an assertion.
+    /// Enables an O(1) `getElementById()` shortcut.
+    /// When set, JS can jump directly to this element and skip earlier steps.
+    pub id_shortcut: Option<String>,
+}
+
+/// The complete result of resolving a CFI string, covering both Point and Range forms.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CfiResolution {
+    /// Resolution for the start point (always present).
+    pub start: CfiResolved,
+    /// Resolution for the end point; `Some` only for Range CFIs.
+    pub end: Option<CfiResolved>,
+}
+
 /// Represents a single step in a Canonical Fragment Identifier path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfiStep {
@@ -19,6 +108,41 @@ pub struct CfiStep {
 impl CfiStep {
     pub fn new(index: u32, assertion: Option<String>) -> Self {
         Self { index, assertion }
+    }
+
+    /// Returns `true` if this step refers to a text node (odd CFI index).
+    ///
+    /// From epub.js `parseStep`: odd numbers represent text/character data.
+    pub fn is_text_node(&self) -> bool {
+        self.index % 2 != 0
+    }
+
+    /// Returns the 0-based child index within the appropriate sibling collection.
+    ///
+    /// Mirrors epub.js `parseStep` formulas exactly:
+    /// - element (even): `index = cfi_step / 2 - 1`  → into `parent.children`
+    /// - text    (odd):  `index = (cfi_step - 1) / 2` → into `textNodes(parent)`
+    pub fn child_index(&self) -> usize {
+        if self.is_text_node() {
+            ((self.index - 1) / 2) as usize
+        } else {
+            // A CFI step of 2 is the first element (index 0).
+            // Guard against malformed CFIs where index could be 0.
+            (self.index / 2).saturating_sub(1) as usize
+        }
+    }
+
+    /// Converts this step into a [`ResolvedStep`] ready for JS `walkToNode`.
+    pub fn to_resolved_step(&self) -> ResolvedStep {
+        ResolvedStep {
+            node_type: if self.is_text_node() {
+                NodeType::Text
+            } else {
+                NodeType::Element
+            },
+            index: self.child_index(),
+            id: self.assertion.clone(),
+        }
     }
 }
 
@@ -91,6 +215,72 @@ impl Ord for CfiPath {
 
         // 3. Compare character offsets
         self.character_offset.cmp(&other.character_offset)
+    }
+}
+
+impl CfiPath {
+    /// Resolves the **local path** (steps after `!`) into a [`CfiResolved`] descriptor.
+    ///
+    /// Produces three complementary resolution strategies:
+    /// - `steps`       — decoded steps for JS `walkToNode` (semantically exact)
+    /// - `xpath`       — XPath string for `doc.evaluate()` (semantically exact)
+    /// - `id_shortcut` — deepest element id for O(1) `getElementById()`
+    ///
+    /// The intentionally omitted CSS `nth-child` selector is semantically incompatible
+    /// with CFI because `nth-child(N)` counts all sibling nodes (including text nodes),
+    /// while CFI indices count element siblings only via `parent.children`.
+    /// See epub.js issue #561 and `walkToNode` for the authoritative approach.
+    ///
+    /// Returns `None` if there are no local steps (CFI without `!`).
+    pub fn resolve(&self, spine_index: usize) -> Option<CfiResolved> {
+        let steps = self.local_steps.as_deref()?;
+        if steps.is_empty() {
+            return None;
+        }
+
+        let mut resolved_steps: Vec<ResolvedStep> = Vec::with_capacity(steps.len());
+        let mut id_shortcut: Option<String> = None;
+
+        // ── XPath (epub.js stepsToXpath, verbatim) ───────────────────────────
+        // Start with [".", "*"] matching epub.js's initial xpath array.
+        // *[N] and text()[N] both use 1-based positions.
+        // *[N] counts ELEMENT siblings only — correct for CFI semantics.
+        let mut xpath_parts: Vec<String> = vec![".".into(), "*".into()];
+
+        for step in steps {
+            let pos = step.child_index() + 1; // 1-based for XPath
+
+            if step.is_text_node() {
+                // text()[N] — XPath can address text nodes directly
+                xpath_parts.push(format!("text()[{pos}]"));
+                // text steps carry no id; stop XPath building here
+            } else {
+                if let Some(ref id) = step.assertion {
+                    // epub.js: "*[position()=N and @id='id']"
+                    xpath_parts.push(format!("*[position()={pos} and @id='{id}']"));
+                    // Track the deepest id for the getElementById shortcut
+                    id_shortcut = Some(id.clone());
+                } else {
+                    xpath_parts.push(format!("*[{pos}]"));
+                }
+            }
+
+            resolved_steps.push(step.to_resolved_step());
+        }
+
+        let is_text_node = steps
+            .last()
+            .map(|s| s.is_text_node())
+            .unwrap_or(false);
+
+        Some(CfiResolved {
+            spine_index,
+            steps: resolved_steps,
+            character_offset: self.character_offset,
+            is_text_node,
+            xpath: xpath_parts.join("/"),
+            id_shortcut,
+        })
     }
 }
 
@@ -280,6 +470,71 @@ impl EpubCfi {
                 "epubcfi({},{},{})",
                 shared_base, start_full, end_full
             ))
+        }
+    }
+
+    /// Extracts the 0-based spine index from a CFI's base path (`/6/N[id]`).
+    ///
+    /// In the EPUB CFI spec, the base path always starts with `/6` (the `<spine>` element),
+    /// followed by `/N[id]` where N is an even integer: `(spine_index + 1) * 2`.
+    ///
+    /// `steps[1]` (0-based) is the spine item step; `child_index()` recovers the 0-based index.
+    fn extract_spine_index(base: &CfiPath) -> usize {
+        base.steps
+            .get(1) // steps[0] = /6, steps[1] = /N[item_id]
+            .map(|s| s.child_index())
+            .unwrap_or(0)
+    }
+
+    /// Resolves this CFI to structured DOM location descriptor(s).
+    ///
+    /// Returns a [`CfiResolution`] with:
+    /// - `start` — always present, for Point CFIs or the start of a Range
+    /// - `end`   — `Some(...)` only for Range CFIs
+    ///
+    /// Each endpoint carries three resolution strategies (ordered by reliability):
+    /// 1. `id_shortcut` — `getElementById(id)` O(1) fast path
+    /// 2. `xpath`       — `doc.evaluate(xpath)` element-count-accurate XPath
+    /// 3. `steps`       — structured array for JS `walkToNode` (most faithful)
+    ///
+    /// Returns `None` if the CFI has no local path (i.e., no `!` separator).
+    pub fn resolve(&self) -> Option<CfiResolution> {
+        match self {
+            EpubCfi::Point(path) => {
+                let spine_index = Self::extract_spine_index(path);
+                let start = path.resolve(spine_index)?;
+                Some(CfiResolution { start, end: None })
+            }
+
+            EpubCfi::Range { parent, start, end } => {
+                let spine_index = Self::extract_spine_index(parent);
+
+                // Combine parent local steps + half-path steps.
+                // Mirrors epub.js: startSteps = cfi.path.steps.concat(start.steps)
+                let combine = |half: &CfiPath| -> Option<CfiResolved> {
+                    let combined_local: Vec<CfiStep> = parent
+                        .local_steps
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .chain(half.local_steps.clone().unwrap_or_default())
+                        .collect();
+
+                    let combined = CfiPath {
+                        steps: parent.steps.clone(),
+                        local_steps: Some(combined_local),
+                        character_offset: half.character_offset,
+                    };
+                    combined.resolve(spine_index)
+                };
+
+                let start_resolved = combine(start)?;
+                let end_resolved = combine(end);
+                Some(CfiResolution {
+                    start: start_resolved,
+                    end: end_resolved,
+                })
+            }
         }
     }
 }
@@ -525,5 +780,257 @@ mod tests {
         let range_cfi = EpubCfi::from_str("epubcfi(/6/4,/2:1,/2:5)").unwrap();
         let point = EpubCfi::from_str("epubcfi(/6/4!/4/2:5)").unwrap();
         assert!(EpubCfi::generate_range(&range_cfi, &point).is_err());
+    }
+
+    // ── CfiStep helpers ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_text_node() {
+        // Even CFI index → element
+        assert!(!CfiStep::new(2, None).is_text_node());
+        assert!(!CfiStep::new(4, None).is_text_node());
+        // Odd CFI index → text
+        assert!(CfiStep::new(1, None).is_text_node());
+        assert!(CfiStep::new(3, None).is_text_node());
+    }
+
+    #[test]
+    fn test_child_index_element() {
+        // epub.js formula: index = cfi_step / 2 - 1
+        assert_eq!(CfiStep::new(2, None).child_index(), 0); // first element child
+        assert_eq!(CfiStep::new(4, None).child_index(), 1); // second element child
+        assert_eq!(CfiStep::new(10, None).child_index(), 4); // fifth element child
+    }
+
+    #[test]
+    fn test_child_index_text() {
+        // epub.js formula: index = (cfi_step - 1) / 2
+        assert_eq!(CfiStep::new(1, None).child_index(), 0); // first text node
+        assert_eq!(CfiStep::new(3, None).child_index(), 1); // second text node
+        assert_eq!(CfiStep::new(5, None).child_index(), 2); // third text node
+    }
+
+    #[test]
+    fn test_to_resolved_step_element_with_id() {
+        let step = CfiStep::new(4, Some("body01".into()));
+        let resolved = step.to_resolved_step();
+        assert_eq!(resolved.node_type, NodeType::Element);
+        assert_eq!(resolved.index, 1);
+        assert_eq!(resolved.id, Some("body01".into()));
+    }
+
+    #[test]
+    fn test_to_resolved_step_text() {
+        let step = CfiStep::new(3, None);
+        let resolved = step.to_resolved_step();
+        assert_eq!(resolved.node_type, NodeType::Text);
+        assert_eq!(resolved.index, 1);
+        assert_eq!(resolved.id, None);
+    }
+
+    // ── CfiPath::resolve ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_no_local_steps_returns_none() {
+        // A base-only CFI (no '!') has no local path → None
+        let path = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("ch1".into()))],
+            local_steps: None,
+            character_offset: None,
+        };
+        assert!(path.resolve(0).is_none());
+    }
+
+    #[test]
+    fn test_resolve_element_steps_xpath() {
+        // epubcfi(/6/4[chap01]!/4[body01]/10[para05]/2)
+        // local steps: /4[body01] /10[para05] /2
+        let path = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("chap01".into()))],
+            local_steps: Some(vec![
+                CfiStep::new(4, Some("body01".into())),
+                CfiStep::new(10, Some("para05".into())),
+                CfiStep::new(2, None),
+            ]),
+            character_offset: None,
+        };
+        let resolved = path.resolve(1).unwrap();
+
+        // XPath: epub.js stepsToXpath verbatim
+        assert_eq!(
+            resolved.xpath,
+            "./*/*[position()=2 and @id='body01']/*[position()=5 and @id='para05']/*[1]"
+        );
+        // id_shortcut: deepest id (para05, not body01)
+        assert_eq!(resolved.id_shortcut, Some("para05".into()));
+        assert!(!resolved.is_text_node);
+        assert_eq!(resolved.character_offset, None);
+        assert_eq!(resolved.spine_index, 1);
+
+        // steps: three decoded steps
+        assert_eq!(resolved.steps.len(), 3);
+        assert_eq!(resolved.steps[0].node_type, NodeType::Element);
+        assert_eq!(resolved.steps[0].index, 1); // step=4 → children[1]
+        assert_eq!(resolved.steps[2].node_type, NodeType::Element);
+        assert_eq!(resolved.steps[2].index, 0); // step=2 → children[0]
+    }
+
+    #[test]
+    fn test_resolve_text_step_and_offset() {
+        // epubcfi(/6/4[chap01]!/4/2/1:3)
+        // local: /4 /2 /1  offset=3
+        let path = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("chap01".into()))],
+            local_steps: Some(vec![
+                CfiStep::new(4, None), // element, index=1
+                CfiStep::new(2, None), // element, index=0
+                CfiStep::new(1, None), // TEXT,    index=0
+            ]),
+            character_offset: Some(3),
+        };
+        let resolved = path.resolve(1).unwrap();
+
+        // XPath ends with text()[1]
+        assert!(resolved.xpath.ends_with("/text()[1]"));
+        // is_text_node must be true
+        assert!(resolved.is_text_node);
+        // character_offset propagated
+        assert_eq!(resolved.character_offset, Some(3));
+        // No id anywhere → no shortcut
+        assert_eq!(resolved.id_shortcut, None);
+        // Last step is text
+        assert_eq!(resolved.steps.last().unwrap().node_type, NodeType::Text);
+        assert_eq!(resolved.steps.last().unwrap().index, 0);
+    }
+
+    #[test]
+    fn test_resolve_id_shortcut_deepest_wins() {
+        // Two element steps both carrying ids; deepest should be the shortcut
+        let path = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(4, None)],
+            local_steps: Some(vec![
+                CfiStep::new(4, Some("section1".into())),
+                CfiStep::new(6, Some("para99".into())),
+            ]),
+            character_offset: None,
+        };
+        let resolved = path.resolve(0).unwrap();
+        assert_eq!(resolved.id_shortcut, Some("para99".into())); // deepest wins
+    }
+
+    // ── EpubCfi::resolve ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_epubcfi_resolve_point() {
+        // epubcfi(/6/4[chap01]!/4[body01]/10[para05]/2/1:3)
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[chap01]!/4[body01]/10[para05]/2/1:3)").unwrap();
+        let resolution = cfi.resolve().unwrap();
+
+        assert!(resolution.end.is_none());
+        let start = &resolution.start;
+        assert_eq!(start.spine_index, 1); // /6/4 → step=4 → child_index=1
+        assert_eq!(start.character_offset, Some(3));
+        assert!(start.is_text_node); // /1 is odd
+        assert_eq!(start.id_shortcut, Some("para05".into()));
+    }
+
+    #[test]
+    fn test_epubcfi_resolve_spine_index() {
+        // spine_index 0 → /6/2, spine_index 2 → /6/6
+        let cfi0 = EpubCfi::from_str("epubcfi(/6/2[ch1]!/4/2)").unwrap();
+        let cfi2 = EpubCfi::from_str("epubcfi(/6/6[ch3]!/4/2)").unwrap();
+        assert_eq!(cfi0.resolve().unwrap().start.spine_index, 0);
+        assert_eq!(cfi2.resolve().unwrap().start.spine_index, 2);
+    }
+
+    #[test]
+    fn test_epubcfi_resolve_range() {
+        // epubcfi(/6/4[chap01]!/4/2,/1:5,/3:10)
+        // Parse structure:
+        //   parent local_steps = [/4, /2]  (elements — the shared ancestor path)
+        //   start  steps       = [/1]      (no '!', not local_steps; offset=5)
+        //   end    steps       = [/3]      (no '!', not local_steps; offset=10)
+        // combine(start): local = parent.local + start.local = [/4,/2] + [] = [/4,/2]
+        // → last step is /2 (even = element)
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[chap01]!/4/2,/1:5,/3:10)").unwrap();
+        let resolution = cfi.resolve().unwrap();
+
+        // Range → both start and end present
+        assert!(resolution.end.is_some());
+        let start = &resolution.start;
+        let end = resolution.end.as_ref().unwrap();
+
+        // character_offset from the half-path (start.character_offset)
+        assert_eq!(start.character_offset, Some(5));
+        assert_eq!(end.character_offset, Some(10));
+
+        // Last combined step is /2 (even → element, not text)
+        assert!(!start.is_text_node);
+        assert!(!end.is_text_node);
+
+        // Both endpoints are in the same spine item
+        assert_eq!(start.spine_index, end.spine_index);
+
+        // Combined local steps: [/4(elem,idx=1), /2(elem,idx=0)]
+        assert_eq!(start.steps.len(), 2);
+        assert_eq!(start.steps[0].node_type, NodeType::Element);
+        assert_eq!(start.steps[0].index, 1); // step=4 → children[1]
+        assert_eq!(start.steps[1].node_type, NodeType::Element);
+        assert_eq!(start.steps[1].index, 0); // step=2 → children[0]
+    }
+
+    #[test]
+    fn test_epubcfi_resolve_range_with_text_steps() {
+        // A Range CFI where the shared parent local path ends at a text step.
+        // epubcfi(/6/4[chap01]!/4/2/1,/5,:10)
+        // parent local = [/4, /2, /1]  → last step /1 is text
+        // start  local = [/5]          → after combining: [/4,/2,/1,/5] — odd
+        // end    local = []            → combining: [/4,/2,/1] last is text
+        //
+        // In practice, construct this directly to avoid parser ambiguity:
+        let path = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("chap01".into()))],
+            local_steps: Some(vec![
+                CfiStep::new(4, None), // element
+                CfiStep::new(2, None), // element
+                CfiStep::new(1, None), // TEXT ← last in parent local
+            ]),
+            character_offset: None,
+        };
+        // Simulate start half: local = [] + extra text step
+        let start_half = CfiPath {
+            steps: vec![],
+            local_steps: Some(vec![CfiStep::new(3, None)]), // text
+            character_offset: Some(7),
+        };
+        let cfi = EpubCfi::Range {
+            parent: path.clone(),
+            start: start_half.clone(),
+            end: CfiPath { steps: vec![], local_steps: None, character_offset: Some(12) },
+        };
+
+        let resolution = cfi.resolve().unwrap();
+        let start = &resolution.start;
+        let end = resolution.end.as_ref().unwrap();
+
+        // start combined: [/4,/2,/1(TEXT),/3(TEXT)] → last is text
+        assert!(start.is_text_node);
+        assert_eq!(start.character_offset, Some(7));
+
+        // end combined: [/4,/2,/1(TEXT)] + [] → last is /1 (text)
+        assert!(end.is_text_node);
+        assert_eq!(end.character_offset, Some(12));
+    }
+
+    #[test]
+    fn test_epubcfi_resolve_no_local_path_returns_none() {
+        // A base-only CFI without '!' should return None from resolve()
+        let path = CfiPath {
+            steps: vec![CfiStep::new(6, None), CfiStep::new(4, None)],
+            local_steps: None,
+            character_offset: None,
+        };
+        let cfi = EpubCfi::Point(path);
+        assert!(cfi.resolve().is_none());
     }
 }

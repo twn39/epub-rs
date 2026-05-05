@@ -130,11 +130,15 @@ impl EpubParser {
         Ok(new_html)
     }
 
-    /// Calculate and generate an array of virtual page locations (CFI snapshots)
-    /// for the entire EPUB. Returns a JSON array of `Position` objects.
-    /// `chars_per_location` defines how many characters constitute a "page" (default recommended: 1000).
+    /// Calculate virtual page locations for the entire EPUB. Returns a flat JSON array of
+    /// `Position` objects, one entry per reading position.
+    ///
+    /// `bytes_per_position` controls how many bytes of raw HTML count as one "page".
+    /// The Readium / Adobe RMSDK standard is **1024 bytes**. Pass `0` to use this default.
+    ///
+    /// For chapter-grouped positions use `positions_by_reading_order` instead.
     #[wasm_bindgen]
-    pub fn generate_locations(&mut self, chars_per_location: usize) -> Result<JsValue, JsValue> {
+    pub fn generate_locations(&mut self, bytes_per_position: usize) -> Result<JsValue, JsValue> {
         if self.book.is_none() {
             let book = self.archive.parse().map_err(|e| e.to_string())?;
             self.book = Some(book);
@@ -142,11 +146,158 @@ impl EpubParser {
 
         let locations = self
             .archive
-            .generate_locations(self.book.as_ref().unwrap(), chars_per_location)
+            .generate_locations(self.book.as_ref().unwrap(), bytes_per_position)
             .map_err(|e| e.to_string())?;
 
         serde_wasm_bindgen::to_value(&locations).map_err(|e| e.to_string().into())
     }
+
+    /// Returns positions grouped by spine item (chapter).
+    ///
+    /// Returns a JSON array-of-arrays: `Position[][]` where the outer index is the
+    /// reading-order index (linear spine items only).
+    ///
+    /// Mirrors go-toolkit's `PositionsByReadingOrder()`.
+    /// `bytes_per_position`: 0 → use the Readium default of 1024 bytes.
+    #[wasm_bindgen]
+    pub fn positions_by_reading_order(
+        &mut self,
+        bytes_per_position: usize,
+    ) -> Result<JsValue, JsValue> {
+        if self.book.is_none() {
+            let book = self.archive.parse().map_err(|e| e.to_string())?;
+            self.book = Some(book);
+        }
+
+        let strategy = crate::parser::ArchiveEntryLength {
+            page_length: if bytes_per_position == 0 {
+                crate::parser::BYTES_PER_POSITION
+            } else {
+                bytes_per_position
+            },
+        };
+
+        let by_chapter = self
+            .archive
+            .positions_by_reading_order(self.book.as_ref().unwrap(), &strategy)
+            .map_err(|e| e.to_string())?;
+
+        serde_wasm_bindgen::to_value(&by_chapter).map_err(|e| e.to_string().into())
+    }
+
+    /// Returns the complete navigation document (TOC + page-list + landmarks) in one call.
+    ///
+    /// Parses the nav source file only **once**, regardless of how many fields you read.
+    /// Prefer this over calling `get_toc()` + `get_page_list()` separately.
+    ///
+    /// JSON shape:
+    /// ```json
+    /// {
+    ///   "toc":       [{"title":"Chapter 1","href":"ch1.xhtml","children":[...]}, ...],
+    ///   "page_list": [{"title":"1","href":"ch1.xhtml#p1","children":[]}, ...],
+    ///   "landmarks": [{"title":"Begin Reading","href":"ch1.xhtml","children":[]}, ...]
+    /// }
+    /// ```
+    ///
+    /// - `toc`       — Table of Contents (epub:type="toc" or NCX navMap)
+    /// - `page_list` — Print page labels → positions (epub:type="page-list" or NCX pageList)
+    /// - `landmarks` — Structural navigation points (epub:type="landmarks"; empty for EPUB 2)
+    #[wasm_bindgen]
+    pub fn get_navigation(&mut self) -> Result<JsValue, JsValue> {
+        if self.book.is_none() {
+            let book = self.archive.parse().map_err(|e| e.to_string())?;
+            self.book = Some(book);
+        }
+        let nav = self
+            .archive
+            .get_navigation(self.book.as_ref().unwrap())
+            .map_err(|e| e.to_string())?;
+        serde_wasm_bindgen::to_value(&nav).map_err(|e| e.to_string().into())
+    }
+
+    /// Returns only the page list entries from the navigation document.
+    ///
+    /// Equivalent to `get_navigation().page_list` but convenient when you
+    /// only need the page list.
+    ///
+    /// Each entry: `{"title": "42", "href": "chapter3.xhtml#p42", "children": []}`
+    ///
+    /// Returns `[]` if no page list is present (page lists are optional per EPUB spec).
+    #[wasm_bindgen]
+    pub fn get_page_list(&mut self) -> Result<JsValue, JsValue> {
+        if self.book.is_none() {
+            let book = self.archive.parse().map_err(|e| e.to_string())?;
+            self.book = Some(book);
+        }
+        let nav = self
+            .archive
+            .get_navigation(self.book.as_ref().unwrap())
+            .map_err(|e| e.to_string())?;
+        serde_wasm_bindgen::to_value(&nav.page_list).map_err(|e| e.to_string().into())
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Stateless CFI utilities
+// -----------------------------------------------------------------------------
+
+/// Resolve a CFI string to structured DOM location descriptor(s).
+///
+/// This is a **stateless** function — it does not require a loaded EPUB.
+/// It purely parses the CFI string and converts the local path into three
+/// complementary resolution strategies that the JS side can execute:
+///
+/// ```json
+/// {
+///   "start": {
+///     "spine_index": 1,
+///     "steps": [{"node_type": "element", "index": 1, "id": "body01"}, ...],
+///     "xpath": "./*/*[position()=2 and @id='body01']/...",
+///     "id_shortcut": "para05",
+///     "character_offset": 3,
+///     "is_text_node": true
+///   },
+///   "end": null   // Some({...}) for Range CFIs
+/// }
+/// ```
+///
+/// ## JS usage
+/// ```js
+/// const result = resolve_cfi("epubcfi(/6/4[ch1]!/4[body]/10[p5]/2/1:3)");
+/// const { start } = result;
+///
+/// // Strategy 1 — O(1) getElementById (fastest)
+/// let node = start.id_shortcut ? doc.getElementById(start.id_shortcut) : null;
+///
+/// // Strategy 2 — XPath (semantically exact, element-count aware)
+/// if (!node) node = doc.evaluate(start.xpath, doc, null, 9, null).singleNodeValue;
+///
+/// // Strategy 3 — walkToNode (most faithful fallback)
+/// if (!node) {
+///   node = doc.documentElement;
+///   for (const step of start.steps) {
+///     node = step.node_type === "element"
+///       ? (step.id ? doc.getElementById(step.id) : node.children[step.index])
+///       : textNodes(node)[step.index];
+///     if (!node) break;
+///   }
+/// }
+/// if (start.is_text_node && start.character_offset != null)
+///   range.setStart(node, start.character_offset);
+/// ```
+///
+/// **Why no CSS selector?** `*:nth-child(N)` counts all sibling nodes (including
+/// text nodes), while CFI indices count only element siblings via `parent.children`.
+/// This semantic mismatch causes incorrect targeting on mixed-content documents.
+/// See epub.js issue #561 and `walkToNode` for the authoritative approach.
+#[wasm_bindgen]
+pub fn resolve_cfi(cfi_str: &str) -> Result<JsValue, JsValue> {
+    use std::str::FromStr;
+    let cfi = crate::cfi::EpubCfi::from_str(cfi_str).map_err(|e| e.to_string())?;
+    let resolution = cfi
+        .resolve()
+        .ok_or_else(|| "CFI has no local path (missing '!' separator)".to_string())?;
+    serde_wasm_bindgen::to_value(&resolution).map_err(|e| e.to_string().into())
 }
 
 // -----------------------------------------------------------------------------
@@ -705,26 +856,33 @@ mod tests {
         let bytes = generator.generate().expect("Failed to generate EPUB bytes");
         let parser = EpubParser::new(&bytes);
 
-        // Generate locations, roughly every 50 characters
+        // Generate locations using 512 bytes per position (small value to ensure multiple positions)
         let locations_js = parser
-            .generate_locations(10)
+            .generate_locations(512)
             .expect("Failed to generate locations");
         let locations: Vec<crate::model::Position> =
             serde_wasm_bindgen::from_value(locations_js).unwrap();
 
-        // Spot check the first location if any
+        // Spot check the first location
         if !locations.is_empty() {
             let first_loc = &locations[0];
             assert_eq!(first_loc.spine_index, 0);
             assert_eq!(first_loc.global_position, 1);
-            assert!(first_loc.cfi.starts_with("epubcfi(/6/2!"));
+            // New CFI format: epubcfi(/6/2[id]!/4)
+            assert!(first_loc.cfi.starts_with("epubcfi("));
+            assert!(first_loc.cfi.contains("!/4"));
+            // First position always has 0.0 total progression
+            assert_eq!(first_loc.total_progression, 0.0);
         }
 
-        // Spot check middle location (should be in chapter 2) if possible
-        if locations.len() > 10 {
-            let middle_loc = &locations[locations.len() / 2 + 5];
-            assert_eq!(middle_loc.spine_index, 1);
-            assert!(middle_loc.total_progression > 0.4 && middle_loc.total_progression < 0.6);
+        // All positions must have monotonically increasing global_position
+        for (i, loc) in locations.iter().enumerate() {
+            assert_eq!(loc.global_position, i + 1, "global_position must be 1-based and contiguous");
+        }
+
+        // total_progression must be in [0.0, 1.0)
+        for loc in &locations {
+            assert!(loc.total_progression >= 0.0 && loc.total_progression < 1.0);
         }
     }
 }

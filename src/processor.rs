@@ -675,6 +675,7 @@ fn traverse_for_positions(
                     global_position: *global_pos,
                     chapter_progression: 0.0,
                     total_progression: 0.0,
+                    title: None,
                 });
 
                 *char_counter = 0;
