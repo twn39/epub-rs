@@ -16,6 +16,76 @@ pub enum ResourceContent {
     Stream(Box<dyn Read + Send + Sync>),
 }
 
+// ── Internal path utility ───────────────────────────────────────────────────
+
+/// Compute the relative path from one EPUB-internal file to another.
+///
+/// Both `from_file` and `to_file` are paths relative to the OEBPS root
+/// (no leading slash, e.g. `"text/ch1.xhtml"`, `"styles/main.css"`).
+///
+/// The result is a relative URL suitable for use in an HTML `href` or `src`
+/// attribute within `from_file`.
+///
+/// # Examples
+/// ```
+/// // Same directory
+/// assert_eq!(epub_relative_path("text/ch1.xhtml", "text/ch2.xhtml"), "ch2.xhtml");
+/// // One level up
+/// assert_eq!(epub_relative_path("text/ch1.xhtml", "styles/main.css"), "../styles/main.css");
+/// // Target at OEBPS root
+/// assert_eq!(epub_relative_path("text/ch1.xhtml", "cover.jpg"), "../cover.jpg");
+/// // Source at OEBPS root
+/// assert_eq!(epub_relative_path("chapter.xhtml", "styles/main.css"), "styles/main.css");
+/// ```
+pub(crate) fn epub_relative_path(from_file: &str, to_file: &str) -> String {
+    // Inner fn (not a closure) so Rust can infer the correct lifetime:
+    // the returned slice lives as long as the input `path`.
+    fn parent_dir(path: &str) -> &str {
+        match path.rfind('/') {
+            Some(i) => &path[..i],
+            None    => "",
+        }
+    }
+
+    let from_dir = parent_dir(from_file);
+    let to_dir   = parent_dir(to_file);
+    let to_name  = match to_file.rfind('/') {
+        Some(i) => &to_file[i + 1..],
+        None    => to_file,
+    };
+
+    // Split directory paths into components, filtering empty strings so that
+    // an empty parent_dir produces an empty Vec (not vec![""]).
+    let from_parts: Vec<&str> = from_dir.split('/').filter(|s| !s.is_empty()).collect();
+    let to_parts:   Vec<&str> = to_dir  .split('/').filter(|s| !s.is_empty()).collect();
+
+    // Length of the longest common directory prefix.
+    let common_len = from_parts
+        .iter()
+        .zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    // How many levels we have to go up from `from_dir` to reach the common ancestor.
+    let up_steps = from_parts.len() - common_len;
+
+    // Directory components of `to_dir` below the common ancestor.
+    let down_parts = &to_parts[common_len..];
+
+    // Assemble the result.
+    let capacity = up_steps + down_parts.len() + 1;
+    let mut parts: Vec<&str> = Vec::with_capacity(capacity);
+    for _ in 0..up_steps {
+        parts.push("..");
+    }
+    parts.extend_from_slice(down_parts);
+    parts.push(to_name);
+
+    parts.join("/")
+}
+
+// ── Built-in themes ──────────────────────────────────────────────────────────
+
 /// Built-in themes for quick, elegant publishing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
@@ -646,15 +716,21 @@ impl EpubBuilder {
             zip.start_file(&zip_path, options_deflated)?;
             match res.content {
                 ResourceContent::Bytes(mut bytes) => {
-                    // Inject CSS reference if it's an HTML file and theme is enabled
+                    // Inject a <link rel="stylesheet"> into every HTML chapter when a
+                    // built-in theme is active.  We skip the nav document itself (it
+                    // carries `properties="nav"`) because nav.xhtml is a structural
+                    // document that reader applications handle separately.
+                    let is_nav = res.properties.iter().any(|p| p == "nav");
                     if res.media_type == "application/xhtml+xml"
+                        && !is_nav
                         && let Some(css_href) = theme_href
                     {
-                        // Calculate relative path from this HTML file to the styles dir.
-                        // Simplified logic: Count slashes in `res.href` to figure out depth
-                        let depth = res.href.chars().filter(|&c| c == '/').count();
-                        let up_path = "../".repeat(depth);
-                        let relative_css_path = format!("{}{}", up_path, css_href);
+                        // Compute the precise relative path from this HTML file's
+                        // location to the CSS file.  epub_relative_path() uses the
+                        // canonical common-ancestor algorithm — identical in spirit to
+                        // Go's filepath.Rel and Python's os.path.relpath — so it is
+                        // correct for any combination of source / target depths.
+                        let relative_css_path = epub_relative_path(&res.href, css_href);
 
                         let link_tag = format!(
                             "<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\" />\n",
@@ -1192,6 +1268,88 @@ impl EpubBuilder {
 
 #[cfg(test)]
 mod tests {
+    use super::epub_relative_path;
+
+    // ── epub_relative_path ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_relative_path_same_directory() {
+        // Both files sit in the same subdirectory → just the filename.
+        assert_eq!(epub_relative_path("text/ch1.xhtml", "text/ch2.xhtml"), "ch2.xhtml");
+    }
+
+    #[test]
+    fn test_relative_path_one_level_up() {
+        // Classic case: chapter in `text/`, CSS in `styles/`.
+        assert_eq!(
+            epub_relative_path("text/ch1.xhtml", "styles/main.css"),
+            "../styles/main.css"
+        );
+    }
+
+    #[test]
+    fn test_relative_path_source_at_root() {
+        // Source at OEBPS root, target in a subdirectory → plain relative path.
+        assert_eq!(
+            epub_relative_path("chapter.xhtml", "styles/main.css"),
+            "styles/main.css"
+        );
+    }
+
+    #[test]
+    fn test_relative_path_target_at_root() {
+        // Target at OEBPS root → need to go up from source subdirectory.
+        assert_eq!(epub_relative_path("text/ch1.xhtml", "cover.jpg"), "../cover.jpg");
+    }
+
+    #[test]
+    fn test_relative_path_both_at_root() {
+        // Both at OEBPS root → just the filename.
+        assert_eq!(epub_relative_path("chapter.xhtml", "cover.jpg"), "cover.jpg");
+    }
+
+    #[test]
+    fn test_relative_path_deeply_nested_source() {
+        // Source deeply nested, target in `styles/`.
+        assert_eq!(
+            epub_relative_path("a/b/ch1.xhtml", "styles/main.css"),
+            "../../styles/main.css"
+        );
+    }
+
+    #[test]
+    fn test_relative_path_deeply_nested_both() {
+        // Source and target share a common ancestor.
+        assert_eq!(
+            epub_relative_path("text/part1/ch1.xhtml", "text/part2/ch2.xhtml"),
+            "../part2/ch2.xhtml"
+        );
+    }
+
+    #[test]
+    fn test_relative_path_same_file() {
+        // Degenerate: from and to are the same file.
+        assert_eq!(epub_relative_path("text/ch1.xhtml", "text/ch1.xhtml"), "ch1.xhtml");
+    }
+
+    #[test]
+    fn test_relative_path_theme_css_typical_cases() {
+        // The exact scenario fixed by this change: Modern theme CSS injection.
+        let css = "styles/epub-rs-modern.css";
+
+        // Chapter at root — no `../` needed.
+        assert_eq!(epub_relative_path("chapter.xhtml", css), "styles/epub-rs-modern.css");
+
+        // Chapter in `text/` — one level up.
+        assert_eq!(epub_relative_path("text/ch1.xhtml", css), "../styles/epub-rs-modern.css");
+
+        // Chapter two levels deep.
+        assert_eq!(
+            epub_relative_path("content/text/ch1.xhtml", css),
+            "../../styles/epub-rs-modern.css"
+        );
+    }
+
     use super::*;
 
     #[test]
