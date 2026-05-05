@@ -38,7 +38,22 @@ pub(super) enum OpfState {
     MetaGlobal { property: String, id: Option<String> },
 }
 
-// ── EpubArchive impl ──────────────────────────────────────────────────────────
+// ── RawTitle (parse-phase intermediate) ──────────────────────────────────────
+
+/// Collected during streaming parse; refined into [`TitleEntry`] in post-processing.
+struct RawTitle {
+    /// Value of the element's `id` attribute (for refinement lookup).
+    id: Option<String>,
+    /// BCP-47 language tag from `xml:lang`.
+    lang: Option<String>,
+    /// Text content.
+    text: String,
+    /// `true` when the EPUB 2 `opf:title-type="subtitle"` inline attribute
+    /// was detected (before EPUB 3 refinements are applied).
+    epub2_subtitle: bool,
+}
+
+// ── EpubArchive impl ────────────────────────────────────────────────────
 
 impl<P: EpubProvider> EpubArchive<P> {
     /// Reads `META-INF/container.xml` to find the paths of the OPF files.
@@ -185,11 +200,11 @@ impl<P: EpubProvider> EpubArchive<P> {
         // A temporary map connecting an ID to the index in the creators vector
         let mut creator_id_to_idx: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        // Maps dc:title element id -> its text, for EPUB 3 subtitle refinement lookup
-        let mut title_id_to_text: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        // Tracks the id attribute of the current dc:title being parsed
+        // Collects raw dc:title data (streamed one at a time, refined in post-processing)
+        let mut raw_titles: Vec<RawTitle> = Vec::new();
+        // Tracks the id / lang of the dc:title element currently being parsed
         let mut current_title_id: Option<String> = None;
+        let mut current_title_lang: Option<String> = None;
         // Collects (meta_id, collection_name) for belongs-to-collection post-processing
         let mut pending_collections: Vec<(String, String)> = Vec::new();
 
@@ -219,11 +234,19 @@ impl<P: EpubProvider> EpubArchive<P> {
                             }
                         }
                     } else if name_str.ends_with("title") {
-                        // Capture the element's id for EPUB 3 subtitle refinement
+                        // Capture the element's id and xml:lang for post-processing
                         current_title_id = e
                             .attributes()
                             .flatten()
                             .find(|a| a.key.as_ref() == b"id")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                        current_title_lang = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| {
+                                let k = String::from_utf8_lossy(a.key.into_inner());
+                                k == "xml:lang" || k == "lang"
+                            })
                             .map(|a| String::from_utf8_lossy(&a.value).into_owned());
                         // Detect EPUB 2 subtitle via opf:title-type attribute
                         let title_type = e
@@ -445,16 +468,27 @@ impl<P: EpubProvider> EpubArchive<P> {
 
                     match &state {
                         OpfState::Title => {
-                            // Record id -> text mapping for EPUB 3 subtitle refinement
-                            if let Some(tid) = current_title_id.take() {
-                                title_id_to_text.insert(tid, text.clone());
-                            }
-                            // Only set the main title if not yet populated
+                            // Collect into raw_titles; post-processing picks the main title.
+                            raw_titles.push(RawTitle {
+                                id: current_title_id.take(),
+                                lang: current_title_lang.take(),
+                                text: text.clone(),
+                                epub2_subtitle: false,
+                            });
+                            // Streaming fallback so title is never empty even if
+                            // post-processing is somehow skipped.
                             if book.metadata.title.is_none() {
                                 book.metadata.title = Some(text);
                             }
                         }
                         OpfState::Subtitle => {
+                            // EPUB 2 inline subtitle — collect alongside regular titles.
+                            raw_titles.push(RawTitle {
+                                id: current_title_id.take(),
+                                lang: current_title_lang.take(),
+                                text: text.clone(),
+                                epub2_subtitle: true,
+                            });
                             book.metadata.subtitle = Some(text);
                         }
                         OpfState::Creator(id) => {
@@ -515,8 +549,9 @@ impl<P: EpubProvider> EpubArchive<P> {
                         }
                         OpfState::None => {}
                     }
-                    // Reset state and title-id tracker after consuming text
+                    // Reset state and title trackers after consuming text
                     current_title_id = None;
+                    current_title_lang = None;
                     state = OpfState::None;
                 }
                 Event::End(ref e) => {
@@ -549,31 +584,69 @@ impl<P: EpubProvider> EpubArchive<P> {
             }
         }
 
-        // 2. Resolve EPUB 3 subtitle and sort-as from title refinements
-        for (id, props) in &refinements {
-            if title_id_to_text.contains_key(id.as_str()) {
-                // Subtitle
-                if let Some(title_type) = props.get("title-type") {
-                    if title_type == "subtitle" {
-                        if let Some(txt) = title_id_to_text.get(id) {
-                            book.metadata.subtitle = Some(txt.clone());
-                            // If the main title was set to this same text (only one dc:title),
-                            // clear it so the caller knows there is no separate main title.
-                            // In practice, EPUBs with a subtitle always declare a separate main
-                            // dc:title, so this branch is a safety guard only.
-                            if book.metadata.title.as_deref() == Some(txt.as_str()) {
-                                book.metadata.title = None;
-                            }
-                        }
-                    }
-                }
-                // Sort-as (file-as refining a title element)
-                if book.metadata.sort_as.is_none() {
-                    if let Some(sort) = props.get("file-as") {
-                        book.metadata.sort_as = Some(sort.clone());
-                    }
-                }
+        // 2. Build Metadata.titles from raw_titles + refinements.
+        //    Then re-derive title / subtitle / sort_as with correct semantics:
+        //      - main title: prefer title-type="main", fall back to first non-subtitle
+        //      - subtitle: first entry with title-type="subtitle" (lowest display-seq)
+        //      - sort_as: file-as of the main title entry
+        {
+            let mut entries: Vec<crate::model::TitleEntry> =
+                Vec::with_capacity(raw_titles.len());
+            for raw in &raw_titles {
+                let props = raw.id.as_ref().and_then(|id| refinements.get(id));
+                // title-type: EPUB 3 refinement wins; EPUB 2 inline attr is the fallback
+                let title_type = if raw.epub2_subtitle {
+                    Some("subtitle".to_string())
+                } else {
+                    props.and_then(|p| p.get("title-type")).cloned()
+                };
+                let sort_as = props.and_then(|p| p.get("file-as")).cloned();
+                let display_seq = props
+                    .and_then(|p| p.get("display-seq"))
+                    .and_then(|s| s.parse::<u32>().ok());
+                entries.push(crate::model::TitleEntry {
+                    value: raw.text.clone(),
+                    lang: raw.lang.clone(),
+                    title_type,
+                    sort_as,
+                    display_seq,
+                });
             }
+            book.metadata.titles = entries;
+        }
+
+        // Re-derive the simple scalar fields from the now-complete titles list.
+        let main_entry = book
+            .metadata
+            .titles
+            .iter()
+            .find(|t| t.title_type.as_deref() == Some("main"))
+            .or_else(|| {
+                book.metadata
+                    .titles
+                    .iter()
+                    .find(|t| t.title_type.as_deref() != Some("subtitle"))
+            });
+        if let Some(m) = main_entry {
+            book.metadata.title = Some(m.value.clone());
+            if book.metadata.sort_as.is_none() {
+                book.metadata.sort_as = m.sort_as.clone();
+            }
+        }
+
+        // Subtitle: lowest display-seq among subtitle entries.
+        let first_subtitle = {
+            let mut subs: Vec<&crate::model::TitleEntry> = book
+                .metadata
+                .titles
+                .iter()
+                .filter(|t| t.title_type.as_deref() == Some("subtitle"))
+                .collect();
+            subs.sort_by_key(|t| t.display_seq.unwrap_or(u32::MAX));
+            subs.into_iter().next()
+        };
+        if let Some(sub) = first_subtitle {
+            book.metadata.subtitle = Some(sub.value.clone());
         }
 
         // 3. Resolve belongs-to-collection with its refinements
@@ -594,5 +667,152 @@ impl<P: EpubProvider> EpubArchive<P> {
         }
 
         Ok(book)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parser::EpubArchive;
+    use std::io::{Cursor, Write};
+
+    fn epub_with_metadata(metadata_xml: &str) -> Vec<u8> {
+        let opf = format!(
+            "<?xml version=\"1.0\"?>\n\
+             <package version=\"3.0\" xmlns=\"http://www.idpf.org/2007/opf\"\
+             \n         unique-identifier=\"uid\">\n\
+               <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n\
+                         xmlns:opf=\"http://www.idpf.org/2007/opf\">\n\
+                 {}\n\
+               </metadata>\n\
+               <manifest/>\n\
+               <spine/>\n\
+             </package>",
+            metadata_xml
+        );
+        let container = b"<?xml version=\"1.0\"?>\n\
+            <container version=\"1.0\"\
+            \n  xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n\
+              <rootfiles>\n\
+                <rootfile full-path=\"content.opf\"\
+            \n              media-type=\"application/oebps-package+xml\"/>\n\
+              </rootfiles>\n\
+            </container>";
+
+        let mut buf = Vec::new();
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("META-INF/container.xml", stored).unwrap();
+        zip.write_all(container).unwrap();
+        zip.start_file("content.opf", stored).unwrap();
+        zip.write_all(opf.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        buf
+    }
+
+    // ── xml:lang is captured ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_title_xml_lang_captured() {
+        let bytes = epub_with_metadata(
+            "<dc:title xml:lang=\"zh-CN\">软件设计的哲学</dc:title>\
+             <dc:title xml:lang=\"en\">A Philosophy of Software Design</dc:title>",
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.titles.len(), 2);
+        assert_eq!(book.metadata.titles[0].lang.as_deref(), Some("zh-CN"));
+        assert_eq!(book.metadata.titles[1].lang.as_deref(), Some("en"));
+    }
+
+    // ── title-type=main beats document order ──────────────────────────────────
+
+    #[test]
+    fn test_title_type_main_wins_over_first() {
+        let bytes = epub_with_metadata(
+            "<dc:title id=\"t-sub\">A Subtitle</dc:title>\
+             <dc:title id=\"t-main\">The Real Main Title</dc:title>\
+             <meta refines=\"#t-sub\"  property=\"title-type\">subtitle</meta>\
+             <meta refines=\"#t-main\" property=\"title-type\">main</meta>",
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.title.as_deref(), Some("The Real Main Title"));
+        assert_eq!(book.metadata.subtitle.as_deref(), Some("A Subtitle"));
+    }
+
+    // ── sort_as comes from the main title's file-as ───────────────────────────
+
+    #[test]
+    fn test_sort_as_from_main_title_file_as() {
+        let bytes = epub_with_metadata(
+            "<dc:title id=\"t1\">The Hobbit</dc:title>\
+             <meta refines=\"#t1\" property=\"title-type\">main</meta>\
+             <meta refines=\"#t1\" property=\"file-as\">Hobbit, The</meta>",
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.title.as_deref(), Some("The Hobbit"));
+        assert_eq!(book.metadata.sort_as.as_deref(), Some("Hobbit, The"));
+        assert_eq!(book.metadata.titles[0].sort_as.as_deref(), Some("Hobbit, The"));
+    }
+
+    // ── display-seq picks the subtitle ────────────────────────────────────────
+
+    #[test]
+    fn test_subtitle_picked_by_display_seq() {
+        let bytes = epub_with_metadata(
+            "<dc:title id=\"t-main\">Main</dc:title>\
+             <dc:title id=\"t-s2\">Second Subtitle</dc:title>\
+             <dc:title id=\"t-s1\">First Subtitle</dc:title>\
+             <meta refines=\"#t-main\" property=\"title-type\">main</meta>\
+             <meta refines=\"#t-s2\"   property=\"title-type\">subtitle</meta>\
+             <meta refines=\"#t-s2\"   property=\"display-seq\">2</meta>\
+             <meta refines=\"#t-s1\"   property=\"title-type\">subtitle</meta>\
+             <meta refines=\"#t-s1\"   property=\"display-seq\">1</meta>",
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.subtitle.as_deref(), Some("First Subtitle"));
+    }
+
+    // ── EPUB 2 inline opf:title-type="subtitle" ───────────────────────────────
+
+    #[test]
+    fn test_epub2_inline_subtitle_attribute() {
+        let bytes = epub_with_metadata(
+            "<dc:title>Main Title</dc:title>\
+             <dc:title opf:title-type=\"subtitle\">Inline Subtitle</dc:title>",
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.title.as_deref(), Some("Main Title"));
+        assert_eq!(book.metadata.subtitle.as_deref(), Some("Inline Subtitle"));
+        let sub = book
+            .metadata
+            .titles
+            .iter()
+            .find(|t| t.title_type.as_deref() == Some("subtitle"));
+        assert!(sub.is_some(), "subtitle TitleEntry must exist");
+    }
+
+    // ── backward compat: single title, no lang, no refinements ───────────────
+
+    #[test]
+    fn test_single_title_no_lang_backward_compat() {
+        let bytes = epub_with_metadata("<dc:title>Simple Book</dc:title>");
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.title.as_deref(), Some("Simple Book"));
+        assert_eq!(book.metadata.titles.len(), 1);
+        assert_eq!(book.metadata.titles[0].value, "Simple Book");
+        assert!(book.metadata.titles[0].lang.is_none());
+        assert!(book.metadata.titles[0].title_type.is_none());
     }
 }

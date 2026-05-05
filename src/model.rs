@@ -241,6 +241,40 @@ impl NavigationDocument {
     }
 }
 
+/// A single `dc:title` element with all its OPF refinement metadata.
+///
+/// `Metadata.titles` is a flat list of every `dc:title` in document order,
+/// each carrying the language tag, semantic type, sort key, and display-sequence
+/// refinements that the EPUB author attached.
+///
+/// Callers choose the entry they need (e.g. filter by `lang`, pick
+/// `title_type == "main"`, etc.).  For simple access the resolved
+/// `Metadata.title` / `Metadata.subtitle` / `Metadata.sort_as` fields
+/// are always filled and remain fully backward-compatible.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default, Clone, PartialEq)]
+pub struct TitleEntry {
+    /// Text content of the `dc:title` element.
+    pub value: String,
+
+    /// BCP-47 language tag from `xml:lang`, if present (e.g. `"zh-CN"`, `"en"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+
+    /// Semantic role from `title-type` refinement or EPUB 2 attribute.
+    /// Common values: `"main"`, `"subtitle"`, `"short"`, `"collection"`, `"edition"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_type: Option<String>,
+
+    /// Sort key from `file-as` refinement (e.g. `"Hobbit, The"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_as: Option<String>,
+
+    /// Display ordering hint from `display-seq` refinement.
+    /// Lower values appear first.  Absent when no refinement is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_seq: Option<u32>,
+}
+
 /// Represents the `metadata` block in the OPF package document.
 ///
 /// All fields added after the initial version carry `#[serde(default)]` to maintain
@@ -265,6 +299,7 @@ pub struct Metadata {
     // ── Contributors ─────────────────────────────────────────────────────────
     /// All creators and contributors (authors, translators, illustrators, etc.).
     /// Each entry carries an optional MARC relator `role` code (e.g., `"aut"`, `"trl"`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub creators: Vec<Creator>,
 
     // ── Language group ────────────────────────────────────────────────────────
@@ -296,10 +331,12 @@ pub struct Metadata {
     pub modified: Option<String>,
 
     pub rights: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subjects: Vec<String>,
 
     // ── Layout & direction ────────────────────────────────────────────────────
     /// Global layout type of the EPUB (reflowable or pre-paginated).
+    #[serde(default)]
     pub layout: LayoutType,
 
     /// Reading progression direction, parsed from `<spine page-progression-direction="...">`.
@@ -322,7 +359,17 @@ pub struct Metadata {
 
     // ── Cover ─────────────────────────────────────────────────────────────────
     /// EPUB 2 compatible cover image manifest ID reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover_id: Option<String>,
+
+    // ── Multi-title / localization ────────────────────────────────────────────
+    /// All `dc:title` elements in document order, each with its refinement metadata.
+    ///
+    /// Use this when you need multi-language title data or the full set of title
+    /// entries.  For simple single-language access, use `title` / `subtitle` /
+    /// `sort_as` which are always populated by the parser.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub titles: Vec<TitleEntry>,
 }
 
 impl Metadata {
