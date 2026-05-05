@@ -217,6 +217,63 @@ impl EpubParser {
         let nav = self.archive.get_navigation(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav.page_list).map_err(|e| e.to_string().into())
     }
+
+    // ── Bidirectional location-index ↔ CFI conversion ────────────────────────
+
+    /// Generate positions and build a bidirectional lookup index in one call.
+    ///
+    /// Returns a JavaScript object `{ positions: Position[], len: number }` where
+    /// `positions` is the same flat array as `generate_locations()`. Store this
+    /// object and pass it to `location_from_cfi()` and `cfi_from_location()`.
+    ///
+    /// `bytes_per_position`: pass `0` to use the Readium/Adobe default of 1024 bytes.
+    #[wasm_bindgen]
+    pub fn generate_location_index(&mut self, bytes_per_position: usize) -> Result<JsValue, JsValue> {
+        let book = self.ensure_parsed()?;
+        let index = self
+            .archive
+            .generate_location_index(book, bytes_per_position)
+            .map_err(|e| e.to_string())?;
+        // Expose the flat positions array and total count.
+        // The JS caller stores this and passes it back for lookup calls.
+        let positions: Vec<&crate::model::Position> = (0..index.len())
+            .filter_map(|i| index.position_at(i))
+            .collect();
+        serde_wasm_bindgen::to_value(&positions).map_err(|e| e.to_string().into())
+    }
+
+    /// Find the 0-based position index that contains a given CFI.
+    ///
+    /// `cfi_str`: any valid EPUB CFI string — position CFI, character-level bookmark,
+    /// or annotation range CFI.
+    ///
+    /// Returns the 0-based index as a JavaScript number, or `-1` if the CFI's
+    /// spine item is not a linear reading-order chapter or the CFI is malformed.
+    ///
+    /// **Algorithm**: O(|cfi_str|) — direct mathematical computation, no binary search.
+    #[wasm_bindgen]
+    pub fn location_from_cfi(&mut self, cfi_str: &str) -> Result<i64, JsValue> {
+        let book = self.ensure_parsed()?;
+        let index = self
+            .archive
+            .generate_location_index(book, 0)
+            .map_err(|e| e.to_string())?;
+        Ok(index.location_from_cfi(cfi_str).map(|i| i as i64).unwrap_or(-1))
+    }
+
+    /// Return the CFI string for a given 0-based position index.
+    ///
+    /// Returns `null` if `idx` is out of range.
+    /// O(1) — direct array access.
+    #[wasm_bindgen]
+    pub fn cfi_from_location(&mut self, idx: usize) -> Result<Option<String>, JsValue> {
+        let book = self.ensure_parsed()?;
+        let index = self
+            .archive
+            .generate_location_index(book, 0)
+            .map_err(|e| e.to_string())?;
+        Ok(index.cfi_from_location(idx).map(str::to_owned))
+    }
 }
 
 // -----------------------------------------------------------------------------

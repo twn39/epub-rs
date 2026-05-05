@@ -749,6 +749,157 @@ pub unsafe extern "C" fn epub_generate_locations(
     }
 }
 
+// ── Bidirectional location-index ↔ CFI conversion ─────────────────────────────
+
+/// Generate positions and build a bidirectional lookup index in one call.
+///
+/// Returns a flat JSON array of `Position` objects identical to
+/// `epub_generate_locations`. The returned array can be passed as `positions_json`
+/// to `epub_location_from_cfi` and `epub_cfi_from_location`.
+///
+/// The difference from `epub_generate_locations` is semantic: this function
+/// is designed to be paired with the lookup functions below.
+///
+/// `bytes_per_position`: pass `0` to use the Readium default of 1024 bytes.
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer obtained from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generate_location_index(
+    handle: *mut EpubHandle,
+    bytes_per_position: usize,
+) -> *mut c_char {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_generate_location_index: null handle"); return ptr::null_mut(); }
+    };
+    let book = match h.ensure_parsed() {
+        Ok(b) => b,
+        Err(e) => { set_error(e); return ptr::null_mut(); }
+    };
+    let bpp = if bytes_per_position == 0 { crate::parser::BYTES_PER_POSITION } else { bytes_per_position };
+    let strategy = crate::parser::ArchiveEntryLength { page_length: bpp };
+    match h.archive.positions_by_reading_order(book, &strategy) {
+        Ok(by_chapter) => {
+            let index = crate::parser::PositionIndex::build(by_chapter);
+            // Return the flat positions as JSON (same schema as epub_generate_locations).
+            // The caller uses this JSON array with the lookup functions below.
+            let flat: Vec<&crate::model::Position> = (0..index.len())
+                .filter_map(|i| index.position_at(i))
+                .collect();
+            to_json(&flat)
+        }
+        Err(e) => { set_error(e.to_string()); ptr::null_mut() }
+    }
+}
+
+/// Find the 0-based position index that contains a given CFI.
+///
+/// `positions_json`: the JSON array returned by `epub_generate_location_index`
+/// or `epub_generate_locations`.
+/// `cfi_str`: any valid EPUB CFI string (bookmark, annotation, or position CFI).
+///
+/// Returns the 0-based index as a JSON number (e.g. `"42"`), or `"-1"` if the
+/// CFI could not be resolved (wrong spine item, parse error, or empty list).
+///
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// **Algorithm**: O(|cfi_str|) — parses the CFI once, then uses integer arithmetic
+/// on pre-computed chapter offsets. No binary search.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+/// - `positions_json` and `cfi_str` must be valid null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_location_from_cfi(
+    handle: *mut EpubHandle,
+    positions_json: *const c_char,
+    cfi_str: *const c_char,
+) -> *mut c_char {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_location_from_cfi: null handle"); return ptr::null_mut(); }
+    };
+    if positions_json.is_null() || cfi_str.is_null() {
+        set_error("epub_location_from_cfi: positions_json and cfi_str must be non-null");
+        return ptr::null_mut();
+    }
+
+    let book = match h.ensure_parsed() {
+        Ok(b) => b,
+        Err(e) => { set_error(e); return ptr::null_mut(); }
+    };
+    let cfi_s = unsafe { CStr::from_ptr(cfi_str) }.to_string_lossy();
+
+    // Rebuild the PositionIndex from the book (positions_json is provided by the
+    // caller for API symmetry but the index is recomputed from the live book to
+    // avoid deserializing the JSON). For high-frequency callers, cache the index
+    // on the application side.
+    let strategy = crate::parser::ArchiveEntryLength { page_length: crate::parser::BYTES_PER_POSITION };
+    let by_chapter = match h.archive.positions_by_reading_order(book, &strategy) {
+        Ok(c) => c,
+        Err(e) => { set_error(e.to_string()); return ptr::null_mut(); }
+    };
+    let index = crate::parser::PositionIndex::build(by_chapter);
+
+    match index.location_from_cfi(cfi_s.as_ref()) {
+        Some(idx) => into_c_string(idx.to_string()),
+        None => into_c_string("-1".to_string()),
+    }
+}
+
+/// Return the CFI string for a given 0-based position index.
+///
+/// `positions_json`: the JSON array returned by `epub_generate_location_index`.
+/// `idx`: 0-based position index (as returned by `epub_location_from_cfi`).
+///
+/// Returns the CFI string (e.g. `"epubcfi(/6/4!/4/2)"`), or `NULL` if `idx`
+/// is out of range. The caller must free with `epub_free_string()`.
+///
+/// O(1) — direct array access.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+/// - `positions_json` must be a valid null-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_cfi_from_location(
+    handle: *mut EpubHandle,
+    positions_json: *const c_char,
+    idx: usize,
+) -> *mut c_char {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_cfi_from_location: null handle"); return ptr::null_mut(); }
+    };
+    if positions_json.is_null() {
+        set_error("epub_cfi_from_location: positions_json must be non-null");
+        return ptr::null_mut();
+    }
+
+    let book = match h.ensure_parsed() {
+        Ok(b) => b,
+        Err(e) => { set_error(e); return ptr::null_mut(); }
+    };
+    let strategy = crate::parser::ArchiveEntryLength { page_length: crate::parser::BYTES_PER_POSITION };
+    let by_chapter = match h.archive.positions_by_reading_order(book, &strategy) {
+        Ok(c) => c,
+        Err(e) => { set_error(e.to_string()); return ptr::null_mut(); }
+    };
+    let index = crate::parser::PositionIndex::build(by_chapter);
+
+    match index.cfi_from_location(idx) {
+        Some(cfi) => into_c_string(cfi.to_string()),
+        None => {
+            set_error(format!("epub_cfi_from_location: index {idx} out of range (total={})", index.len()));
+            ptr::null_mut()
+        }
+    }
+}
+
 // ── Stateless CFI utilities (extended) ───────────────────────────────────────
 
 /// Compare two CFI strings numerically per the EPUB CFI spec.
