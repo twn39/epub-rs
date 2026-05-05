@@ -235,3 +235,295 @@ pub(super) fn build_title_map(toc: &[TocEntry]) -> HashMap<String, String> {
     recurse(toc, &mut map);
     map
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{
+        EpubBook, LayoutType, ManifestItem, Metadata, SpineItem, TocEntry,
+    };
+    use std::collections::HashMap;
+
+    // ── ArchiveEntryLength::position_count ────────────────────────────────────
+
+    #[test]
+    fn position_count_empty_file_returns_one() {
+        let s = ArchiveEntryLength { page_length: 1024 };
+        assert_eq!(s.position_count(0), 1, "empty file must produce at least 1 position");
+    }
+
+    #[test]
+    fn position_count_exact_one_page() {
+        let s = ArchiveEntryLength { page_length: 1024 };
+        assert_eq!(s.position_count(1024), 1);
+    }
+
+    #[test]
+    fn position_count_one_byte_over_page() {
+        let s = ArchiveEntryLength { page_length: 1024 };
+        assert_eq!(s.position_count(1025), 2, "1025 bytes → ceil(1025/1024)=2");
+    }
+
+    #[test]
+    fn position_count_exactly_ten_pages() {
+        let s = ArchiveEntryLength { page_length: 1024 };
+        assert_eq!(s.position_count(10240), 10);
+    }
+
+    #[test]
+    fn position_count_just_over_ten_pages() {
+        let s = ArchiveEntryLength { page_length: 1024 };
+        assert_eq!(s.position_count(10241), 11);
+    }
+
+    #[test]
+    fn position_count_custom_page_length() {
+        // 512 bytes / 2048 page_length → ceil=1 (less than one page)
+        let s = ArchiveEntryLength { page_length: 2048 };
+        assert_eq!(s.position_count(512), 1);
+    }
+
+    #[test]
+    fn position_count_page_length_zero_treated_as_one() {
+        // page_length of 0 is clamped to 1 via .max(1)
+        let s = ArchiveEntryLength { page_length: 0 };
+        // 100 bytes / max(0,1)=1 → 100 positions
+        assert_eq!(s.position_count(100), 100);
+    }
+
+    // ── build_title_map ───────────────────────────────────────────────────────
+
+    #[test]
+    fn title_map_bare_href() {
+        let toc = vec![TocEntry {
+            title: "Chapter 1".to_string(),
+            href: "text/ch1.xhtml".to_string(),
+            children: vec![],
+        }];
+        let map = build_title_map(&toc);
+        assert_eq!(map.get("text/ch1.xhtml").map(String::as_str), Some("Chapter 1"));
+    }
+
+    #[test]
+    fn title_map_strips_fragment() {
+        let toc = vec![TocEntry {
+            title: "Section".to_string(),
+            href: "text/ch1.xhtml#section-2".to_string(),
+            children: vec![],
+        }];
+        let map = build_title_map(&toc);
+        // The fragment-stripped key must exist; the raw key must NOT
+        assert!(map.contains_key("text/ch1.xhtml"), "fragment should be stripped");
+        assert!(!map.contains_key("text/ch1.xhtml#section-2"), "raw key with fragment must not appear");
+    }
+
+    #[test]
+    fn title_map_first_title_wins_for_duplicate_href() {
+        // Two TOC entries pointing to the same file; first title should win (or_insert_with semantics)
+        let toc = vec![
+            TocEntry { title: "First Title".to_string(), href: "ch.xhtml".to_string(), children: vec![] },
+            TocEntry { title: "Second Title".to_string(), href: "ch.xhtml".to_string(), children: vec![] },
+        ];
+        let map = build_title_map(&toc);
+        assert_eq!(map.get("ch.xhtml").map(String::as_str), Some("First Title"));
+    }
+
+    #[test]
+    fn title_map_indexes_nested_children() {
+        let toc = vec![TocEntry {
+            title: "Chapter".to_string(),
+            href: "ch.xhtml".to_string(),
+            children: vec![TocEntry {
+                title: "Section".to_string(),
+                href: "ch.xhtml#sec1".to_string(),
+                children: vec![],
+            }],
+        }];
+        let map = build_title_map(&toc);
+        assert!(map.contains_key("ch.xhtml"), "parent entry must be indexed");
+        // child uses same base href (after strip) — first-wins means parent title holds
+        assert_eq!(map.get("ch.xhtml").map(String::as_str), Some("Chapter"));
+    }
+
+    // ── Mathematical invariants (using in-memory EPUB via EpubBook) ───────────
+    //
+    // These tests construct an EpubBook directly (no ZIP) and call
+    // positions_by_reading_order via a lightweight mock provider.
+    //
+    // The invariants below MUST hold for ANY valid EPUB input.
+
+    /// Shared invariant checker — can be called from any test.
+    fn assert_position_invariants(all: &[Vec<crate::model::Position>]) {
+        let flat: Vec<_> = all.iter().flatten().collect();
+        if flat.is_empty() { return; }
+
+        // 1. global_position is 1-based and contiguous
+        for (i, pos) in flat.iter().enumerate() {
+            assert_eq!(
+                pos.global_position, i + 1,
+                "global_position must equal 1-based index but got {} at i={}",
+                pos.global_position, i,
+            );
+        }
+
+        // 2. total_progression ∈ [0.0, 1.0)  (last pos < 1.0)
+        for pos in &flat {
+            assert!(
+                pos.total_progression >= 0.0 && pos.total_progression < 1.0 + f32::EPSILON,
+                "total_progression out of range: {}",
+                pos.total_progression,
+            );
+        }
+
+        // 3. First position always has total_progression = 0.0
+        assert_eq!(
+            flat[0].total_progression, 0.0,
+            "first position must have total_progression = 0.0",
+        );
+
+        // 4. chapter_progression ∈ [0.0, 1.0)
+        for pos in &flat {
+            assert!(
+                pos.chapter_progression >= 0.0 && pos.chapter_progression < 1.0 + f32::EPSILON,
+                "chapter_progression out of range: {}",
+                pos.chapter_progression,
+            );
+        }
+
+        // 5. Total position count consistent with last global_position
+        assert_eq!(
+            flat.last().unwrap().global_position,
+            flat.len(),
+            "last global_position must equal total count",
+        );
+    }
+
+    /// Minimal in-memory provider that returns a fixed byte length for every href.
+    struct FixedLengthProvider(u64);
+    impl crate::provider::EpubProvider for FixedLengthProvider {
+        fn read_file<'a>(&'a mut self, _path: &str) -> Result<Box<dyn std::io::Read + 'a>, crate::error::EpubError> {
+            Ok(Box::new(std::io::Cursor::new(vec![0u8; self.0 as usize])))
+        }
+        fn entry_length(&mut self, _path: &str) -> Result<u64, crate::error::EpubError> {
+            Ok(self.0)
+        }
+    }
+
+    /// Build a minimal EpubBook with N reflowable linear chapters.
+    fn make_book(n: usize, layout: LayoutType) -> EpubBook {
+        let mut manifest = HashMap::new();
+        let mut spine = Vec::new();
+        for i in 0..n {
+            let id = format!("ch{}", i);
+            let href = format!("text/ch{}.xhtml", i);
+            manifest.insert(id.clone(), ManifestItem {
+                id: id.clone(),
+                href,
+                media_type: "application/xhtml+xml".to_string(),
+                properties: vec![],
+            });
+            spine.push(SpineItem {
+                idref: id,
+                linear: true,
+                layout_override: None,
+                page_spread: None,
+            });
+        }
+        EpubBook {
+            metadata: Metadata { layout, ..Default::default() },
+            manifest,
+            spine,
+            opf_dir: String::new(),
+            toc_id: None,
+            encryptions: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn positions_single_chapter_invariants() {
+        let book = make_book(1, LayoutType::Reflowable);
+        // 1 chapter, file size = 2048 bytes → 2 positions at 1024 bytes/pos
+        let mut archive = super::super::EpubArchive {
+            provider: FixedLengthProvider(2048),
+        };
+        let strategy = ArchiveEntryLength { page_length: 1024 };
+        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+
+        assert_eq!(positions.len(), 1, "one chapter → one group");
+        assert_eq!(positions[0].len(), 2, "2048 bytes / 1024 = 2 positions");
+        assert_position_invariants(&positions);
+    }
+
+    #[test]
+    fn positions_multi_chapter_invariants() {
+        let book = make_book(3, LayoutType::Reflowable);
+        // 3 chapters, each 3072 bytes → 3 positions each → 9 total
+        let mut archive = super::super::EpubArchive {
+            provider: FixedLengthProvider(3072),
+        };
+        let strategy = ArchiveEntryLength { page_length: 1024 };
+        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+
+        assert_eq!(positions.len(), 3);
+        assert_eq!(positions.iter().map(|c| c.len()).sum::<usize>(), 9);
+        assert_position_invariants(&positions);
+
+        // Chapter boundary: first pos of chapter 2 continues from chapter 1
+        assert_eq!(positions[1][0].global_position, positions[0].last().unwrap().global_position + 1);
+    }
+
+    #[test]
+    fn positions_fixed_layout_always_one_per_chapter() {
+        let book = make_book(4, LayoutType::PrePaginated);
+        // Even with huge files, fixed-layout = 1 position per chapter
+        let mut archive = super::super::EpubArchive {
+            provider: FixedLengthProvider(1_000_000),
+        };
+        let strategy = ArchiveEntryLength { page_length: 1024 };
+        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+
+        assert_eq!(positions.len(), 4);
+        for chapter in &positions {
+            assert_eq!(chapter.len(), 1, "fixed-layout chapter must have exactly 1 position");
+        }
+        assert_position_invariants(&positions);
+    }
+
+    #[test]
+    fn positions_nonlinear_items_excluded() {
+        // Build a book where spine item 2 is non-linear (e.g. pop-up footnote)
+        let mut book = make_book(3, LayoutType::Reflowable);
+        book.spine[1].linear = false;
+
+        let mut archive = super::super::EpubArchive {
+            provider: FixedLengthProvider(1024),
+        };
+        let strategy = ArchiveEntryLength { page_length: 1024 };
+        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+
+        // Only 2 linear chapters should appear
+        assert_eq!(positions.len(), 2, "non-linear items must be excluded");
+        assert_position_invariants(&positions);
+    }
+
+    #[test]
+    fn positions_cfi_format_first_position() {
+        let book = make_book(1, LayoutType::Reflowable);
+        let mut archive = super::super::EpubArchive {
+            provider: FixedLengthProvider(2048),
+        };
+        let strategy = ArchiveEntryLength { page_length: 1024 };
+        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+
+        // Position 0 (p=0): format must be epubcfi(.../6/N!/4)
+        let cfi0 = &positions[0][0].cfi;
+        assert!(cfi0.starts_with("epubcfi("), "CFI must start with epubcfi(");
+        assert!(cfi0.ends_with("!/4)"), "first position CFI must end with !/4)");
+
+        // Position 1 (p=1): format must be epubcfi(.../6/N!/4/2)  (p*2=2)
+        let cfi1 = &positions[0][1].cfi;
+        assert!(cfi1.ends_with("!/4/2)"), "second position CFI must end with !/4/2)");
+    }
+}

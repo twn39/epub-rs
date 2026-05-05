@@ -45,6 +45,7 @@ cbindgen = "0.28"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false }
+proptest  = "1.6.0"
 
 [profile.release]
 panic = "abort"  # Prevent Rust panics from crossing the FFI boundary (UB)
