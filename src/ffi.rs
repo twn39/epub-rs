@@ -585,6 +585,555 @@ pub unsafe extern "C" fn epub_free_bytes(buf: *mut c_uchar, len: usize) {
     }
 }
 
+// ── Additional resource access ────────────────────────────────────────────────
+
+/// Return the raw bytes of a manifest resource identified by its manifest **ID**.
+///
+/// On success returns a pointer to `*out_len` bytes. Free with `epub_free_bytes(ptr, *out_len)`.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+/// - `id` must be a valid null-terminated C string.
+/// - `out_len` must be a valid non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_get_resource_by_id(
+    handle: *mut EpubHandle,
+    id: *const c_char,
+    out_len: *mut usize,
+) -> *mut c_uchar {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_get_resource_by_id: null handle"); return ptr::null_mut(); }
+    };
+    if id.is_null() || out_len.is_null() {
+        set_error("epub_get_resource_by_id: id and out_len must be non-null");
+        return ptr::null_mut();
+    }
+    if let Err(e) = h.ensure_parsed() { set_error(e); return ptr::null_mut(); }
+    let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+    let book = h.book.clone().unwrap();
+    match h.archive.get_resource_by_id(&book, id_str.as_ref()) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            unsafe { *out_len = len; }
+            into_raw_bytes(bytes)
+        }
+        Err(e) => { set_error(e.to_string()); ptr::null_mut() }
+    }
+}
+
+/// Return a chapter's HTML with `data-cfi` attributes injected into every DOM node.
+///
+/// `id` is the manifest ID of the spine item (e.g. `"chapter1"`).
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+/// - `id` must be a valid null-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_get_chapter_with_cfi(
+    handle: *mut EpubHandle,
+    id: *const c_char,
+) -> *mut c_char {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_get_chapter_with_cfi: null handle"); return ptr::null_mut(); }
+    };
+    if id.is_null() { set_error("epub_get_chapter_with_cfi: id is null"); return ptr::null_mut(); }
+    if let Err(e) = h.ensure_parsed() { set_error(e); return ptr::null_mut(); }
+    let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+    let book = h.book.clone().unwrap();
+    match h.archive.get_chapter_with_cfi(&book, id_str.as_ref()) {
+        Ok(html) => into_c_string(html),
+        Err(e) => { set_error(e.to_string()); ptr::null_mut() }
+    }
+}
+
+/// Search for a literal text query in a chapter. Returns JSON `SearchResult[]`.
+///
+/// `id` is the manifest ID; `query` is the literal search string.
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// All pointer parameters must be valid null-terminated C strings.
+/// `handle` must be a valid non-null pointer obtained from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_search_chapter(
+    handle: *mut EpubHandle,
+    id: *const c_char,
+    query: *const c_char,
+) -> *mut c_char {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_search_chapter: null handle"); return ptr::null_mut(); }
+    };
+    if id.is_null() || query.is_null() {
+        set_error("epub_search_chapter: id and query must be non-null");
+        return ptr::null_mut();
+    }
+    if let Err(e) = h.ensure_parsed() { set_error(e); return ptr::null_mut(); }
+    let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+    let query_str = unsafe { CStr::from_ptr(query) }.to_string_lossy();
+    let pattern = match regex::Regex::new(&regex::escape(query_str.as_ref())) {
+        Ok(r) => r,
+        Err(e) => { set_error(format!("epub_search_chapter: invalid query: {e}")); return ptr::null_mut(); }
+    };
+    let book = h.book.clone().unwrap();
+    match h.archive.search_chapter(&book, id_str.as_ref(), &pattern) {
+        Ok(results) => to_json(&results),
+        Err(e) => { set_error(e.to_string()); ptr::null_mut() }
+    }
+}
+
+/// Return semantic content blocks (paragraphs, headings) for a chapter as JSON `ContentElement[]`.
+///
+/// `id` is the manifest ID of the chapter. The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+/// - `id` must be a valid null-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_get_semantic_content(
+    handle: *mut EpubHandle,
+    id: *const c_char,
+) -> *mut c_char {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_get_semantic_content: null handle"); return ptr::null_mut(); }
+    };
+    if id.is_null() { set_error("epub_get_semantic_content: id is null"); return ptr::null_mut(); }
+    if let Err(e) = h.ensure_parsed() { set_error(e); return ptr::null_mut(); }
+    let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+    let book = h.book.clone().unwrap();
+    match h.archive.get_semantic_content(&book, id_str.as_ref()) {
+        Ok(content) => to_json(&content),
+        Err(e) => { set_error(e.to_string()); ptr::null_mut() }
+    }
+}
+
+/// Return a flat JSON array of all reading `Position` objects across the entire EPUB.
+///
+/// `bytes_per_position`: pass `0` to use the Readium default of 1024 bytes.
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer obtained from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generate_locations(
+    handle: *mut EpubHandle,
+    bytes_per_position: usize,
+) -> *mut c_char {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_generate_locations: null handle"); return ptr::null_mut(); }
+    };
+    if let Err(e) = h.ensure_parsed() { set_error(e); return ptr::null_mut(); }
+    let bpp = if bytes_per_position == 0 { crate::parser::BYTES_PER_POSITION } else { bytes_per_position };
+    let book = h.book.clone().unwrap();
+    match h.archive.get_positions(&book, bpp) {
+        Ok(positions) => to_json(&positions),
+        Err(e) => { set_error(e.to_string()); ptr::null_mut() }
+    }
+}
+
+// ── Stateless CFI utilities (extended) ───────────────────────────────────────
+
+/// Compare two CFI strings numerically per the EPUB CFI spec.
+///
+/// Returns: `-1` if `cfi_a < cfi_b`, `0` if equal, `1` if `cfi_a > cfi_b`.
+/// On parse error returns `INT32_MIN` and sets `epub_last_error()`.
+///
+/// # Safety
+/// Both `cfi_a` and `cfi_b` must be valid null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_compare_cfi(
+    cfi_a: *const c_char,
+    cfi_b: *const c_char,
+) -> i32 {
+    clear_error();
+    if cfi_a.is_null() || cfi_b.is_null() {
+        set_error("epub_compare_cfi: null pointer");
+        return i32::MIN;
+    }
+    use std::str::FromStr;
+    let sa = unsafe { CStr::from_ptr(cfi_a) }.to_string_lossy();
+    let sb = unsafe { CStr::from_ptr(cfi_b) }.to_string_lossy();
+    let a = match crate::cfi::EpubCfi::from_str(sa.as_ref()) {
+        Ok(c) => c,
+        Err(e) => { set_error(format!("epub_compare_cfi: invalid cfi_a: {e}")); return i32::MIN; }
+    };
+    let b = match crate::cfi::EpubCfi::from_str(sb.as_ref()) {
+        Ok(c) => c,
+        Err(e) => { set_error(format!("epub_compare_cfi: invalid cfi_b: {e}")); return i32::MIN; }
+    };
+    match a.cmp(&b) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+/// Combine two Point CFIs into a spec-compliant range CFI string.
+///
+/// Output format: `epubcfi(shared,start_local,end_local)`.
+/// The caller must free the returned string with `epub_free_string()`.
+/// Returns `NULL` on failure.
+///
+/// # Safety
+/// Both `start_cfi` and `end_cfi` must be valid null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generate_cfi_range(
+    start_cfi: *const c_char,
+    end_cfi: *const c_char,
+) -> *mut c_char {
+    clear_error();
+    if start_cfi.is_null() || end_cfi.is_null() {
+        set_error("epub_generate_cfi_range: null pointer");
+        return ptr::null_mut();
+    }
+    use std::str::FromStr;
+    let ss = unsafe { CStr::from_ptr(start_cfi) }.to_string_lossy();
+    let se = unsafe { CStr::from_ptr(end_cfi) }.to_string_lossy();
+    let start = match crate::cfi::EpubCfi::from_str(ss.as_ref()) {
+        Ok(c) => c,
+        Err(e) => { set_error(format!("Invalid start CFI: {e}")); return ptr::null_mut(); }
+    };
+    let end = match crate::cfi::EpubCfi::from_str(se.as_ref()) {
+        Ok(c) => c,
+        Err(e) => { set_error(format!("Invalid end CFI: {e}")); return ptr::null_mut(); }
+    };
+    match crate::cfi::EpubCfi::generate_range(&start, &end) {
+        Ok(range) => into_c_string(range),
+        Err(e) => { set_error(e.to_string()); ptr::null_mut() }
+    }
+}
+
+// ── Crypto ────────────────────────────────────────────────────────────────────
+
+/// Decrypt an obfuscated font file (IDPF or Adobe algorithm).
+///
+/// - `data` / `len`: encrypted font bytes.
+/// - `epub_identifier`: the EPUB's unique identifier string (null-terminated).
+/// - `is_idpf`: `1` for IDPF algorithm, `0` for Adobe.
+/// - `out_len`: receives the number of decrypted bytes.
+///
+/// Returns a pointer to decrypted bytes. Free with `epub_free_bytes(ptr, *out_len)`.
+/// Returns `NULL` on failure.
+///
+/// # Safety
+/// - `data` must point to at least `len` readable bytes.
+/// - `epub_identifier` and must be valid null-terminated C strings.
+/// - `out_len` must be a valid non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_decrypt_font(
+    data: *const c_uchar,
+    len: usize,
+    epub_identifier: *const c_char,
+    is_idpf: i32,
+    out_len: *mut usize,
+) -> *mut c_uchar {
+    clear_error();
+    if data.is_null() || epub_identifier.is_null() || out_len.is_null() {
+        set_error("epub_decrypt_font: null pointer argument");
+        return ptr::null_mut();
+    }
+    use std::io::Read;
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    let identifier = unsafe { CStr::from_ptr(epub_identifier) }.to_string_lossy();
+    let algo = if is_idpf != 0 {
+        crate::crypto::ObfuscationAlgorithm::Idpf
+    } else {
+        crate::crypto::ObfuscationAlgorithm::Adobe
+    };
+    let cursor = std::io::Cursor::new(bytes);
+    let mut reader = crate::crypto::DeobfuscatingReader::new(Box::new(cursor), identifier.as_ref(), algo);
+    let mut decrypted = Vec::with_capacity(len);
+    if let Err(e) = reader.read_to_end(&mut decrypted) {
+        set_error(format!("epub_decrypt_font: {e}"));
+        return ptr::null_mut();
+    }
+    let out = decrypted.len();
+    unsafe { *out_len = out; }
+    into_raw_bytes(decrypted)
+}
+
+// ── EPUB Generator ────────────────────────────────────────────────────────────
+
+/// Opaque EPUB generator handle.
+///
+/// Allocated by `epub_generator_new()`, freed by `epub_generator_free()`.
+pub struct EpubGeneratorHandle {
+    builder: Option<crate::generator::EpubBuilder>,
+}
+
+/// Create a new EPUB generator.
+///
+/// Returns an opaque handle on success. Free with `epub_generator_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn epub_generator_new() -> *mut EpubGeneratorHandle {
+    clear_error();
+    Box::into_raw(Box::new(EpubGeneratorHandle {
+        builder: Some(crate::generator::EpubBuilder::new()),
+    }))
+}
+
+/// Free an EPUB generator handle. Safe to call with `NULL`.
+///
+/// # Safety
+/// `handle` must be `NULL` or a pointer from `epub_generator_new()` not yet freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_free(handle: *mut EpubGeneratorHandle) {
+    if !handle.is_null() {
+        unsafe { drop(Box::from_raw(handle)); }
+    }
+}
+
+/// Set the EPUB title.
+///
+/// # Safety
+/// `handle` and `title` must be valid non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_set_title(
+    handle: *mut EpubGeneratorHandle,
+    title: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if title.is_null() { return; }
+    let s = unsafe { CStr::from_ptr(title) }.to_string_lossy();
+    if let Some(b) = h.builder.as_mut() { b.metadata.title = Some(s.into_owned()); }
+}
+
+/// Set the EPUB language (e.g. `"en"`, `"zh-CN"`).
+///
+/// # Safety
+/// `handle` and `lang` must be valid non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_set_language(
+    handle: *mut EpubGeneratorHandle,
+    lang: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if lang.is_null() { return; }
+    let s = unsafe { CStr::from_ptr(lang) }.to_string_lossy();
+    if let Some(b) = h.builder.as_mut() { b.metadata.language = Some(s.into_owned()); }
+}
+
+/// Set the EPUB unique identifier (e.g. UUID or ISBN).
+///
+/// # Safety
+/// `handle` and `identifier` must be valid non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_set_identifier(
+    handle: *mut EpubGeneratorHandle,
+    identifier: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if identifier.is_null() { return; }
+    let s = unsafe { CStr::from_ptr(identifier) }.to_string_lossy();
+    if let Some(b) = h.builder.as_mut() { b.metadata.identifier = Some(s.into_owned()); }
+}
+
+/// Add a creator/author to the EPUB metadata.
+///
+/// `role` may be `NULL` (defaults to no role). Use standard MARC relator codes, e.g. `"aut"`.
+///
+/// # Safety
+/// `handle` and `name` must be valid non-null pointers; `role` may be `NULL`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_add_author(
+    handle: *mut EpubGeneratorHandle,
+    name: *const c_char,
+    role: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if name.is_null() { return; }
+    let name_s = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+    let mut creator = crate::model::Creator::new(name_s.as_ref());
+    if !role.is_null() {
+        creator.role = Some(unsafe { CStr::from_ptr(role) }.to_string_lossy().into_owned());
+    }
+    if let Some(b) = h.builder.as_mut() { b.metadata.creators.push(creator); }
+}
+
+/// Add an HTML chapter to the EPUB manifest and spine.
+///
+/// - `id`: unique manifest ID.
+/// - `href`: relative path within the EPUB (e.g. `"text/ch1.xhtml"`).
+/// - `html`: null-terminated UTF-8 HTML content.
+///
+/// # Safety
+/// All pointers must be valid non-null null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_add_chapter(
+    handle: *mut EpubGeneratorHandle,
+    id: *const c_char,
+    href: *const c_char,
+    html: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if id.is_null() || href.is_null() || html.is_null() { return; }
+    let id_s = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+    let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
+    let html_s = unsafe { CStr::from_ptr(html) }.to_string_lossy();
+    let builder = h.builder.take().unwrap();
+    h.builder = Some(builder.add_chapter(id_s.as_ref(), href_s.as_ref(), html_s.as_bytes().to_vec()));
+}
+
+/// Add an HTML chapter and simultaneously add it to the Table of Contents.
+///
+/// # Safety
+/// All pointers must be valid non-null null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_add_chapter_with_nav(
+    handle: *mut EpubGeneratorHandle,
+    id: *const c_char,
+    href: *const c_char,
+    title: *const c_char,
+    html: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if id.is_null() || href.is_null() || title.is_null() || html.is_null() { return; }
+    let id_s = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+    let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
+    let title_s = unsafe { CStr::from_ptr(title) }.to_string_lossy();
+    let html_s = unsafe { CStr::from_ptr(html) }.to_string_lossy();
+    let builder = h.builder.take().unwrap();
+    h.builder = Some(builder.add_chapter_with_nav(
+        id_s.as_ref(), href_s.as_ref(), title_s.as_ref(), html_s.as_bytes().to_vec(),
+    ));
+}
+
+/// Add a binary resource (image, font, CSS, etc.) to the EPUB.
+///
+/// - `id`: unique manifest ID.
+/// - `href`: relative path (e.g. `"images/cover.jpg"`).
+/// - `media_type`: MIME type (e.g. `"image/jpeg"`).
+/// - `data` / `len`: raw bytes.
+///
+/// # Safety
+/// String pointers must be valid null-terminated C strings.
+/// `data` must point to at least `len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_add_resource(
+    handle: *mut EpubGeneratorHandle,
+    id: *const c_char,
+    href: *const c_char,
+    media_type: *const c_char,
+    data: *const c_uchar,
+    len: usize,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if id.is_null() || href.is_null() || media_type.is_null() || data.is_null() { return; }
+    let id_s = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+    let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
+    let mt_s = unsafe { CStr::from_ptr(media_type) }.to_string_lossy();
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+    let builder = h.builder.take().unwrap();
+    h.builder = Some(builder.add_resource(id_s.as_ref(), href_s.as_ref(), mt_s.as_ref(), bytes));
+}
+
+/// Set the EPUB cover image.
+///
+/// # Safety
+/// String pointers must be valid null-terminated C strings.
+/// `data` must point to at least `len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_set_cover(
+    handle: *mut EpubGeneratorHandle,
+    href: *const c_char,
+    media_type: *const c_char,
+    data: *const c_uchar,
+    len: usize,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if href.is_null() || media_type.is_null() || data.is_null() { return; }
+    let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
+    let mt_s = unsafe { CStr::from_ptr(media_type) }.to_string_lossy();
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+    let builder = h.builder.take().unwrap();
+    h.builder = Some(builder.set_cover(href_s.as_ref(), mt_s.as_ref(), bytes));
+}
+
+/// Add a landmark (structural reference) to the EPUB navigation.
+///
+/// `epub_type`: landmark type, e.g. `"cover"`, `"toc"`, `"bodymatter"`.
+///
+/// # Safety
+/// All pointers must be valid non-null null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_add_landmark(
+    handle: *mut EpubGeneratorHandle,
+    epub_type: *const c_char,
+    href: *const c_char,
+    title: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if epub_type.is_null() || href.is_null() || title.is_null() { return; }
+    let et_s = unsafe { CStr::from_ptr(epub_type) }.to_string_lossy();
+    let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
+    let title_s = unsafe { CStr::from_ptr(title) }.to_string_lossy();
+    let builder = h.builder.take().unwrap();
+    h.builder = Some(builder.add_landmark(et_s.as_ref(), href_s.as_ref(), title_s.as_ref()));
+}
+
+/// Add a page-list entry (print page mapping).
+///
+/// # Safety
+/// `name` and `href` must be valid non-null null-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_add_page(
+    handle: *mut EpubGeneratorHandle,
+    name: *const c_char,
+    href: *const c_char,
+) {
+    let h = match unsafe { handle.as_mut() } { Some(h) => h, None => return };
+    if name.is_null() || href.is_null() { return; }
+    let name_s = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+    let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
+    let builder = h.builder.take().unwrap();
+    h.builder = Some(builder.add_page(name_s.as_ref(), href_s.as_ref()));
+}
+
+/// Build the EPUB archive and return it as a byte buffer.
+///
+/// On success writes the EPUB byte count to `*out_len` and returns a pointer
+/// to the bytes. Free with `epub_free_bytes(ptr, *out_len)`.
+/// Returns `NULL` on failure. The generator handle is **consumed** by this call
+/// and must not be used again (it is freed internally).
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer; `out_len` must be a valid non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_build(
+    handle: *mut EpubGeneratorHandle,
+    out_len: *mut usize,
+) -> *mut c_uchar {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_generator_build: null handle"); return ptr::null_mut(); }
+    };
+    if out_len.is_null() { set_error("epub_generator_build: out_len is null"); return ptr::null_mut(); }
+    let builder = match h.builder.take() {
+        Some(b) => b,
+        None => { set_error("epub_generator_build: generator already consumed"); return ptr::null_mut(); }
+    };
+    let mut buf = std::io::Cursor::new(Vec::new());
+    if let Err(e) = builder.generate(&mut buf) {
+        set_error(e.to_string());
+        return ptr::null_mut();
+    }
+    let bytes = buf.into_inner();
+    let len = bytes.len();
+    unsafe { *out_len = len; }
+    into_raw_bytes(bytes)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
