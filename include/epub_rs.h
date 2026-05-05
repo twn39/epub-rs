@@ -497,6 +497,57 @@ void epub_generator_add_page(struct EpubGeneratorHandle *handle,
                              const char *href);
 
 /**
+ * Set the complete Table of Contents from a JSON-encoded array of `TocEntry` objects.
+ *
+ * This replaces any TOC entries added by `epub_generator_add_chapter_with_nav()`.
+ * Accepts nested TOC trees (each `TocEntry` may have a `children` array).
+ *
+ * `toc_json` must be a valid null-terminated UTF-8 JSON string, e.g.:
+ * ```json
+ * [{"title":"Chapter 1","href":"text/ch1.xhtml","children":[]},
+ *  {"title":"Chapter 2","href":"text/ch2.xhtml","children":[
+ *    {"title":"Section 2.1","href":"text/ch2.xhtml#s1","children":[]}]}]
+ * ```
+ * Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
+ *
+ * # Safety
+ * `handle` and `toc_json` must be valid non-null pointers.
+ */
+int32_t epub_generator_set_toc(struct EpubGeneratorHandle *handle, const char *toc_json);
+
+/**
+ * Set all EPUB metadata at once from a JSON-encoded `Metadata` object.
+ *
+ * Replaces any individual metadata set by `epub_generator_set_title()`, etc.
+ * All fields are optional; missing fields in the JSON keep their default values.
+ *
+ * Example JSON:
+ * ```json
+ * {"title":"My Book","language":"en","creators":[{"name":"Alice","role":"aut"}]}
+ * ```
+ * Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
+ *
+ * # Safety
+ * `handle` and `metadata_json` must be valid non-null pointers.
+ */
+int32_t epub_generator_set_metadata(struct EpubGeneratorHandle *handle, const char *metadata_json);
+
+/**
+ * Validate the generator state without producing any output.
+ *
+ * Runs the same pre-flight checks as `epub_generator_build()` (required
+ * fields, non-empty spine, etc.) but does **not** consume the handle.
+ * The generator remains usable after this call.
+ *
+ * Returns `1` if the current state would produce a valid EPUB, `0` otherwise.
+ * On failure, `epub_last_error()` returns a human-readable description.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer.
+ */
+int32_t epub_generator_validate(struct EpubGeneratorHandle *handle);
+
+/**
  * Build the EPUB archive and return it as a byte buffer.
  *
  * On success writes the EPUB byte count to `*out_len` and returns a pointer

@@ -1099,6 +1099,110 @@ pub unsafe extern "C" fn epub_generator_add_page(
     h.builder = Some(builder.add_page(name_s.as_ref(), href_s.as_ref()));
 }
 
+/// Set the complete Table of Contents from a JSON-encoded array of `TocEntry` objects.
+///
+/// This replaces any TOC entries added by `epub_generator_add_chapter_with_nav()`.
+/// Accepts nested TOC trees (each `TocEntry` may have a `children` array).
+///
+/// `toc_json` must be a valid null-terminated UTF-8 JSON string, e.g.:
+/// ```json
+/// [{"title":"Chapter 1","href":"text/ch1.xhtml","children":[]},
+///  {"title":"Chapter 2","href":"text/ch2.xhtml","children":[
+///    {"title":"Section 2.1","href":"text/ch2.xhtml#s1","children":[]}]}]
+/// ```
+/// Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
+///
+/// # Safety
+/// `handle` and `toc_json` must be valid non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_set_toc(
+    handle: *mut EpubGeneratorHandle,
+    toc_json: *const c_char,
+) -> i32 {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_generator_set_toc: null handle"); return 0; }
+    };
+    if toc_json.is_null() { set_error("epub_generator_set_toc: toc_json is null"); return 0; }
+    let json_str = unsafe { CStr::from_ptr(toc_json) }.to_string_lossy();
+    let toc: Vec<crate::model::TocEntry> = match serde_json::from_str(&json_str) {
+        Ok(v)  => v,
+        Err(e) => { set_error(format!("epub_generator_set_toc: JSON parse error: {e}")); return 0; }
+    };
+    let builder = match h.builder.take() {
+        Some(b) => b,
+        None => { set_error("epub_generator_set_toc: generator already consumed"); return 0; }
+    };
+    h.builder = Some(builder.set_toc(toc));
+    1
+}
+
+/// Set all EPUB metadata at once from a JSON-encoded `Metadata` object.
+///
+/// Replaces any individual metadata set by `epub_generator_set_title()`, etc.
+/// All fields are optional; missing fields in the JSON keep their default values.
+///
+/// Example JSON:
+/// ```json
+/// {"title":"My Book","language":"en","creators":[{"name":"Alice","role":"aut"}]}
+/// ```
+/// Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
+///
+/// # Safety
+/// `handle` and `metadata_json` must be valid non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_set_metadata(
+    handle: *mut EpubGeneratorHandle,
+    metadata_json: *const c_char,
+) -> i32 {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_generator_set_metadata: null handle"); return 0; }
+    };
+    if metadata_json.is_null() { set_error("epub_generator_set_metadata: metadata_json is null"); return 0; }
+    let json_str = unsafe { CStr::from_ptr(metadata_json) }.to_string_lossy();
+    let metadata: crate::model::Metadata = match serde_json::from_str(&json_str) {
+        Ok(v)  => v,
+        Err(e) => { set_error(format!("epub_generator_set_metadata: JSON parse error: {e}")); return 0; }
+    };
+    let builder = match h.builder.take() {
+        Some(b) => b,
+        None => { set_error("epub_generator_set_metadata: generator already consumed"); return 0; }
+    };
+    h.builder = Some(builder.metadata(metadata));
+    1
+}
+
+/// Validate the generator state without producing any output.
+///
+/// Runs the same pre-flight checks as `epub_generator_build()` (required
+/// fields, non-empty spine, etc.) but does **not** consume the handle.
+/// The generator remains usable after this call.
+///
+/// Returns `1` if the current state would produce a valid EPUB, `0` otherwise.
+/// On failure, `epub_last_error()` returns a human-readable description.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_generator_validate(handle: *mut EpubGeneratorHandle) -> i32 {
+    clear_error();
+    let h = match unsafe { handle.as_mut() } {
+        Some(h) => h,
+        None => { set_error("epub_generator_validate: null handle"); return 0; }
+    };
+    let builder = match h.builder.as_ref() {
+        Some(b) => b,
+        None => { set_error("epub_generator_validate: generator already consumed"); return 0; }
+    };
+    match builder.validate() {
+        Ok(()) => 1,
+        Err(e) => { set_error(e.to_string()); 0 }
+    }
+}
+
 /// Build the EPUB archive and return it as a byte buffer.
 ///
 /// On success writes the EPUB byte count to `*out_len` and returns a pointer
@@ -1229,5 +1333,108 @@ mod tests {
     fn test_free_bytes_null_is_safe() {
         // Must not crash
         unsafe { epub_free_bytes(ptr::null_mut(), 0) };
+    }
+
+    // ── epub_generator_set_toc ────────────────────────────────────────────────
+
+    #[test]
+    fn test_generator_set_toc_valid_json() {
+        let handle = epub_generator_new();
+        assert!(!handle.is_null());
+
+        // Set title + language so validate() passes
+        let title = std::ffi::CString::new("Test").unwrap();
+        let lang  = std::ffi::CString::new("en").unwrap();
+        unsafe { epub_generator_set_title(handle, title.as_ptr()) };
+        unsafe { epub_generator_set_language(handle, lang.as_ptr()) };
+
+        let toc_json = std::ffi::CString::new(
+            r#"[{"title":"Ch1","href":"text/ch1.xhtml","children":[]}]"#
+        ).unwrap();
+        let ok = unsafe { epub_generator_set_toc(handle, toc_json.as_ptr()) };
+        assert_eq!(ok, 1, "set_toc should succeed; error: {:?}",
+            unsafe { std::ffi::CStr::from_ptr(epub_last_error()) });
+
+        unsafe { epub_generator_free(handle) };
+    }
+
+    #[test]
+    fn test_generator_set_toc_invalid_json_returns_0() {
+        let handle = epub_generator_new();
+        let bad_json = std::ffi::CString::new("not-json").unwrap();
+        let ok = unsafe { epub_generator_set_toc(handle, bad_json.as_ptr()) };
+        assert_eq!(ok, 0, "set_toc with bad JSON should return 0");
+        let err = unsafe { std::ffi::CStr::from_ptr(epub_last_error()) };
+        assert!(!err.to_string_lossy().is_empty(), "error message should be set");
+        unsafe { epub_generator_free(handle) };
+    }
+
+    // ── epub_generator_set_metadata ───────────────────────────────────────────
+
+    #[test]
+    fn test_generator_set_metadata_valid_json() {
+        let handle = epub_generator_new();
+        // Partial JSON is valid: Vec fields default to empty via serde(default)
+        let json = std::ffi::CString::new(
+            r#"{"title":"Meta Book","language":"zh","identifier":"urn:isbn:0"}"#
+        ).unwrap();
+        let ok = unsafe { epub_generator_set_metadata(handle, json.as_ptr()) };
+        assert_eq!(ok, 1, "set_metadata should succeed; error: {:?}",
+            unsafe { std::ffi::CStr::from_ptr(epub_last_error()) });
+        unsafe { epub_generator_free(handle) };
+    }
+
+    #[test]
+    fn test_generator_set_metadata_invalid_json_returns_0() {
+        let handle = epub_generator_new();
+        let bad = std::ffi::CString::new("{invalid").unwrap();
+        let ok = unsafe { epub_generator_set_metadata(handle, bad.as_ptr()) };
+        assert_eq!(ok, 0);
+        unsafe { epub_generator_free(handle) };
+    }
+
+    // ── epub_generator_validate ───────────────────────────────────────────────
+
+    #[test]
+    fn test_generator_validate_passes_when_ready() {
+        let handle = epub_generator_new();
+        assert!(!handle.is_null());
+
+        let title  = std::ffi::CString::new("Valid Book").unwrap();
+        let lang   = std::ffi::CString::new("en").unwrap();
+        let id     = std::ffi::CString::new("urn:uuid:test").unwrap();
+        let href   = std::ffi::CString::new("text/ch1.xhtml").unwrap();
+        let ch_id  = std::ffi::CString::new("ch1").unwrap();
+        let body   = std::ffi::CString::new("<html><body><p>Hello</p></body></html>").unwrap();
+
+        unsafe { epub_generator_set_title(handle, title.as_ptr()) };
+        unsafe { epub_generator_set_language(handle, lang.as_ptr()) };
+        unsafe { epub_generator_set_identifier(handle, id.as_ptr()) };
+        unsafe {
+            epub_generator_add_chapter(
+                handle, ch_id.as_ptr(), href.as_ptr(), body.as_ptr(),
+            )
+        };
+
+        let ok = unsafe { epub_generator_validate(handle) };
+        assert_eq!(ok, 1, "validate should pass; error: {:?}",
+            unsafe { std::ffi::CStr::from_ptr(epub_last_error()) });
+
+        // Handle should still be usable after validate
+        let ok2 = unsafe { epub_generator_validate(handle) };
+        assert_eq!(ok2, 1, "second validate call should also pass");
+
+        unsafe { epub_generator_free(handle) };
+    }
+
+    #[test]
+    fn test_generator_validate_fails_when_empty() {
+        let handle = epub_generator_new();
+        // Fresh generator has no title/chapters — validate should fail
+        let ok = unsafe { epub_generator_validate(handle) };
+        assert_eq!(ok, 0, "empty generator should fail validation");
+        let err = unsafe { std::ffi::CStr::from_ptr(epub_last_error()) };
+        assert!(!err.to_string_lossy().is_empty(), "error message should be set");
+        unsafe { epub_generator_free(handle) };
     }
 }
