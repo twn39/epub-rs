@@ -40,9 +40,19 @@ serde-wasm-bindgen = "0.6.5"
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
+[build-dependencies]
+cbindgen = "0.28"
+
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false }
+
+[profile.release]
+panic = "abort"  # Prevent Rust panics from crossing the FFI boundary (UB)
 
 [[bench]]
 name = "epub_benchmark"
 harness = false
+
+[features]
+default = []
+ffi = []  # Enable to build the C FFI layer (no extra deps, just activates ffi.rs)
