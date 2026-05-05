@@ -6,7 +6,7 @@
 //! |-----------|----------|
 //! | [`html`]  | lol_html-based streaming HTML rewriting and `<head>` injection |
 //! | [`cfi`]   | CFI `data-` attribute injection and regex search with CFI ranges |
-//! | [`positions`] | Character-offset → CFI position computation (Adobe/Readium standard) |
+//! | [`positions`] | Internal: DOM character-offset traversal (not part of public API; use `EpubArchive::generate_locations`) |
 //! | [`semantic`]  | Semantic block extraction for TTS and accessibility |
 //!
 //! All public items are re-exported at this level so every existing caller of
@@ -62,9 +62,7 @@ pub use cfi::{
     search_chapter,
 };
 
-pub use positions::{
-    PositionContext,
-    extract_positions,
-};
+// positions exports intentionally omitted — PositionContext and extract_positions
+// are pub(crate) internal utilities; external callers use EpubArchive::generate_locations().
 
 pub use semantic::extract_semantic_content;

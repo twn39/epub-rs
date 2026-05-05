@@ -10,7 +10,7 @@ mod opf;
 pub mod positions;
 
 use crate::error::EpubError;
-use crate::model::{EpubBook, Position};
+use crate::model::EpubBook;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::provider::DirProvider;
 use crate::provider::{EpubProvider, ZipProvider};
@@ -225,93 +225,7 @@ impl<P: EpubProvider> EpubArchive<P> {
         crate::processor::search_chapter(&html_str, &base_cfi, pattern)
     }
 
-    /// Generates a list of synthetic reading positions (virtual pages) for the entire EPUB.
-    /// This is crucial for computing reading progress and providing a unified pagination experience
-    /// across different screen sizes.
-    ///
-    /// `chars_per_position` is the number of characters that constitute a single "position" (typically 1024).
-    pub fn get_positions(
-        &mut self,
-        book: &EpubBook,
-        chars_per_position: usize,
-    ) -> Result<Vec<Position>, EpubError> {
-        let mut all_positions = Vec::new();
-        let mut global_pos = 0;
-        let mut char_counter = 0;
 
-        for (i, item) in book.spine.iter().enumerate() {
-            if !item.linear {
-                continue; // Skip supplementary chapters for global progression
-            }
-
-            let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(i, &item.idref);
-
-            // Get href for the manifest item
-            let href = book
-                .manifest
-                .get(&item.idref)
-                .map(|m| m.href.clone())
-                .unwrap_or_default();
-
-            // Always add the chapter start position
-            global_pos += 1;
-
-            let mut stripped_base = base_cfi.clone();
-            if stripped_base.ends_with('!') {
-                stripped_base.pop();
-            }
-
-            let mut chapter_positions = vec![Position {
-                spine_index: i,
-                href: href.clone(),
-                cfi: format!("epubcfi({}!/4)", stripped_base), // pointing roughly to body
-                global_position: global_pos,
-                chapter_progression: 0.0,
-                total_progression: 0.0,
-                title: None,
-            }];
-
-            // Read the chapter HTML
-            if let Ok(raw_html) = self.get_resource_by_id(book, &item.idref) {
-                let html_str = String::from_utf8_lossy(&raw_html);
-
-                let ctx = crate::processor::PositionContext {
-                    base_cfi: &base_cfi,
-                    chars_per_position,
-                    spine_index: i,
-                    href: &href,
-                };
-
-                crate::processor::extract_positions(
-                    &html_str,
-                    &ctx,
-                    &mut char_counter,
-                    &mut chapter_positions,
-                    &mut global_pos,
-                );
-            }
-
-            // Update chapter progressions
-            let total_in_chapter = chapter_positions.len();
-            for (idx, pos) in chapter_positions.iter_mut().enumerate() {
-                pos.chapter_progression = idx as f32 / total_in_chapter as f32;
-            }
-
-            all_positions.extend(chapter_positions);
-        }
-
-        // Update total progression
-        let total_positions = all_positions.len();
-        if total_positions > 0 {
-            for pos in all_positions.iter_mut() {
-                // Progression from 0.0 to 1.0 based on position index
-                pos.total_progression =
-                    (pos.global_position - 1) as f32 / (total_positions.max(1)) as f32;
-            }
-        }
-
-        Ok(all_positions)
-    }
 
     /// Extracts semantic content blocks (paragraphs, headings) from a specific chapter.
     /// Returns blocks with their text, tags, languages, and CFI paths.
