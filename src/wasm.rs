@@ -19,6 +19,26 @@ pub struct EpubParser {
     book: Option<EpubBook>,
 }
 
+// Private methods — NOT exported to WASM (no #[wasm_bindgen] on this impl block).
+// `wasm-bindgen` only processes methods inside `#[wasm_bindgen] impl` blocks.
+impl EpubParser {
+    /// Lazily parse the OPF on first call; subsequent calls return the cached result.
+    ///
+    /// Mirrors `EpubHandle::ensure_parsed()` in `ffi.rs`. Returns `&EpubBook` directly
+    /// so public methods can access the book without an inline `if self.book.is_none()`
+    /// block, reducing 8 copies of the same 3-line lazy-init pattern to a single call.
+    fn ensure_parsed(&mut self) -> Result<&EpubBook, JsValue> {
+        if self.book.is_none() {
+            self.book = Some(
+                self.archive
+                    .parse()
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?,
+            );
+        }
+        Ok(self.book.as_ref().unwrap())
+    }
+}
+
 #[wasm_bindgen]
 impl EpubParser {
     /// Create a new `EpubParser` from a Uint8Array containing the EPUB ZIP data.
@@ -37,12 +57,8 @@ impl EpubParser {
     /// This returns a JavaScript object representing the `EpubBook` model.
     #[wasm_bindgen]
     pub fn parse(&mut self) -> Result<JsValue, JsValue> {
-        if self.book.is_none() {
-            let book = self.archive.parse().map_err(|e| e.to_string())?;
-            self.book = Some(book);
-        }
-
-        serde_wasm_bindgen::to_value(self.book.as_ref().unwrap()).map_err(|e| e.to_string().into())
+        let book = self.ensure_parsed()?;
+        serde_wasm_bindgen::to_value(book).map_err(|e| e.to_string().into())
     }
 
     /// Retrieve the raw byte contents of a specific file inside the EPUB.
@@ -72,14 +88,10 @@ impl EpubParser {
     /// Returns a JS Array where [0] is the Uint8Array of the image bytes, and [1] is the MIME type string.
     #[wasm_bindgen]
     pub fn get_cover_image(&mut self) -> Result<js_sys::Array, JsValue> {
-        if self.book.is_none() {
-            let book = self.archive.parse().map_err(|e| e.to_string())?;
-            self.book = Some(book);
-        }
-
+        let book = self.ensure_parsed()?.clone();
         let (bytes, mime) = self
             .archive
-            .get_cover_image(self.book.as_ref().unwrap())
+            .get_cover_image(&book)
             .map_err(|e| e.to_string())?;
 
         let uint8arr = js_sys::Uint8Array::from(&bytes[..]);
@@ -94,15 +106,8 @@ impl EpubParser {
     /// Retrieve the Table of Contents (TOC) of the EPUB.
     #[wasm_bindgen]
     pub fn get_toc(&mut self) -> Result<JsValue, JsValue> {
-        if self.book.is_none() {
-            let book = self.archive.parse().map_err(|e| e.to_string())?;
-            self.book = Some(book);
-        }
-
-        let toc = self
-            .archive
-            .get_toc(self.book.as_ref().unwrap())
-            .map_err(|e| e.to_string())?;
+        let book = self.ensure_parsed()?;
+        let toc = self.archive.get_toc(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&toc).map_err(|e| e.to_string().into())
     }
 
@@ -139,16 +144,11 @@ impl EpubParser {
     /// For chapter-grouped positions use `positions_by_reading_order` instead.
     #[wasm_bindgen]
     pub fn generate_locations(&mut self, bytes_per_position: usize) -> Result<JsValue, JsValue> {
-        if self.book.is_none() {
-            let book = self.archive.parse().map_err(|e| e.to_string())?;
-            self.book = Some(book);
-        }
-
+        let book = self.ensure_parsed()?;
         let locations = self
             .archive
-            .generate_locations(self.book.as_ref().unwrap(), bytes_per_position)
+            .generate_locations(book, bytes_per_position)
             .map_err(|e| e.to_string())?;
-
         serde_wasm_bindgen::to_value(&locations).map_err(|e| e.to_string().into())
     }
 
@@ -164,11 +164,7 @@ impl EpubParser {
         &mut self,
         bytes_per_position: usize,
     ) -> Result<JsValue, JsValue> {
-        if self.book.is_none() {
-            let book = self.archive.parse().map_err(|e| e.to_string())?;
-            self.book = Some(book);
-        }
-
+        let book = self.ensure_parsed()?;
         let strategy = crate::parser::ArchiveEntryLength {
             page_length: if bytes_per_position == 0 {
                 crate::parser::BYTES_PER_POSITION
@@ -176,12 +172,10 @@ impl EpubParser {
                 bytes_per_position
             },
         };
-
         let by_chapter = self
             .archive
-            .positions_by_reading_order(self.book.as_ref().unwrap(), &strategy)
+            .positions_by_reading_order(book, &strategy)
             .map_err(|e| e.to_string())?;
-
         serde_wasm_bindgen::to_value(&by_chapter).map_err(|e| e.to_string().into())
     }
 
@@ -204,14 +198,8 @@ impl EpubParser {
     /// - `landmarks` — Structural navigation points (epub:type="landmarks"; empty for EPUB 2)
     #[wasm_bindgen]
     pub fn get_navigation(&mut self) -> Result<JsValue, JsValue> {
-        if self.book.is_none() {
-            let book = self.archive.parse().map_err(|e| e.to_string())?;
-            self.book = Some(book);
-        }
-        let nav = self
-            .archive
-            .get_navigation(self.book.as_ref().unwrap())
-            .map_err(|e| e.to_string())?;
+        let book = self.ensure_parsed()?;
+        let nav = self.archive.get_navigation(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav).map_err(|e| e.to_string().into())
     }
 
@@ -225,14 +213,8 @@ impl EpubParser {
     /// Returns `[]` if no page list is present (page lists are optional per EPUB spec).
     #[wasm_bindgen]
     pub fn get_page_list(&mut self) -> Result<JsValue, JsValue> {
-        if self.book.is_none() {
-            let book = self.archive.parse().map_err(|e| e.to_string())?;
-            self.book = Some(book);
-        }
-        let nav = self
-            .archive
-            .get_navigation(self.book.as_ref().unwrap())
-            .map_err(|e| e.to_string())?;
+        let book = self.ensure_parsed()?;
+        let nav = self.archive.get_navigation(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav.page_list).map_err(|e| e.to_string().into())
     }
 }

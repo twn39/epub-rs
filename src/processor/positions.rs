@@ -11,18 +11,25 @@ use kuchikiki::traits::*;
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Context passed into [`extract_positions`] for a single spine item.
-pub struct PositionContext<'a> {
-    pub base_cfi: &'a str,
-    pub chars_per_position: usize,
-    pub spine_index: usize,
-    pub href: &'a str,
+///
+/// This is an internal type used by the crate's DOM-based character-offset position
+/// extraction. External callers should use [`EpubArchive::generate_locations`] or
+/// [`EpubArchive::positions_by_reading_order`] instead.
+pub(crate) struct PositionContext<'a> {
+    pub(crate) base_cfi: &'a str,
+    pub(crate) chars_per_position: usize,
+    pub(crate) spine_index: usize,
+    pub(crate) href: &'a str,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Walks the DOM of `html`, emitting [`Position`] entries into `positions`
 /// every `ctx.chars_per_position` characters.
-pub fn extract_positions(
+///
+/// Internal utility: provides DOM-level character-precise CFI positions.
+/// External callers should use [`EpubArchive::generate_locations`] instead.
+pub(crate) fn extract_positions(
     html: &str,
     ctx: &PositionContext,
     char_counter: &mut usize,
@@ -96,5 +103,55 @@ fn traverse_for_positions(
             }
             *char_counter += text_len - offset;
         }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+//
+// These tests were originally in tests/processor_tests.rs but were relocated here
+// when PositionContext and extract_positions became pub(crate). Inline tests have
+// full access to crate-private items; integration tests do not.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_positions_character_boundary_splitting() {
+        let html = r#"<html><body><div id="content"><p>12345</p><p>67890</p><p>abcde</p></div></body></html>"#;
+
+        let mut positions = Vec::new();
+        let mut char_counter = 0;
+        let mut global_pos = 0;
+
+        // chars_per_position = 4.
+        // "12345" (5 chars): emit after 4 chars → 1 position. Leftover: 1.
+        // "67890" (5 chars): leftover(1)+5=6, emit after 3 chars → 1 position. Leftover: 2.
+        // "abcde" (5 chars): leftover(2)+5=7, emit after 2 chars → 1 position. Leftover: 3.
+        let ctx = PositionContext {
+            base_cfi: "/6/4!",
+            chars_per_position: 4,
+            spine_index: 0,
+            href: "test.xhtml",
+        };
+
+        extract_positions(html, &ctx, &mut char_counter, &mut positions, &mut global_pos);
+
+        assert_eq!(positions.len(), 3);
+
+        // Match 1: in "12345", at offset 4  — body/4 → div/2[content] → p/2 → text/1
+        assert_eq!(positions[0].cfi, "epubcfi(/6/4!/4/2[content]/2/1:4)");
+        assert_eq!(positions[0].global_position, 1);
+
+        // Match 2: in "67890", at offset 3  — body/4 → div/2[content] → p/4 → text/1
+        assert_eq!(positions[1].cfi, "epubcfi(/6/4!/4/2[content]/4/1:3)");
+        assert_eq!(positions[1].global_position, 2);
+
+        // Match 3: in "abcde", at offset 2  — body/4 → div/2[content] → p/6 → text/1
+        assert_eq!(positions[2].cfi, "epubcfi(/6/4!/4/2[content]/6/1:2)");
+        assert_eq!(positions[2].global_position, 3);
+
+        // Remaining chars that didn't reach the next boundary
+        assert_eq!(char_counter, 3);
     }
 }
