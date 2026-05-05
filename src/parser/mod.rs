@@ -7,7 +7,7 @@
 
 mod navigation;
 mod opf;
-mod positions;
+pub mod positions;
 
 use crate::error::EpubError;
 use crate::model::{EpubBook, Position};
