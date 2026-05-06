@@ -34,7 +34,7 @@ use crate::provider::ZipProvider;
 // stateless helpers such as `epub_resolve_cfi` can also report errors.
 
 thread_local! {
-    static LAST_ERROR: RefCell<Option<CString>> = RefCell::new(None);
+    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 }
 
 fn set_error(msg: impl AsRef<str>) {
@@ -294,7 +294,7 @@ pub unsafe extern "C" fn epub_get_navigation(handle: *mut EpubHandle) -> *mut c_
 
     // Clone the cached book to avoid simultaneous &mut archive + &book on the same struct.
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_navigation(&book) {
+    match h.archive.get_navigation(book) {
         Ok(nav) => to_json(&nav),
         Err(e) => {
             set_error(e.to_string());
@@ -331,7 +331,7 @@ pub unsafe extern "C" fn epub_get_toc(handle: *mut EpubHandle) -> *mut c_char {
     }
 
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_toc(&book) {
+    match h.archive.get_toc(book) {
         Ok(toc) => to_json(&toc),
         Err(e) => {
             set_error(e.to_string());
@@ -368,7 +368,7 @@ pub unsafe extern "C" fn epub_get_page_list(handle: *mut EpubHandle) -> *mut c_c
     }
 
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_page_list(&book) {
+    match h.archive.get_page_list(book) {
         Ok(page_list) => to_json(&page_list),
         Err(e) => {
             set_error(e.to_string());
@@ -417,7 +417,7 @@ pub unsafe extern "C" fn epub_positions_by_reading_order(
     let strategy = crate::parser::ArchiveEntryLength { page_length: bpp };
 
     let book = h.book.as_ref().unwrap();
-    match h.archive.positions_by_reading_order(&book, &strategy) {
+    match h.archive.positions_by_reading_order(book, &strategy) {
         Ok(positions) => to_json(&positions),
         Err(e) => {
             set_error(e.to_string());
@@ -467,7 +467,7 @@ pub unsafe extern "C" fn epub_get_cover_image(
     }
 
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_cover_image(&book) {
+    match h.archive.get_cover_image(book) {
         Ok((bytes, media_type)) => {
             let len = bytes.len();
             let media_type_ptr = match CString::new(media_type) {
@@ -532,7 +532,7 @@ pub unsafe extern "C" fn epub_get_resource(
     let href_str = unsafe { CStr::from_ptr(href) }.to_string_lossy();
 
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_resource_by_href(&book, href_str.as_ref()) {
+    match h.archive.get_resource_by_href(book, href_str.as_ref()) {
         Ok(bytes) => {
             let len = bytes.len();
             // SAFETY: out_len is a valid pointer (checked above).
@@ -652,7 +652,7 @@ pub unsafe extern "C" fn epub_free_bytes(buf: *mut c_uchar, len: usize) {
     if !buf.is_null() {
         // SAFETY: buf + len describe the original Box<[u8]> slice we leaked.
         unsafe {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(buf, len)));
+            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(buf, len)));
         }
     }
 }
@@ -691,7 +691,7 @@ pub unsafe extern "C" fn epub_get_resource_by_id(
     }
     let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_resource_by_id(&book, id_str.as_ref()) {
+    match h.archive.get_resource_by_id(book, id_str.as_ref()) {
         Ok(bytes) => {
             let len = bytes.len();
             unsafe {
@@ -737,7 +737,7 @@ pub unsafe extern "C" fn epub_get_chapter_with_cfi(
     }
     let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_chapter_with_cfi(&book, id_str.as_ref()) {
+    match h.archive.get_chapter_with_cfi(book, id_str.as_ref()) {
         Ok(html) => into_c_string(html),
         Err(e) => {
             set_error(e.to_string());
@@ -786,7 +786,7 @@ pub unsafe extern "C" fn epub_search_chapter(
         }
     };
     let book = h.book.as_ref().unwrap();
-    match h.archive.search_chapter(&book, id_str.as_ref(), &pattern) {
+    match h.archive.search_chapter(book, id_str.as_ref(), &pattern) {
         Ok(results) => to_json(&results),
         Err(e) => {
             set_error(e.to_string());
@@ -825,7 +825,7 @@ pub unsafe extern "C" fn epub_get_semantic_content(
     }
     let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
     let book = h.book.as_ref().unwrap();
-    match h.archive.get_semantic_content(&book, id_str.as_ref()) {
+    match h.archive.get_semantic_content(book, id_str.as_ref()) {
         Ok(content) => to_json(&content),
         Err(e) => {
             set_error(e.to_string());
@@ -867,7 +867,7 @@ pub unsafe extern "C" fn epub_generate_locations(
     // Use generate_locations() — the Readium/Adobe-standard ZIP entry byte-length algorithm.
     // Previously this incorrectly called get_positions() which used DOM character counting,
     // causing FFI and WASM callers to receive different position counts for the same EPUB.
-    match h.archive.generate_locations(&book, bpp) {
+    match h.archive.generate_locations(book, bpp) {
         Ok(positions) => to_json(&positions),
         Err(e) => {
             set_error(e.to_string());
