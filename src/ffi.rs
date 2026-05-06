@@ -905,13 +905,13 @@ pub unsafe extern "C" fn epub_generate_location_index(
             return ptr::null_mut();
         }
     };
-    let book = match h.ensure_parsed() {
-        Ok(b) => b,
-        Err(e) => {
-            set_error(e);
-            return ptr::null_mut();
-        }
-    };
+    // Step 1: trigger parsing (the &mut borrow of h ends here).
+    if let Err(e) = h.ensure_parsed() {
+        set_error(e);
+        return ptr::null_mut();
+    }
+    // Step 2: disjoint field borrows — h.book and h.archive are separate.
+    let book = h.book.as_ref().unwrap();
     let bpp = if bytes_per_position == 0 {
         crate::parser::BYTES_PER_POSITION
     } else {
@@ -971,13 +971,13 @@ pub unsafe extern "C" fn epub_location_from_cfi(
         return ptr::null_mut();
     }
 
-    let book = match h.ensure_parsed() {
-        Ok(b) => b,
-        Err(e) => {
-            set_error(e);
-            return ptr::null_mut();
-        }
-    };
+    // Step 1: trigger parsing (the &mut borrow of h ends here).
+    if let Err(e) = h.ensure_parsed() {
+        set_error(e);
+        return ptr::null_mut();
+    }
+    // Step 2: disjoint field borrows — h.book and h.archive are separate.
+    let book = h.book.as_ref().unwrap();
     let cfi_s = unsafe { CStr::from_ptr(cfi_str) }.to_string_lossy();
 
     // Rebuild the PositionIndex from the book (positions_json is provided by the
@@ -1034,13 +1034,13 @@ pub unsafe extern "C" fn epub_cfi_from_location(
         return ptr::null_mut();
     }
 
-    let book = match h.ensure_parsed() {
-        Ok(b) => b,
-        Err(e) => {
-            set_error(e);
-            return ptr::null_mut();
-        }
-    };
+    // Step 1: trigger parsing (the &mut borrow of h ends here).
+    if let Err(e) = h.ensure_parsed() {
+        set_error(e);
+        return ptr::null_mut();
+    }
+    // Step 2: disjoint field borrows — h.book and h.archive are separate.
+    let book = h.book.as_ref().unwrap();
     let strategy = crate::parser::ArchiveEntryLength {
         page_length: crate::parser::BYTES_PER_POSITION,
     };
