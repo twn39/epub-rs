@@ -1,8 +1,8 @@
 //! EPUB Archive Providers (Storage Layer)
 
+use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
-use std::collections::HashMap;
 use std::io::{Read, Seek};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Component, Path, PathBuf};
@@ -87,7 +87,8 @@ impl<R: Read + Seek> ZipProvider<R> {
         //    Pass &self.archive separately so we can borrow &mut self.fallback_cache
         //    afterwards (disjoint field borrows, allowed by Rust NLL).
         let resolved = Self::scan_fallback(&self.archive, path)?;
-        self.fallback_cache.insert(path.to_string(), resolved.clone());
+        self.fallback_cache
+            .insert(path.to_string(), resolved.clone());
         Some(resolved)
     }
 
@@ -342,7 +343,6 @@ mod tests {
             "cache must not grow on repeated alias lookup"
         );
     }
-
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]

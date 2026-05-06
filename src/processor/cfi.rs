@@ -56,9 +56,8 @@ fn traverse_and_inject(node: &NodeRef, base_cfi: &str, current_path: &str) {
     for child in node.children() {
         if child.as_element().is_some() {
             child_index += 2;
-            let child_path = super::cfi_child_path(
-                current_path, child_index, &super::cfi_assertion(&child),
-            );
+            let child_path =
+                super::cfi_child_path(current_path, child_index, &super::cfi_assertion(&child));
             if let Some(el) = child.as_element() {
                 let full_cfi = format!("epubcfi({}{})", base_cfi, child_path);
                 el.attributes.borrow_mut().insert("data-cfi", full_cfi);
@@ -79,9 +78,8 @@ fn search_node(
     for child in node.children() {
         if child.as_element().is_some() {
             child_index += 2;
-            let child_path = super::cfi_child_path(
-                current_path, child_index, &super::cfi_assertion(&child),
-            );
+            let child_path =
+                super::cfi_child_path(current_path, child_index, &super::cfi_assertion(&child));
             search_node(&child, base_cfi, &child_path, pattern, results);
         } else if let Some(text_node) = child.as_text() {
             let text = text_node.borrow();
@@ -89,7 +87,7 @@ fn search_node(
 
             for mat in pattern.find_iter(&text) {
                 let start = mat.start();
-                let end   = mat.end();
+                let end = mat.end();
 
                 let range_cfi = format!(
                     "epubcfi({}{},/{}:{},/{}:{})",
@@ -98,12 +96,16 @@ fn search_node(
 
                 let context_start = {
                     let mut idx = start.saturating_sub(20);
-                    while idx > 0 && !text.is_char_boundary(idx) { idx -= 1; }
+                    while idx > 0 && !text.is_char_boundary(idx) {
+                        idx -= 1;
+                    }
                     idx
                 };
                 let context_end = {
                     let mut idx = (end + 20).min(text.len());
-                    while idx < text.len() && !text.is_char_boundary(idx) { idx += 1; }
+                    while idx < text.len() && !text.is_char_boundary(idx) {
+                        idx += 1;
+                    }
                     idx
                 };
 

@@ -88,9 +88,8 @@ fn traverse_semantic_nodes(
             child_index += 2;
             let tag_name = el.name.local.to_string();
 
-            let child_path = super::cfi_child_path(
-                current_path, child_index, &super::cfi_assertion(&child),
-            );
+            let child_path =
+                super::cfi_child_path(current_path, child_index, &super::cfi_assertion(&child));
 
             let mut current_lang = inherited_lang.clone();
             if let Some(lang) = el.attributes.borrow().get("lang") {
@@ -101,8 +100,17 @@ fn traverse_semantic_nodes(
 
             let is_block = matches!(
                 tag_name.as_str(),
-                "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-                    | "blockquote" | "li" | "dt" | "dd" | "figcaption"
+                "p" | "h1"
+                    | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "blockquote"
+                    | "li"
+                    | "dt"
+                    | "dd"
+                    | "figcaption"
             );
 
             if is_block {

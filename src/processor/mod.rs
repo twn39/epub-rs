@@ -12,8 +12,8 @@
 //! All public items are re-exported at this level so every existing caller of
 //! `crate::processor::foo()` continues to work without any changes.
 
-mod html;
 mod cfi;
+mod html;
 mod positions;
 mod semantic;
 
@@ -47,20 +47,11 @@ fn cfi_child_path(parent: &str, index: usize, assertion: &str) -> String {
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use html::{
-    normalize_path,
-    rewrite_resources,
-    extract_text,
-    extract_text_stream,
-    rewrite_links,
-    rewrite_links_stream,
-    inject_head_content,
+    extract_text, extract_text_stream, inject_head_content, normalize_path, rewrite_links,
+    rewrite_links_stream, rewrite_resources,
 };
 
-pub use cfi::{
-    SearchResult,
-    inject_cfi_dom,
-    search_chapter,
-};
+pub use cfi::{SearchResult, inject_cfi_dom, search_chapter};
 
 // positions exports intentionally omitted — PositionContext and extract_positions
 // are pub(crate) internal utilities; external callers use EpubArchive::generate_locations().

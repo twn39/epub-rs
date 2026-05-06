@@ -6,8 +6,8 @@ use crate::error::EpubError;
 use lol_html::{HtmlRewriter, Settings, element, text};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -57,8 +57,12 @@ pub fn normalize_path(base_dir: &str, rel_path: &str) -> String {
     let mut path = PathBuf::from(base_dir);
     for component in Path::new(decoded.as_ref()).components() {
         match component {
-            Component::ParentDir => { path.pop(); }
-            Component::Normal(c) => { path.push(c); }
+            Component::ParentDir => {
+                path.pop();
+            }
+            Component::Normal(c) => {
+                path.push(c);
+            }
             _ => {}
         }
     }
@@ -148,18 +152,19 @@ where
                     let resolver = Arc::clone(&resolver_arc);
                     let base_dir = base_dir.clone();
                     move |el| {
-                        if let Some(href) = el.get_attribute("href") {
-                            if !is_external_url(&href) && !href.starts_with('#') {
-                                let (path_part, anchor_part) = match href.find('#') {
-                                    Some(idx) => (&href[..idx], &href[idx..]),
-                                    None => (href.as_str(), ""),
-                                };
-                                if !path_part.is_empty() {
-                                    let abs_path = normalize_path(&base_dir, path_part);
-                                    if let Some(mut new_url) = (resolver.lock().unwrap())(&abs_path) {
-                                        new_url.push_str(anchor_part);
-                                        el.set_attribute("href", &new_url).unwrap();
-                                    }
+                        if let Some(href) = el.get_attribute("href")
+                            && !is_external_url(&href)
+                            && !href.starts_with('#')
+                        {
+                            let (path_part, anchor_part) = match href.find('#') {
+                                Some(idx) => (&href[..idx], &href[idx..]),
+                                None => (href.as_str(), ""),
+                            };
+                            if !path_part.is_empty() {
+                                let abs_path = normalize_path(&base_dir, path_part);
+                                if let Some(mut new_url) = (resolver.lock().unwrap())(&abs_path) {
+                                    new_url.push_str(anchor_part);
+                                    el.set_attribute("href", &new_url).unwrap();
                                 }
                             }
                         }
@@ -172,8 +177,12 @@ where
         |c: &[u8]| output.extend_from_slice(c),
     );
 
-    rewriter.write(html.as_bytes()).map_err(|e| EpubError::HtmlParse(e.to_string()))?;
-    rewriter.end().map_err(|e| EpubError::HtmlParse(e.to_string()))?;
+    rewriter
+        .write(html.as_bytes())
+        .map_err(|e| EpubError::HtmlParse(e.to_string()))?;
+    rewriter
+        .end()
+        .map_err(|e| EpubError::HtmlParse(e.to_string()))?;
     String::from_utf8(output).map_err(|e| EpubError::HtmlParse(format!("Invalid UTF-8: {}", e)))
 }
 
@@ -223,11 +232,15 @@ pub fn extract_text_stream<R: Read>(mut reader: R) -> Result<String, EpubError> 
     let mut buffer = [0; 8192];
     loop {
         let bytes_read = reader.read(&mut buffer)?;
-        if bytes_read == 0 { break; }
-        rewriter.write(&buffer[..bytes_read])
+        if bytes_read == 0 {
+            break;
+        }
+        rewriter
+            .write(&buffer[..bytes_read])
             .map_err(|e| EpubError::InvalidFormat(format!("HTML extraction error: {}", e)))?;
     }
-    rewriter.end()
+    rewriter
+        .end()
         .map_err(|e| EpubError::InvalidFormat(format!("HTML extraction error: {}", e)))?;
 
     let result = extracted_text.lock().unwrap().clone();
@@ -258,8 +271,8 @@ where
     let error_clone = Arc::clone(&write_error);
 
     {
-        let mapper_img  = Arc::clone(&mapper_arc);
-        let mapper_a    = Arc::clone(&mapper_arc);
+        let mapper_img = Arc::clone(&mapper_arc);
+        let mapper_a = Arc::clone(&mapper_arc);
         let mapper_link = Arc::clone(&mapper_arc);
 
         let mut rewriter = HtmlRewriter::new(
@@ -269,8 +282,9 @@ where
                         if let Some(src) = el.get_attribute("src")
                             && let Some(new_src) = (mapper_img.lock().unwrap())("img", &src)
                         {
-                            el.set_attribute("src", &new_src)
-                                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                            el.set_attribute("src", &new_src).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
                         }
                         Ok(())
                     }),
@@ -278,8 +292,9 @@ where
                         if let Some(href) = el.get_attribute("href")
                             && let Some(new_href) = (mapper_a.lock().unwrap())("a", &href)
                         {
-                            el.set_attribute("href", &new_href)
-                                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                            el.set_attribute("href", &new_href).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
                         }
                         Ok(())
                     }),
@@ -287,8 +302,9 @@ where
                         if let Some(href) = el.get_attribute("href")
                             && let Some(new_href) = (mapper_link.lock().unwrap())("link", &href)
                         {
-                            el.set_attribute("href", &new_href)
-                                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                            el.set_attribute("href", &new_href).map_err(|e| {
+                                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+                            })?;
                         }
                         Ok(())
                     }),
@@ -304,14 +320,20 @@ where
 
         let mut buffer = [0; 8192];
         loop {
-            if write_error.lock().unwrap().is_some() { break; }
+            if write_error.lock().unwrap().is_some() {
+                break;
+            }
             let bytes_read = reader.read(&mut buffer)?;
-            if bytes_read == 0 { break; }
-            rewriter.write(&buffer[..bytes_read])
+            if bytes_read == 0 {
+                break;
+            }
+            rewriter
+                .write(&buffer[..bytes_read])
                 .map_err(|e| EpubError::InvalidFormat(format!("HTML rewrite error: {}", e)))?;
         }
         if write_error.lock().unwrap().is_none() {
-            rewriter.end()
+            rewriter
+                .end()
                 .map_err(|e| EpubError::InvalidFormat(format!("HTML rewrite error: {}", e)))?;
         }
     }
@@ -350,9 +372,13 @@ pub fn inject_head_content<R: Read, W: Write>(
 
         let mut buffer = [0; 8192];
         loop {
-            if write_error.lock().unwrap().is_some() { break; }
+            if write_error.lock().unwrap().is_some() {
+                break;
+            }
             let bytes_read = reader.read(&mut buffer)?;
-            if bytes_read == 0 { break; }
+            if bytes_read == 0 {
+                break;
+            }
             rewriter.write(&buffer[..bytes_read]).map_err(|e| {
                 EpubError::InvalidFormat(format!("HTML theme injection error: {}", e))
             })?;
@@ -378,11 +404,23 @@ mod tests {
 
     #[test]
     fn test_normalize_path() {
-        assert_eq!(normalize_path("OEBPS/Text", "../Images/cover.jpg"), "OEBPS/Images/cover.jpg");
-        assert_eq!(normalize_path("OEBPS/Text", "chapter2.xhtml"), "OEBPS/Text/chapter2.xhtml");
+        assert_eq!(
+            normalize_path("OEBPS/Text", "../Images/cover.jpg"),
+            "OEBPS/Images/cover.jpg"
+        );
+        assert_eq!(
+            normalize_path("OEBPS/Text", "chapter2.xhtml"),
+            "OEBPS/Text/chapter2.xhtml"
+        );
         assert_eq!(normalize_path("", "images/cover.jpg"), "images/cover.jpg");
-        assert_eq!(normalize_path("OEBPS/Text", "../Images/my%20cover.jpg"), "OEBPS/Images/my cover.jpg");
-        assert_eq!(normalize_path("OEBPS", "css/style.css?v=2.0#section"), "OEBPS/css/style.css");
+        assert_eq!(
+            normalize_path("OEBPS/Text", "../Images/my%20cover.jpg"),
+            "OEBPS/Images/my cover.jpg"
+        );
+        assert_eq!(
+            normalize_path("OEBPS", "css/style.css?v=2.0#section"),
+            "OEBPS/css/style.css"
+        );
     }
 
     #[test]
@@ -392,7 +430,8 @@ mod tests {
         let rewritten = rewrite_resources(html, base_file_path, |abs_path| {
             assert_eq!(abs_path, "OEBPS/Images/cover.jpg");
             Some("blob:12345".to_string())
-        }).unwrap();
+        })
+        .unwrap();
         assert!(rewritten.contains(r#"src="blob:12345""#));
     }
 }

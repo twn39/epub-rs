@@ -114,7 +114,7 @@ impl CfiStep {
     ///
     /// From epub.js `parseStep`: odd numbers represent text/character data.
     pub fn is_text_node(&self) -> bool {
-        self.index % 2 != 0
+        !self.index.is_multiple_of(2)
     }
 
     /// Returns the 0-based child index within the appropriate sibling collection.
@@ -268,10 +268,7 @@ impl CfiPath {
             resolved_steps.push(step.to_resolved_step());
         }
 
-        let is_text_node = steps
-            .last()
-            .map(|s| s.is_text_node())
-            .unwrap_or(false);
+        let is_text_node = steps.last().map(|s| s.is_text_node()).unwrap_or(false);
 
         Some(CfiResolved {
             spine_index,
@@ -846,7 +843,10 @@ mod tests {
         // epubcfi(/6/4[chap01]!/4[body01]/10[para05]/2)
         // local steps: /4[body01] /10[para05] /2
         let path = CfiPath {
-            steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("chap01".into()))],
+            steps: vec![
+                CfiStep::new(6, None),
+                CfiStep::new(4, Some("chap01".into())),
+            ],
             local_steps: Some(vec![
                 CfiStep::new(4, Some("body01".into())),
                 CfiStep::new(10, Some("para05".into())),
@@ -880,7 +880,10 @@ mod tests {
         // epubcfi(/6/4[chap01]!/4/2/1:3)
         // local: /4 /2 /1  offset=3
         let path = CfiPath {
-            steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("chap01".into()))],
+            steps: vec![
+                CfiStep::new(6, None),
+                CfiStep::new(4, Some("chap01".into())),
+            ],
             local_steps: Some(vec![
                 CfiStep::new(4, None), // element, index=1
                 CfiStep::new(2, None), // element, index=0
@@ -989,7 +992,10 @@ mod tests {
         //
         // In practice, construct this directly to avoid parser ambiguity:
         let path = CfiPath {
-            steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("chap01".into()))],
+            steps: vec![
+                CfiStep::new(6, None),
+                CfiStep::new(4, Some("chap01".into())),
+            ],
             local_steps: Some(vec![
                 CfiStep::new(4, None), // element
                 CfiStep::new(2, None), // element
@@ -1006,7 +1012,11 @@ mod tests {
         let cfi = EpubCfi::Range {
             parent: path.clone(),
             start: start_half.clone(),
-            end: CfiPath { steps: vec![], local_steps: None, character_offset: Some(12) },
+            end: CfiPath {
+                steps: vec![],
+                local_steps: None,
+                character_offset: Some(12),
+            },
         };
 
         let resolution = cfi.resolve().unwrap();

@@ -78,8 +78,6 @@ mod tests {
         assert_eq!(results[1].cfi, "epubcfi(/6/4!/4/2[content]/4,/1:20,/1:25)");
     }
 
-
-
     #[test]
     fn test_extract_semantic_content() {
         use epub_rs::processor::extract_semantic_content;
