@@ -23,7 +23,10 @@ fn minimal_meta(title: &str, lang: &str) -> Metadata {
     Metadata {
         title: Some(title.to_string()),
         language: Some(lang.to_string()),
-        identifier: Some(format!("urn:uuid:test-{}", title.replace(' ', "-").to_lowercase())),
+        identifier: Some(format!(
+            "urn:uuid:test-{}",
+            title.replace(' ', "-").to_lowercase()
+        )),
         ..Default::default()
     }
 }
@@ -42,7 +45,11 @@ fn roundtrip_title_language_identifier() {
         EpubBuilder::new()
             .version(EpubVersion::V30)
             .metadata(metadata)
-            .add_chapter("c1", "text/c1.xhtml", b"<html><body><p>Hello</p></body></html>".to_vec()),
+            .add_chapter(
+                "c1",
+                "text/c1.xhtml",
+                b"<html><body><p>Hello</p></body></html>".to_vec(),
+            ),
     );
 
     let mut archive = EpubArchive::new(buf).unwrap();
@@ -50,7 +57,10 @@ fn roundtrip_title_language_identifier() {
 
     assert_eq!(book.metadata.title.as_deref(), Some("Roundtrip Book"));
     assert_eq!(book.metadata.language.as_deref(), Some("zh-TW"));
-    assert_eq!(book.metadata.identifier.as_deref(), Some("urn:uuid:rt-0001"));
+    assert_eq!(
+        book.metadata.identifier.as_deref(),
+        Some("urn:uuid:rt-0001")
+    );
 }
 
 #[test]
@@ -60,8 +70,16 @@ fn roundtrip_multiple_creators_with_roles() {
         language: Some("en".to_string()),
         identifier: Some("urn:uuid:test-multi-creator".to_string()),
         creators: vec![
-            Creator { name: "Alice Author".to_string(), role: Some("aut".to_string()), file_as: Some("Author, Alice".to_string()) },
-            Creator { name: "Bob Translator".to_string(), role: Some("trl".to_string()), file_as: None },
+            Creator {
+                name: "Alice Author".to_string(),
+                role: Some("aut".to_string()),
+                file_as: Some("Author, Alice".to_string()),
+            },
+            Creator {
+                name: "Bob Translator".to_string(),
+                role: Some("trl".to_string()),
+                file_as: None,
+            },
         ],
         ..Default::default()
     };
@@ -69,7 +87,11 @@ fn roundtrip_multiple_creators_with_roles() {
         EpubBuilder::new()
             .version(EpubVersion::V30)
             .metadata(metadata)
-            .add_chapter("c1", "text/c1.xhtml", b"<html><body><p>x</p></body></html>".to_vec()),
+            .add_chapter(
+                "c1",
+                "text/c1.xhtml",
+                b"<html><body><p>x</p></body></html>".to_vec(),
+            ),
     );
 
     let mut archive = EpubArchive::new(buf).unwrap();
@@ -78,7 +100,10 @@ fn roundtrip_multiple_creators_with_roles() {
     assert_eq!(book.metadata.creators.len(), 2);
     assert_eq!(book.metadata.creators[0].name, "Alice Author");
     assert_eq!(book.metadata.creators[0].role.as_deref(), Some("aut"));
-    assert_eq!(book.metadata.creators[0].file_as.as_deref(), Some("Author, Alice"));
+    assert_eq!(
+        book.metadata.creators[0].file_as.as_deref(),
+        Some("Author, Alice")
+    );
     assert_eq!(book.metadata.creators[1].name, "Bob Translator");
     assert_eq!(book.metadata.creators[1].role.as_deref(), Some("trl"));
 }
@@ -152,9 +177,26 @@ fn roundtrip_toc_titles_and_hrefs() {
     let buf = generate(
         EpubBuilder::new()
             .version(EpubVersion::V30)
-            .metadata(Metadata { title: Some("TOC Test".to_string()), language: Some("zh".to_string()), identifier: Some("urn:uuid:test-toc".to_string()), ..Default::default() })
-            .add_chapter("ch1", "text/ch1.xhtml", "<html><body><p>\u{4e00}</p></body></html>".as_bytes().to_vec())
-            .add_chapter("ch2", "text/ch2.xhtml", "<html><body><p>\u{4e8c}</p></body></html>".as_bytes().to_vec())
+            .metadata(Metadata {
+                title: Some("TOC Test".to_string()),
+                language: Some("zh".to_string()),
+                identifier: Some("urn:uuid:test-toc".to_string()),
+                ..Default::default()
+            })
+            .add_chapter(
+                "ch1",
+                "text/ch1.xhtml",
+                "<html><body><p>\u{4e00}</p></body></html>"
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .add_chapter(
+                "ch2",
+                "text/ch2.xhtml",
+                "<html><body><p>\u{4e8c}</p></body></html>"
+                    .as_bytes()
+                    .to_vec(),
+            )
             .set_toc(toc),
     );
 
@@ -165,7 +207,11 @@ fn roundtrip_toc_titles_and_hrefs() {
     assert_eq!(nav.toc.len(), 2, "top-level TOC should have 2 entries");
     assert_eq!(nav.toc[0].title, "第一章");
     assert_eq!(nav.toc[0].href, "text/ch1.xhtml");
-    assert_eq!(nav.toc[0].children.len(), 1, "first chapter should have 1 child");
+    assert_eq!(
+        nav.toc[0].children.len(),
+        1,
+        "first chapter should have 1 child"
+    );
     assert_eq!(nav.toc[0].children[0].title, "第一节");
     assert_eq!(nav.toc[1].title, "第二章");
 }
@@ -183,7 +229,13 @@ fn roundtrip_epub2_basic_metadata() {
                 identifier: Some("urn:isbn:978-0-000-00000-0".to_string()),
                 ..Default::default()
             })
-            .add_chapter("ch1", "text/ch1.xhtml", "<html><body><p>\u{65e5}\u{672c}\u{8a9e}</p></body></html>".as_bytes().to_vec()),
+            .add_chapter(
+                "ch1",
+                "text/ch1.xhtml",
+                "<html><body><p>\u{65e5}\u{672c}\u{8a9e}</p></body></html>"
+                    .as_bytes()
+                    .to_vec(),
+            ),
     );
 
     let mut archive = EpubArchive::new(buf).unwrap();
@@ -191,7 +243,10 @@ fn roundtrip_epub2_basic_metadata() {
 
     assert_eq!(book.metadata.title.as_deref(), Some("EPUB2 Classic"));
     assert_eq!(book.metadata.language.as_deref(), Some("ja"));
-    assert_eq!(book.metadata.identifier.as_deref(), Some("urn:isbn:978-0-000-00000-0"));
+    assert_eq!(
+        book.metadata.identifier.as_deref(),
+        Some("urn:isbn:978-0-000-00000-0")
+    );
 }
 
 // ── Fixed-layout roundtrip ────────────────────────────────────────────────────
@@ -208,15 +263,26 @@ fn roundtrip_fixed_layout_global_setting() {
                 layout: LayoutType::PrePaginated,
                 ..Default::default()
             })
-            .add_chapter("p1", "text/p1.xhtml", b"<html><body><p>Page 1</p></body></html>".to_vec())
-            .add_chapter("p2", "text/p2.xhtml", b"<html><body><p>Page 2</p></body></html>".to_vec()),
+            .add_chapter(
+                "p1",
+                "text/p1.xhtml",
+                b"<html><body><p>Page 1</p></body></html>".to_vec(),
+            )
+            .add_chapter(
+                "p2",
+                "text/p2.xhtml",
+                b"<html><body><p>Page 2</p></body></html>".to_vec(),
+            ),
     );
 
     let mut archive = EpubArchive::new(buf).unwrap();
     let book = archive.parse().unwrap();
 
-    assert_eq!(book.metadata.layout, LayoutType::PrePaginated,
-        "fixed-layout global setting must survive roundtrip");
+    assert_eq!(
+        book.metadata.layout,
+        LayoutType::PrePaginated,
+        "fixed-layout global setting must survive roundtrip"
+    );
     assert_eq!(book.spine.len(), 2);
 }
 
@@ -234,13 +300,14 @@ fn roundtrip_positions_pipeline_invariants() {
 
     let mut builder = EpubBuilder::new()
         .version(EpubVersion::V30)
-        .metadata(Metadata { title: Some("Positions Test".to_string()), language: Some("en".to_string()), identifier: Some("urn:uuid:test-positions".to_string()), ..Default::default() });
+        .metadata(Metadata {
+            title: Some("Positions Test".to_string()),
+            language: Some("en".to_string()),
+            identifier: Some("urn:uuid:test-positions".to_string()),
+            ..Default::default()
+        });
     for i in 0..3usize {
-        builder = builder.add_chapter(
-            format!("ch{i}"),
-            format!("text/ch{i}.xhtml"),
-            html.clone(),
-        );
+        builder = builder.add_chapter(format!("ch{i}"), format!("text/ch{i}.xhtml"), html.clone());
     }
 
     let buf = generate(builder);
@@ -248,21 +315,33 @@ fn roundtrip_positions_pipeline_invariants() {
     let book = archive.parse().unwrap();
 
     let strategy = epub_rs::parser::positions::ArchiveEntryLength { page_length: 1024 };
-    let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+    let positions = archive
+        .positions_by_reading_order(&book, &strategy)
+        .unwrap();
 
     // 3 chapters → 3 groups
-    assert_eq!(positions.len(), 3, "should have one group per linear chapter");
+    assert_eq!(
+        positions.len(),
+        3,
+        "should have one group per linear chapter"
+    );
 
     // All groups must be non-empty
     for (i, chapter) in positions.iter().enumerate() {
-        assert!(!chapter.is_empty(), "chapter {i} must have at least 1 position");
+        assert!(
+            !chapter.is_empty(),
+            "chapter {i} must have at least 1 position"
+        );
     }
 
     // Global monotonicity invariant
     let flat: Vec<_> = positions.iter().flatten().collect();
     for (i, pos) in flat.iter().enumerate() {
-        assert_eq!(pos.global_position, i + 1,
-            "global_position must be 1-based monotonic");
+        assert_eq!(
+            pos.global_position,
+            i + 1,
+            "global_position must be 1-based monotonic"
+        );
     }
 
     // total_progression of first position must be 0.0

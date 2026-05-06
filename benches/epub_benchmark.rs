@@ -2,9 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use epub_rs::generator::EpubBuilder;
 use epub_rs::model::{EpubVersion, Metadata};
 use epub_rs::parser::EpubArchive;
-use epub_rs::processor::{
-    extract_positions, extract_semantic_content, extract_text, search_chapter,
-};
+use epub_rs::processor::{extract_semantic_content, extract_text, search_chapter};
 use regex::Regex;
 use std::hint::black_box;
 use std::io::Cursor;
@@ -118,32 +116,18 @@ fn bench_processor_extract_semantic(c: &mut Criterion) {
     });
 }
 
-fn bench_processor_extract_positions(c: &mut Criterion) {
-    let html = r#"<html><body>"#.to_string()
-        + &"<p>Benchmarking position extraction performance.</p>".repeat(50)
-        + "</body></html>";
-    let ctx = epub_rs::processor::PositionContext {
-        base_cfi: "/6/4!",
-        chars_per_position: 1024,
-        spine_index: 0,
-        href: "ch1.xhtml",
-    };
+fn bench_generate_locations(c: &mut Criterion) {
+    // Benchmark the Readium-standard ZIP entry byte-length position algorithm.
+    // This is the hot path for readers building their reading position index.
+    let epub_bytes = generate_dummy_epub(20); // 20 chapters
 
-    c.bench_function("extract_positions (50 paragraphs)", |b| {
+    c.bench_function("generate_location_index (20 chapters)", |b| {
         b.iter(|| {
-            let mut char_counter = 0;
-            let mut global_pos = 0;
-            let mut positions = Vec::new();
-
-            extract_positions(
-                black_box(&html),
-                black_box(&ctx),
-                &mut char_counter,
-                &mut positions,
-                &mut global_pos,
-            );
-
-            black_box(positions);
+            let cursor = Cursor::new(black_box(&epub_bytes));
+            let mut archive = EpubArchive::new(cursor).unwrap();
+            let book = archive.parse().unwrap();
+            let index = archive.generate_location_index(&book, 0).unwrap();
+            black_box(index.len());
         })
     });
 }
@@ -168,7 +152,7 @@ criterion_group!(
     bench_generate_epub,
     bench_processor_extract_text,
     bench_processor_extract_semantic,
-    bench_processor_extract_positions,
+    bench_generate_locations,
     bench_processor_search_chapter
 );
 criterion_main!(benches);

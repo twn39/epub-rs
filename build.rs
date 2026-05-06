@@ -3,8 +3,8 @@ fn main() {
     // This avoids running cbindgen on WASM builds where there is no C target.
     #[cfg(feature = "ffi")]
     {
-        let crate_dir = std::env::var("CARGO_MANIFEST_DIR")
-            .expect("CARGO_MANIFEST_DIR must be set by cargo");
+        let crate_dir =
+            std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set by cargo");
 
         // Create the include/ directory if it doesn't exist
         std::fs::create_dir_all(format!("{crate_dir}/include"))

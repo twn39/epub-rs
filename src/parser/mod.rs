@@ -226,8 +226,6 @@ impl<P: EpubProvider> EpubArchive<P> {
         crate::processor::search_chapter(&html_str, &base_cfi, pattern)
     }
 
-
-
     /// Extracts semantic content blocks (paragraphs, headings) from a specific chapter.
     /// Returns blocks with their text, tags, languages, and CFI paths.
     /// This is highly useful for Text-to-Speech (TTS) integrations.

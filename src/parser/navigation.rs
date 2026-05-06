@@ -127,10 +127,10 @@ impl<P: EpubProvider> EpubArchive<P> {
                 // Strip any "epub:" namespace prefix that may appear in the attribute value
                 let key = token.trim_start_matches("epub:");
                 match key {
-                    "toc"       => nav_doc.toc       = entries.clone(),
+                    "toc" => nav_doc.toc = entries.clone(),
                     "page-list" => nav_doc.page_list = entries.clone(),
                     "landmarks" => nav_doc.landmarks = entries.clone(),
-                    _           => {} // ignore unknown types (forward-compatible)
+                    _ => {} // ignore unknown types (forward-compatible)
                 }
             }
         }
@@ -141,10 +141,10 @@ impl<P: EpubProvider> EpubArchive<P> {
             let toc_node = document
                 .select_first("nav#toc")
                 .or_else(|_| document.select_first("nav"));
-            if let Ok(nav) = toc_node {
-                if let Ok(ol) = nav.as_node().select_first("ol") {
-                    nav_doc.toc = Self::parse_ol_node(ol.as_node());
-                }
+            if let Ok(nav) = toc_node
+                && let Ok(ol) = nav.as_node().select_first("ol")
+            {
+                nav_doc.toc = Self::parse_ol_node(ol.as_node());
             }
         }
 
@@ -274,16 +274,14 @@ impl<P: EpubProvider> EpubArchive<P> {
                     }
                 }
 
-                Event::Text(e) => {
-                    if in_text {
-                        let text = String::from_utf8_lossy(&e).into_owned();
-                        if in_page_list {
-                            if let Some(ref mut pt) = page_target {
-                                pt.title = text;
-                            }
-                        } else if let Some(state) = stack.last_mut() {
-                            state.title = text;
+                Event::Text(e) if in_text => {
+                    let text = String::from_utf8_lossy(&e).into_owned();
+                    if in_page_list {
+                        if let Some(ref mut pt) = page_target {
+                            pt.title = text;
                         }
+                    } else if let Some(state) = stack.last_mut() {
+                        state.title = text;
                     }
                 }
 
@@ -297,14 +295,15 @@ impl<P: EpubProvider> EpubArchive<P> {
                         in_page_list = false;
                     } else if in_page_list && name.ends_with("pageTarget") {
                         // Commit a page-list entry — only if both title and href are present
-                        if let Some(pt) = page_target.take() {
-                            if !pt.title.is_empty() && !pt.href.is_empty() {
-                                page_list.push(TocEntry {
-                                    title: pt.title,
-                                    href: pt.href,
-                                    children: Vec::new(),
-                                });
-                            }
+                        if let Some(pt) = page_target.take()
+                            && !pt.title.is_empty()
+                            && !pt.href.is_empty()
+                        {
+                            page_list.push(TocEntry {
+                                title: pt.title,
+                                href: pt.href,
+                                children: Vec::new(),
+                            });
                         }
                     } else if !in_page_list
                         && name.ends_with("navPoint")

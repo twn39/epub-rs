@@ -85,8 +85,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             .filter(|(_, item)| item.linear)
             .collect();
 
-        let mut result: Vec<Vec<crate::model::Position>> =
-            Vec::with_capacity(linear_items.len());
+        let mut result: Vec<Vec<crate::model::Position>> = Vec::with_capacity(linear_items.len());
 
         // `last_position` carries the last global_position from the previous chapter,
         // exactly like go-toolkit's `lastPositionOfPreviousResource`.
@@ -110,15 +109,11 @@ impl<P: EpubProvider> EpubArchive<P> {
             let position_count = if is_fixed {
                 1usize
             } else {
-                let byte_len = self
-                    .provider
-                    .entry_length(&manifest_item.href)
-                    .unwrap_or(0); // graceful degradation for missing/unreadable files
+                let byte_len = self.provider.entry_length(&manifest_item.href).unwrap_or(0); // graceful degradation for missing/unreadable files
                 strategy.position_count(byte_len)
             };
 
-            let base_cfi =
-                crate::cfi::EpubCfi::generate_spine_base_cfi(*spine_index, &item.idref);
+            let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(*spine_index, &item.idref);
             let spine_path = base_cfi.trim_end_matches('!');
 
             // Look up the chapter title from the TOC (strip fragment from href for matching)
@@ -303,7 +298,11 @@ impl PositionIndex {
             chapter_starts.push(positions.len());
         }
 
-        Self { positions, chapter_starts, spine_to_order }
+        Self {
+            positions,
+            chapter_starts,
+            spine_to_order,
+        }
     }
 
     /// Find which 0-based position index a CFI falls into.
@@ -436,9 +435,7 @@ pub(super) fn build_title_map(toc: &[TocEntry]) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        EpubBook, LayoutType, ManifestItem, Metadata, SpineItem, TocEntry,
-    };
+    use crate::model::{EpubBook, LayoutType, ManifestItem, Metadata, SpineItem, TocEntry};
     use std::collections::HashMap;
 
     // ── ArchiveEntryLength::position_count ────────────────────────────────────
@@ -446,7 +443,11 @@ mod tests {
     #[test]
     fn position_count_empty_file_returns_one() {
         let s = ArchiveEntryLength { page_length: 1024 };
-        assert_eq!(s.position_count(0), 1, "empty file must produce at least 1 position");
+        assert_eq!(
+            s.position_count(0),
+            1,
+            "empty file must produce at least 1 position"
+        );
     }
 
     #[test]
@@ -498,7 +499,10 @@ mod tests {
             children: vec![],
         }];
         let map = build_title_map(&toc);
-        assert_eq!(map.get("text/ch1.xhtml").map(String::as_str), Some("Chapter 1"));
+        assert_eq!(
+            map.get("text/ch1.xhtml").map(String::as_str),
+            Some("Chapter 1")
+        );
     }
 
     #[test]
@@ -510,16 +514,30 @@ mod tests {
         }];
         let map = build_title_map(&toc);
         // The fragment-stripped key must exist; the raw key must NOT
-        assert!(map.contains_key("text/ch1.xhtml"), "fragment should be stripped");
-        assert!(!map.contains_key("text/ch1.xhtml#section-2"), "raw key with fragment must not appear");
+        assert!(
+            map.contains_key("text/ch1.xhtml"),
+            "fragment should be stripped"
+        );
+        assert!(
+            !map.contains_key("text/ch1.xhtml#section-2"),
+            "raw key with fragment must not appear"
+        );
     }
 
     #[test]
     fn title_map_first_title_wins_for_duplicate_href() {
         // Two TOC entries pointing to the same file; first title should win (or_insert_with semantics)
         let toc = vec![
-            TocEntry { title: "First Title".to_string(), href: "ch.xhtml".to_string(), children: vec![] },
-            TocEntry { title: "Second Title".to_string(), href: "ch.xhtml".to_string(), children: vec![] },
+            TocEntry {
+                title: "First Title".to_string(),
+                href: "ch.xhtml".to_string(),
+                children: vec![],
+            },
+            TocEntry {
+                title: "Second Title".to_string(),
+                href: "ch.xhtml".to_string(),
+                children: vec![],
+            },
         ];
         let map = build_title_map(&toc);
         assert_eq!(map.get("ch.xhtml").map(String::as_str), Some("First Title"));
@@ -552,14 +570,18 @@ mod tests {
     /// Shared invariant checker — can be called from any test.
     fn assert_position_invariants(all: &[Vec<crate::model::Position>]) {
         let flat: Vec<_> = all.iter().flatten().collect();
-        if flat.is_empty() { return; }
+        if flat.is_empty() {
+            return;
+        }
 
         // 1. global_position is 1-based and contiguous
         for (i, pos) in flat.iter().enumerate() {
             assert_eq!(
-                pos.global_position, i + 1,
+                pos.global_position,
+                i + 1,
                 "global_position must equal 1-based index but got {} at i={}",
-                pos.global_position, i,
+                pos.global_position,
+                i,
             );
         }
 
@@ -598,7 +620,10 @@ mod tests {
     /// Minimal in-memory provider that returns a fixed byte length for every href.
     struct FixedLengthProvider(u64);
     impl crate::provider::EpubProvider for FixedLengthProvider {
-        fn read_file<'a>(&'a mut self, _path: &str) -> Result<Box<dyn std::io::Read + 'a>, crate::error::EpubError> {
+        fn read_file<'a>(
+            &'a mut self,
+            _path: &str,
+        ) -> Result<Box<dyn std::io::Read + 'a>, crate::error::EpubError> {
             Ok(Box::new(std::io::Cursor::new(vec![0u8; self.0 as usize])))
         }
         fn entry_length(&mut self, _path: &str) -> Result<u64, crate::error::EpubError> {
@@ -613,12 +638,15 @@ mod tests {
         for i in 0..n {
             let id = format!("ch{}", i);
             let href = format!("text/ch{}.xhtml", i);
-            manifest.insert(id.clone(), ManifestItem {
-                id: id.clone(),
-                href,
-                media_type: "application/xhtml+xml".to_string(),
-                properties: vec![],
-            });
+            manifest.insert(
+                id.clone(),
+                ManifestItem {
+                    id: id.clone(),
+                    href,
+                    media_type: "application/xhtml+xml".to_string(),
+                    properties: vec![],
+                },
+            );
             spine.push(SpineItem {
                 idref: id,
                 linear: true,
@@ -627,7 +655,10 @@ mod tests {
             });
         }
         EpubBook {
-            metadata: Metadata { layout, ..Default::default() },
+            metadata: Metadata {
+                layout,
+                ..Default::default()
+            },
             manifest,
             spine,
             opf_dir: String::new(),
@@ -644,7 +675,9 @@ mod tests {
             provider: FixedLengthProvider(2048),
         };
         let strategy = ArchiveEntryLength { page_length: 1024 };
-        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+        let positions = archive
+            .positions_by_reading_order(&book, &strategy)
+            .unwrap();
 
         assert_eq!(positions.len(), 1, "one chapter → one group");
         assert_eq!(positions[0].len(), 2, "2048 bytes / 1024 = 2 positions");
@@ -659,14 +692,19 @@ mod tests {
             provider: FixedLengthProvider(3072),
         };
         let strategy = ArchiveEntryLength { page_length: 1024 };
-        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+        let positions = archive
+            .positions_by_reading_order(&book, &strategy)
+            .unwrap();
 
         assert_eq!(positions.len(), 3);
         assert_eq!(positions.iter().map(|c| c.len()).sum::<usize>(), 9);
         assert_position_invariants(&positions);
 
         // Chapter boundary: first pos of chapter 2 continues from chapter 1
-        assert_eq!(positions[1][0].global_position, positions[0].last().unwrap().global_position + 1);
+        assert_eq!(
+            positions[1][0].global_position,
+            positions[0].last().unwrap().global_position + 1
+        );
     }
 
     #[test]
@@ -677,11 +715,17 @@ mod tests {
             provider: FixedLengthProvider(1_000_000),
         };
         let strategy = ArchiveEntryLength { page_length: 1024 };
-        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+        let positions = archive
+            .positions_by_reading_order(&book, &strategy)
+            .unwrap();
 
         assert_eq!(positions.len(), 4);
         for chapter in &positions {
-            assert_eq!(chapter.len(), 1, "fixed-layout chapter must have exactly 1 position");
+            assert_eq!(
+                chapter.len(),
+                1,
+                "fixed-layout chapter must have exactly 1 position"
+            );
         }
         assert_position_invariants(&positions);
     }
@@ -696,7 +740,9 @@ mod tests {
             provider: FixedLengthProvider(1024),
         };
         let strategy = ArchiveEntryLength { page_length: 1024 };
-        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+        let positions = archive
+            .positions_by_reading_order(&book, &strategy)
+            .unwrap();
 
         // Only 2 linear chapters should appear
         assert_eq!(positions.len(), 2, "non-linear items must be excluded");
@@ -710,16 +756,24 @@ mod tests {
             provider: FixedLengthProvider(2048),
         };
         let strategy = ArchiveEntryLength { page_length: 1024 };
-        let positions = archive.positions_by_reading_order(&book, &strategy).unwrap();
+        let positions = archive
+            .positions_by_reading_order(&book, &strategy)
+            .unwrap();
 
         // Position 0 (p=0): format must be epubcfi(.../6/N!/4)
         let cfi0 = &positions[0][0].cfi;
         assert!(cfi0.starts_with("epubcfi("), "CFI must start with epubcfi(");
-        assert!(cfi0.ends_with("!/4)"), "first position CFI must end with !/4)");
+        assert!(
+            cfi0.ends_with("!/4)"),
+            "first position CFI must end with !/4)"
+        );
 
         // Position 1 (p=1): format must be epubcfi(.../6/N!/4/2)  (p*2=2)
         let cfi1 = &positions[0][1].cfi;
-        assert!(cfi1.ends_with("!/4/2)"), "second position CFI must end with !/4/2)");
+        assert!(
+            cfi1.ends_with("!/4/2)"),
+            "second position CFI must end with !/4/2)"
+        );
     }
 
     // ── PositionIndex ─────────────────────────────────────────────────────────
@@ -733,7 +787,9 @@ mod tests {
             provider: FixedLengthProvider(byte_len),
         };
         let strategy = ArchiveEntryLength { page_length: 1024 };
-        let by_chapter = archive.positions_by_reading_order(&book, &strategy).unwrap();
+        let by_chapter = archive
+            .positions_by_reading_order(&book, &strategy)
+            .unwrap();
         PositionIndex::build(by_chapter)
     }
 
@@ -799,7 +855,9 @@ mod tests {
         // Build index, get CFI from each position, look up the index, verify identity.
         let idx = build_index(3, 4);
         for i in 0..idx.len() {
-            let cfi = idx.cfi_from_location(i).expect("cfi must exist for valid index");
+            let cfi = idx
+                .cfi_from_location(i)
+                .expect("cfi must exist for valid index");
             let back = idx.location_from_cfi(cfi).expect("location must resolve");
             assert_eq!(back, i, "roundtrip failed at index {i}");
         }
@@ -822,7 +880,10 @@ mod tests {
         let idx = build_index(1, 3); // positions 0,1,2 → steps /4, /4/2, /4/4
         // Step /4/100 (p=50) exceeds chapter size of 3 → clamped to 2 (last)
         let loc = idx.location_from_cfi("epubcfi(/6/2!/4/100)").unwrap();
-        assert_eq!(loc, 2, "out-of-range step must clamp to last chapter position");
+        assert_eq!(
+            loc, 2,
+            "out-of-range step must clamp to last chapter position"
+        );
     }
 
     #[test]
@@ -834,7 +895,9 @@ mod tests {
             provider: FixedLengthProvider(1024),
         };
         let strategy = ArchiveEntryLength { page_length: 1024 };
-        let by_chapter = archive.positions_by_reading_order(&book, &strategy).unwrap();
+        let by_chapter = archive
+            .positions_by_reading_order(&book, &strategy)
+            .unwrap();
         let idx = PositionIndex::build(by_chapter);
 
         // spine_index=1 → step=4 — not in spine_to_order → None
@@ -853,6 +916,9 @@ mod tests {
     #[test]
     fn position_index_oob_location_returns_none() {
         let idx = build_index(1, 3);
-        assert!(idx.cfi_from_location(3).is_none(), "index 3 is out of bounds for 3-position list");
+        assert!(
+            idx.cfi_from_location(3).is_none(),
+            "index 3 is out of bounds for 3-position list"
+        );
     }
 }

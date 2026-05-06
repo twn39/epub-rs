@@ -33,9 +33,15 @@ pub(super) enum OpfState {
     Modified,
     Rights,
     Subject,
-    MetaRefines { ref_id: String, property: String },
+    MetaRefines {
+        ref_id: String,
+        property: String,
+    },
     /// Global `<meta property="...">` — carries the element's own `id` for refinement lookup
-    MetaGlobal { property: String, id: Option<String> },
+    MetaGlobal {
+        property: String,
+        id: Option<String>,
+    },
 }
 
 // ── RawTitle (parse-phase intermediate) ──────────────────────────────────────
@@ -133,8 +139,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 if val == "http://www.idpf.org/2008/embedding" {
                                     current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
                                 } else if val == "http://ns.adobe.com/pdf/enc#RC" {
-                                    current_algo =
-                                        Some(crate::crypto::ObfuscationAlgorithm::Adobe);
+                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
                                 }
                             }
                         }
@@ -224,11 +229,9 @@ impl<P: EpubProvider> EpubArchive<P> {
                                     book.toc_id =
                                         Some(String::from_utf8_lossy(&attr.value).into_owned());
                                 }
-                                "page-progression-direction" => {
-                                    if attr.value.as_ref() == b"rtl" {
-                                        book.metadata.reading_progression =
-                                            crate::model::ReadingProgression::Rtl;
-                                    }
+                                "page-progression-direction" if attr.value.as_ref() == b"rtl" => {
+                                    book.metadata.reading_progression =
+                                        crate::model::ReadingProgression::Rtl;
                                 }
                                 _ => {}
                             }
@@ -432,8 +435,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 if val.contains("rendition:layout-reflowable") {
                                     layout_override = Some(crate::model::LayoutType::Reflowable);
                                 } else if val.contains("rendition:layout-pre-paginated") {
-                                    layout_override =
-                                        Some(crate::model::LayoutType::PrePaginated);
+                                    layout_override = Some(crate::model::LayoutType::PrePaginated);
                                 }
 
                                 if val.contains("page-spread-left")
@@ -525,28 +527,24 @@ impl<P: EpubProvider> EpubArchive<P> {
                             let entry = refinements.entry(ref_id.clone()).or_default();
                             entry.insert(property.clone(), text);
                         }
-                        OpfState::MetaGlobal { property, id } => {
-                            match property.as_str() {
-                                "rendition:layout" => {
-                                    if text == "pre-paginated" {
-                                        book.metadata.layout =
-                                            crate::model::LayoutType::PrePaginated;
-                                    } else {
-                                        book.metadata.layout =
-                                            crate::model::LayoutType::Reflowable;
-                                    }
+                        OpfState::MetaGlobal { property, id } => match property.as_str() {
+                            "rendition:layout" => {
+                                if text == "pre-paginated" {
+                                    book.metadata.layout = crate::model::LayoutType::PrePaginated;
+                                } else {
+                                    book.metadata.layout = crate::model::LayoutType::Reflowable;
                                 }
-                                "dcterms:modified" => {
-                                    book.metadata.modified = Some(text);
-                                }
-                                "belongs-to-collection" => {
-                                    if let Some(mid) = id {
-                                        pending_collections.push((mid.clone(), text));
-                                    }
-                                }
-                                _ => {}
                             }
-                        }
+                            "dcterms:modified" => {
+                                book.metadata.modified = Some(text);
+                            }
+                            "belongs-to-collection" => {
+                                if let Some(mid) = id {
+                                    pending_collections.push((mid.clone(), text));
+                                }
+                            }
+                            _ => {}
+                        },
                         OpfState::None => {}
                     }
                     // Reset state and title trackers after consuming text
@@ -590,8 +588,7 @@ impl<P: EpubProvider> EpubArchive<P> {
         //      - subtitle: first entry with title-type="subtitle" (lowest display-seq)
         //      - sort_as: file-as of the main title entry
         {
-            let mut entries: Vec<crate::model::TitleEntry> =
-                Vec::with_capacity(raw_titles.len());
+            let mut entries: Vec<crate::model::TitleEntry> = Vec::with_capacity(raw_titles.len());
             for raw in &raw_titles {
                 let props = raw.id.as_ref().and_then(|id| refinements.get(id));
                 // title-type: EPUB 3 refinement wins; EPUB 2 inline attr is the fallback
@@ -757,7 +754,10 @@ mod tests {
 
         assert_eq!(book.metadata.title.as_deref(), Some("The Hobbit"));
         assert_eq!(book.metadata.sort_as.as_deref(), Some("Hobbit, The"));
-        assert_eq!(book.metadata.titles[0].sort_as.as_deref(), Some("Hobbit, The"));
+        assert_eq!(
+            book.metadata.titles[0].sort_as.as_deref(),
+            Some("Hobbit, The")
+        );
     }
 
     // ── display-seq picks the subtitle ────────────────────────────────────────

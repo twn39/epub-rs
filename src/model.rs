@@ -452,38 +452,48 @@ mod tests {
 
     #[test]
     fn test_rtl_inference_arabic() {
-        let mut m = Metadata::default();
-        m.language = Some("ar".to_string());
+        let m = Metadata {
+            language: Some("ar".to_string()),
+            ..Default::default()
+        };
         assert_eq!(m.effective_reading_progression(), ReadingProgression::Rtl);
     }
 
     #[test]
     fn test_rtl_inference_farsi() {
-        let mut m = Metadata::default();
-        m.language = Some("fa-IR".to_string()); // base tag "fa" → RTL
+        let m = Metadata {
+            language: Some("fa-IR".to_string()), // base tag "fa" → RTL
+            ..Default::default()
+        };
         assert_eq!(m.effective_reading_progression(), ReadingProgression::Rtl);
     }
 
     #[test]
     fn test_rtl_inference_hebrew() {
-        let mut m = Metadata::default();
-        m.language = Some("he".to_string());
+        let m = Metadata {
+            language: Some("he".to_string()),
+            ..Default::default()
+        };
         assert_eq!(m.effective_reading_progression(), ReadingProgression::Rtl);
     }
 
     #[test]
     fn test_ltr_inference_english() {
-        let mut m = Metadata::default();
-        m.language = Some("en".to_string());
+        let m = Metadata {
+            language: Some("en".to_string()),
+            ..Default::default()
+        };
         assert_eq!(m.effective_reading_progression(), ReadingProgression::Ltr);
     }
 
     #[test]
     fn test_explicit_rtl_overrides_language() {
         // Explicit RTL must be respected even for a nominally LTR language
-        let mut m = Metadata::default();
-        m.language = Some("en".to_string());
-        m.reading_progression = ReadingProgression::Rtl;
+        let m = Metadata {
+            language: Some("en".to_string()),
+            reading_progression: ReadingProgression::Rtl,
+            ..Default::default()
+        };
         assert_eq!(m.effective_reading_progression(), ReadingProgression::Rtl);
     }
 
@@ -492,8 +502,10 @@ mod tests {
         // Note: effective_reading_progression() uses language inference when reading_progression
         // is Ltr (the default). To suppress inference, read `reading_progression` directly.
         // Here we verify that an explicit Rtl set in the OPF is correctly returned.
-        let mut m = Metadata::default();
-        m.language = Some("ar".to_string());
+        let mut m = Metadata {
+            language: Some("ar".to_string()),
+            ..Default::default()
+        };
         // With the default Ltr + Arabic language, inference wins → Rtl
         assert_eq!(m.effective_reading_progression(), ReadingProgression::Rtl);
         // After explicitly setting Rtl, still Rtl
@@ -507,8 +519,10 @@ mod tests {
     #[test]
     fn test_rtl_inference_from_languages_vec_when_no_primary() {
         // Falls back to languages[0] when `language` is None
-        let mut m = Metadata::default();
-        m.languages = vec!["he".to_string(), "en".to_string()];
+        let m = Metadata {
+            languages: vec!["he".to_string(), "en".to_string()],
+            ..Default::default()
+        };
         assert_eq!(m.effective_reading_progression(), ReadingProgression::Rtl);
     }
 
@@ -640,14 +654,22 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&m).unwrap();
-        assert!(!json.contains("reading_progression"), "ltr should be omitted: {json}");
+        assert!(
+            !json.contains("reading_progression"),
+            "ltr should be omitted: {json}"
+        );
     }
 
     #[test]
     fn test_reading_progression_serialized_when_rtl() {
-        let mut m = Metadata::default();
-        m.reading_progression = ReadingProgression::Rtl;
+        let m = Metadata {
+            reading_progression: ReadingProgression::Rtl,
+            ..Default::default()
+        };
         let json = serde_json::to_string(&m).unwrap();
-        assert!(json.contains("\"reading_progression\":\"rtl\""), "rtl should be present: {json}");
+        assert!(
+            json.contains("\"reading_progression\":\"rtl\""),
+            "rtl should be present: {json}"
+        );
     }
 }

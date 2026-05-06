@@ -15,6 +15,7 @@ use kuchikiki::traits::*;
 /// This is an internal type used by the crate's DOM-based character-offset position
 /// extraction. External callers should use [`EpubArchive::generate_locations`] or
 /// [`EpubArchive::positions_by_reading_order`] instead.
+#[allow(dead_code)]
 pub(crate) struct PositionContext<'a> {
     pub(crate) base_cfi: &'a str,
     pub(crate) chars_per_position: usize,
@@ -29,6 +30,7 @@ pub(crate) struct PositionContext<'a> {
 ///
 /// Internal utility: provides DOM-level character-precise CFI positions.
 /// External callers should use [`EpubArchive::generate_locations`] instead.
+#[allow(dead_code)]
 pub(crate) fn extract_positions(
     html: &str,
     ctx: &PositionContext,
@@ -51,6 +53,7 @@ pub(crate) fn extract_positions(
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn traverse_for_positions(
     node: &NodeRef,
     ctx: &PositionContext,
@@ -64,10 +67,16 @@ fn traverse_for_positions(
     for child in node.children() {
         if child.as_element().is_some() {
             child_index += 2;
-            let child_path = super::cfi_child_path(
-                current_path, child_index, &super::cfi_assertion(&child),
+            let child_path =
+                super::cfi_child_path(current_path, child_index, &super::cfi_assertion(&child));
+            traverse_for_positions(
+                &child,
+                ctx,
+                &child_path,
+                char_counter,
+                positions,
+                global_pos,
             );
-            traverse_for_positions(&child, ctx, &child_path, char_counter, positions, global_pos);
         } else if let Some(text_node) = child.as_text() {
             let text = text_node.borrow();
             let text_len = text.chars().count();
@@ -135,7 +144,13 @@ mod tests {
             href: "test.xhtml",
         };
 
-        extract_positions(html, &ctx, &mut char_counter, &mut positions, &mut global_pos);
+        extract_positions(
+            html,
+            &ctx,
+            &mut char_counter,
+            &mut positions,
+            &mut global_pos,
+        );
 
         assert_eq!(positions.len(), 3);
 

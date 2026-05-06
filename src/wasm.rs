@@ -199,7 +199,10 @@ impl EpubParser {
     #[wasm_bindgen]
     pub fn get_navigation(&mut self) -> Result<JsValue, JsValue> {
         let book = self.ensure_parsed()?;
-        let nav = self.archive.get_navigation(book).map_err(|e| e.to_string())?;
+        let nav = self
+            .archive
+            .get_navigation(book)
+            .map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav).map_err(|e| e.to_string().into())
     }
 
@@ -214,7 +217,10 @@ impl EpubParser {
     #[wasm_bindgen]
     pub fn get_page_list(&mut self) -> Result<JsValue, JsValue> {
         let book = self.ensure_parsed()?;
-        let nav = self.archive.get_navigation(book).map_err(|e| e.to_string())?;
+        let nav = self
+            .archive
+            .get_navigation(book)
+            .map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav.page_list).map_err(|e| e.to_string().into())
     }
 
@@ -228,7 +234,10 @@ impl EpubParser {
     ///
     /// `bytes_per_position`: pass `0` to use the Readium/Adobe default of 1024 bytes.
     #[wasm_bindgen]
-    pub fn generate_location_index(&mut self, bytes_per_position: usize) -> Result<JsValue, JsValue> {
+    pub fn generate_location_index(
+        &mut self,
+        bytes_per_position: usize,
+    ) -> Result<JsValue, JsValue> {
         let book = self.ensure_parsed()?;
         let index = self
             .archive
@@ -258,7 +267,10 @@ impl EpubParser {
             .archive
             .generate_location_index(book, 0)
             .map_err(|e| e.to_string())?;
-        Ok(index.location_from_cfi(cfi_str).map(|i| i as i64).unwrap_or(-1))
+        Ok(index
+            .location_from_cfi(cfi_str)
+            .map(|i| i as i64)
+            .unwrap_or(-1))
     }
 
     /// Return the CFI string for a given 0-based position index.
@@ -900,7 +912,11 @@ mod tests {
 
         // All positions must have monotonically increasing global_position
         for (i, loc) in locations.iter().enumerate() {
-            assert_eq!(loc.global_position, i + 1, "global_position must be 1-based and contiguous");
+            assert_eq!(
+                loc.global_position,
+                i + 1,
+                "global_position must be 1-based and contiguous"
+            );
         }
 
         // total_progression must be in [0.0, 1.0)

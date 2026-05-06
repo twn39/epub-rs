@@ -40,7 +40,7 @@ proptest! {
         page_len in 1usize..=4096usize,
     ) {
         let s = ArchiveEntryLength { page_length: page_len };
-        let expected = ((n + page_len as u64 - 1) / page_len as u64).max(1) as usize;
+        let expected = n.div_ceil(page_len as u64).max(1) as usize;
         prop_assert_eq!(s.position_count(n), expected);
     }
 }
@@ -52,9 +52,19 @@ use epub_rs::cfi::{CfiPath, CfiStep};
 /// Build a CfiPath from a list of (index, has_assertion) pairs.
 fn make_path(steps: &[(u32, bool)], local: &[(u32, bool)], offset: Option<u32>) -> CfiPath {
     CfiPath {
-        steps: steps.iter().map(|(i, a)| CfiStep::new(*i, a.then(|| format!("id{i}")))).collect(),
-        local_steps: if local.is_empty() { None } else {
-            Some(local.iter().map(|(i, a)| CfiStep::new(*i, a.then(|| format!("lid{i}")))).collect())
+        steps: steps
+            .iter()
+            .map(|(i, a)| CfiStep::new(*i, a.then(|| format!("id{i}"))))
+            .collect(),
+        local_steps: if local.is_empty() {
+            None
+        } else {
+            Some(
+                local
+                    .iter()
+                    .map(|(i, a)| CfiStep::new(*i, a.then(|| format!("lid{i}"))))
+                    .collect(),
+            )
         },
         character_offset: offset,
     }
@@ -167,25 +177,38 @@ fn cfi_parse_serialize_roundtrip() {
 fn cfi_local_steps_break_tie_when_base_equal() {
     // Same base steps, different local steps → local steps decide
     let short_local = make_path(&[(6, false), (4, false)], &[(4, false), (2, false)], None);
-    let long_local  = make_path(&[(6, false), (4, false)], &[(4, false), (10, false)], None);
+    let long_local = make_path(&[(6, false), (4, false)], &[(4, false), (10, false)], None);
     // /4/2 < /4/10 because step 2 < step 10
-    assert!(short_local < long_local,
-        "shorter local step index should compare less");
+    assert!(
+        short_local < long_local,
+        "shorter local step index should compare less"
+    );
 }
 
 #[test]
 fn cfi_none_local_steps_equals_empty_local_steps() {
-    let with_none  = CfiPath { steps: vec![CfiStep::new(6, None)], local_steps: None,          character_offset: None };
-    let with_empty = CfiPath { steps: vec![CfiStep::new(6, None)], local_steps: Some(vec![]),  character_offset: None };
+    let with_none = CfiPath {
+        steps: vec![CfiStep::new(6, None)],
+        local_steps: None,
+        character_offset: None,
+    };
+    let with_empty = CfiPath {
+        steps: vec![CfiStep::new(6, None)],
+        local_steps: Some(vec![]),
+        character_offset: None,
+    };
     // Both have empty local steps — should compare equal
-    assert_eq!(with_none.cmp(&with_empty), std::cmp::Ordering::Equal,
-        "None local_steps should equal Some(vec![])");
+    assert_eq!(
+        with_none.cmp(&with_empty),
+        std::cmp::Ordering::Equal,
+        "None local_steps should equal Some(vec![])"
+    );
 }
 
 #[test]
 fn cfi_longer_step_sequence_is_greater() {
     // /6/4 vs /6/4/2 — the longer path refers to a deeper node → greater
-    let shorter = make_path(&[(6, false), (4, false)],           &[], None);
-    let longer  = make_path(&[(6, false), (4, false), (2, false)], &[], None);
+    let shorter = make_path(&[(6, false), (4, false)], &[], None);
+    let longer = make_path(&[(6, false), (4, false), (2, false)], &[], None);
     assert!(shorter < longer, "/6/4 should be less than /6/4/2");
 }

@@ -40,21 +40,21 @@ pub(crate) fn epub_relative_path(from_file: &str, to_file: &str) -> String {
     fn parent_dir(path: &str) -> &str {
         match path.rfind('/') {
             Some(i) => &path[..i],
-            None    => "",
+            None => "",
         }
     }
 
     let from_dir = parent_dir(from_file);
-    let to_dir   = parent_dir(to_file);
-    let to_name  = match to_file.rfind('/') {
+    let to_dir = parent_dir(to_file);
+    let to_name = match to_file.rfind('/') {
         Some(i) => &to_file[i + 1..],
-        None    => to_file,
+        None => to_file,
     };
 
     // Split directory paths into components, filtering empty strings so that
     // an empty parent_dir produces an empty Vec (not vec![""]).
     let from_parts: Vec<&str> = from_dir.split('/').filter(|s| !s.is_empty()).collect();
-    let to_parts:   Vec<&str> = to_dir  .split('/').filter(|s| !s.is_empty()).collect();
+    let to_parts: Vec<&str> = to_dir.split('/').filter(|s| !s.is_empty()).collect();
 
     // Length of the longest common directory prefix.
     let common_len = from_parts
@@ -72,9 +72,7 @@ pub(crate) fn epub_relative_path(from_file: &str, to_file: &str) -> String {
     // Assemble the result.
     let capacity = up_steps + down_parts.len() + 1;
     let mut parts: Vec<&str> = Vec::with_capacity(capacity);
-    for _ in 0..up_steps {
-        parts.push("..");
-    }
+    parts.extend(std::iter::repeat_n("..", up_steps));
     parts.extend_from_slice(down_parts);
     parts.push(to_name);
 
@@ -1272,7 +1270,10 @@ mod tests {
     #[test]
     fn test_relative_path_same_directory() {
         // Both files sit in the same subdirectory → just the filename.
-        assert_eq!(epub_relative_path("text/ch1.xhtml", "text/ch2.xhtml"), "ch2.xhtml");
+        assert_eq!(
+            epub_relative_path("text/ch1.xhtml", "text/ch2.xhtml"),
+            "ch2.xhtml"
+        );
     }
 
     #[test]
@@ -1296,13 +1297,19 @@ mod tests {
     #[test]
     fn test_relative_path_target_at_root() {
         // Target at OEBPS root → need to go up from source subdirectory.
-        assert_eq!(epub_relative_path("text/ch1.xhtml", "cover.jpg"), "../cover.jpg");
+        assert_eq!(
+            epub_relative_path("text/ch1.xhtml", "cover.jpg"),
+            "../cover.jpg"
+        );
     }
 
     #[test]
     fn test_relative_path_both_at_root() {
         // Both at OEBPS root → just the filename.
-        assert_eq!(epub_relative_path("chapter.xhtml", "cover.jpg"), "cover.jpg");
+        assert_eq!(
+            epub_relative_path("chapter.xhtml", "cover.jpg"),
+            "cover.jpg"
+        );
     }
 
     #[test]
@@ -1326,7 +1333,10 @@ mod tests {
     #[test]
     fn test_relative_path_same_file() {
         // Degenerate: from and to are the same file.
-        assert_eq!(epub_relative_path("text/ch1.xhtml", "text/ch1.xhtml"), "ch1.xhtml");
+        assert_eq!(
+            epub_relative_path("text/ch1.xhtml", "text/ch1.xhtml"),
+            "ch1.xhtml"
+        );
     }
 
     #[test]
@@ -1335,10 +1345,16 @@ mod tests {
         let css = "styles/epub-rs-modern.css";
 
         // Chapter at root — no `../` needed.
-        assert_eq!(epub_relative_path("chapter.xhtml", css), "styles/epub-rs-modern.css");
+        assert_eq!(
+            epub_relative_path("chapter.xhtml", css),
+            "styles/epub-rs-modern.css"
+        );
 
         // Chapter in `text/` — one level up.
-        assert_eq!(epub_relative_path("text/ch1.xhtml", css), "../styles/epub-rs-modern.css");
+        assert_eq!(
+            epub_relative_path("text/ch1.xhtml", css),
+            "../styles/epub-rs-modern.css"
+        );
 
         // Chapter two levels deep.
         assert_eq!(
