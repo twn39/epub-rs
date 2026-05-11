@@ -8,6 +8,7 @@
 mod navigation;
 mod opf;
 pub mod positions;
+mod smil;
 
 use crate::error::EpubError;
 use crate::model::EpubBook;
@@ -18,7 +19,7 @@ use std::io::{Read, Seek};
 
 // Re-export public types that were previously in parser.rs top-level
 pub use positions::{
-    ArchiveEntryLength, BYTES_PER_POSITION, PositionIndex, ReflowableStrategy,
+    ArchiveEntryLength, OriginalLength, BYTES_PER_POSITION, PositionIndex, ReflowableStrategy,
     recommended_reflowable_strategy,
 };
 
@@ -84,9 +85,10 @@ impl<P: EpubProvider> EpubArchive<P> {
         let file = self.provider.read_file(&zip_path)?;
 
         // Wrap with deobfuscating reader if this file is encrypted
-        if let Some(&algo) = book.encryptions.get(&zip_path) {
+        if let Some(enc) = book.encryptions.get(&zip_path) {
             let identifier = book.metadata.identifier.as_deref().unwrap_or("");
-            let deobfuscated = crate::crypto::DeobfuscatingReader::new(file, identifier, algo);
+            let deobfuscated =
+                crate::crypto::DeobfuscatingReader::new(file, identifier, enc.algorithm);
             Ok(Box::new(deobfuscated))
         } else {
             Ok(file)
@@ -247,6 +249,111 @@ impl<P: EpubProvider> EpubArchive<P> {
         Ok(crate::processor::extract_semantic_content(
             &html_str, &base_cfi,
         ))
+    }
+
+    // ── Media Overlays API ──────────────────────────────────────────
+
+    /// Returns `true` if any content document in this EPUB has a SMIL Media Overlay.
+    ///
+    /// This is an O(n) scan over manifest items. It is useful as a fast check to
+    /// determine whether an EPUB is an audiobook with synchronized text–audio playback
+    /// before calling [`Self::get_media_overlay`] for individual chapters.
+    pub fn has_media_overlays(&self, book: &EpubBook) -> bool {
+        book.manifest.values().any(|item| item.media_overlay.is_some())
+    }
+
+    /// Parses and returns the SMIL Media Overlay for a spine content document.
+    ///
+    /// `content_href` is the manifest `href` of the XHTML file (as stored in
+    /// `book.manifest`, EPUB-root-relative).
+    ///
+    /// # Returns
+    /// - `Ok(None)` — no overlay is associated with this document (normal for
+    ///   non-audiobook EPUBs or spine items without a `media-overlay` attribute).
+    /// - `Ok(Some(doc))` — the parsed overlay with ordered sync points and
+    ///   optional prev/next chapter links for sequential playback.
+    /// - `Err(_)` — I/O failure or malformed SMIL XML.
+    ///
+    /// # Note
+    /// This method performs I/O on each call.  The caller is responsible for
+    /// caching the result if repeated access is expected.
+    pub fn get_media_overlay(
+        &mut self,
+        book: &EpubBook,
+        content_href: &str,
+    ) -> Result<Option<crate::model::SmilDocument>, EpubError> {
+        // Find the manifest item for the requested content document
+        let overlay_id = book
+            .manifest
+            .values()
+            .find(|item| item.href == content_href)
+            .and_then(|item| item.media_overlay.clone());
+
+        let overlay_id = match overlay_id {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        // Resolve the SMIL file path
+        let smil_item = book
+            .manifest
+            .get(&overlay_id)
+            .ok_or_else(|| {
+                EpubError::InvalidFormat(format!(
+                    "media-overlay ID '{}' not found in manifest",
+                    overlay_id
+                ))
+            })?;
+
+        let smil_href = smil_item.href.clone();
+        let smil_path = if book.opf_dir.is_empty() {
+            smil_href.clone()
+        } else {
+            format!("{}/{}", book.opf_dir, smil_href)
+        };
+
+        // smil_dir = directory portion of the SMIL file's EPUB-root-relative path
+        let smil_dir = smil_path
+            .rfind('/')
+            .map(|i| smil_path[..i].to_string())
+            .unwrap_or_default();
+
+        // Read and parse the SMIL file
+        let mut file = self.provider.read_file(&smil_path)?;
+        let mut xml_buf = String::new();
+        file.read_to_string(&mut xml_buf)?;
+
+        let objects = smil::parse_smil(&xml_buf, &smil_dir)?;
+
+        // Build prev/next SMIL links by walking the spine in reading order
+        // (only spine items that have an overlay are considered)
+        let overlay_hrefs: Vec<String> = book
+            .spine
+            .iter()
+            .filter(|s| s.linear)
+            .filter_map(|s| book.manifest.get(&s.idref))
+            .filter(|item| item.media_overlay.is_some())
+            .filter_map(|item| {
+                let ov_id = item.media_overlay.as_ref()?;
+                book.manifest.get(ov_id).map(|smil| {
+                    if book.opf_dir.is_empty() {
+                        smil.href.clone()
+                    } else {
+                        format!("{}/{}", book.opf_dir, smil.href)
+                    }
+                })
+            })
+            .collect();
+
+        let cur_pos = overlay_hrefs.iter().position(|h| *h == smil_path);
+        let prev_smil_href = cur_pos.and_then(|i| i.checked_sub(1)).and_then(|i| overlay_hrefs.get(i)).cloned();
+        let next_smil_href = cur_pos.and_then(|i| overlay_hrefs.get(i + 1)).cloned();
+
+        Ok(Some(crate::model::SmilDocument {
+            objects,
+            prev_smil_href,
+            next_smil_href,
+        }))
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────

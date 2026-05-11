@@ -319,6 +319,64 @@ char *epub_get_semantic_content(struct epub_t *handle,
 char *epub_generate_locations(struct epub_t *handle, size_t bytes_per_position);
 
 /**
+ * Generate positions and build a bidirectional lookup index in one call.
+ *
+ * Returns a flat JSON array of `Position` objects identical to
+ * `epub_generate_locations`. The returned array can be passed as `positions_json`
+ * to `epub_location_from_cfi` and `epub_cfi_from_location`.
+ *
+ * The difference from `epub_generate_locations` is semantic: this function
+ * is designed to be paired with the lookup functions below.
+ *
+ * `bytes_per_position`: pass `0` to use the Readium default of 1024 bytes.
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ */
+char *epub_generate_location_index(struct epub_t *handle, size_t bytes_per_position);
+
+/**
+ * Find the 0-based position index that contains a given CFI.
+ *
+ * `positions_json`: the JSON array returned by `epub_generate_location_index`
+ * or `epub_generate_locations`.
+ * `cfi_str`: any valid EPUB CFI string (bookmark, annotation, or position CFI).
+ *
+ * Returns the 0-based index as a JSON number (e.g. `"42"`), or `"-1"` if the
+ * CFI could not be resolved (wrong spine item, parse error, or empty list).
+ *
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * **Algorithm**: O(|cfi_str|) — parses the CFI once, then uses integer arithmetic
+ * on pre-computed chapter offsets. No binary search.
+ *
+ * # Safety
+ * - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ * - `positions_json` and `cfi_str` must be valid null-terminated C strings.
+ */
+char *epub_location_from_cfi(struct epub_t *handle,
+                             const char *positions_json,
+                             const char *cfi_str);
+
+/**
+ * Return the CFI string for a given 0-based position index.
+ *
+ * `positions_json`: the JSON array returned by `epub_generate_location_index`.
+ * `idx`: 0-based position index (as returned by `epub_location_from_cfi`).
+ *
+ * Returns the CFI string (e.g. `"epubcfi(/6/4!/4/2)"`), or `NULL` if `idx`
+ * is out of range. The caller must free with `epub_free_string()`.
+ *
+ * O(1) — direct array access.
+ *
+ * # Safety
+ * - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ * - `positions_json` must be a valid null-terminated C string.
+ */
+char *epub_cfi_from_location(struct epub_t *handle, const char *positions_json, size_t idx);
+
+/**
  * Compare two CFI strings numerically per the EPUB CFI spec.
  *
  * Returns: `-1` if `cfi_a < cfi_b`, `0` if equal, `1` if `cfi_a > cfi_b`.

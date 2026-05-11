@@ -44,6 +44,40 @@ impl ReflowableStrategy for ArchiveEntryLength {
     }
 }
 
+/// Strategy that uses the **original plaintext** byte length from `encryption.xml`.
+///
+/// Use this when the EPUB contains AES-CBC / LCP full-content encryption, where the
+/// stored cipher-text is larger than the original content (due to AES padding and IV).
+/// [`ArchiveEntryLength`] would over-count positions in that scenario.
+///
+/// The position count is read from the `OriginalLength` field of
+/// [`crate::crypto::EncryptionInfo`], which is parsed from the
+/// `<comp:Compression OriginalLength="N">` element in `META-INF/encryption.xml`.
+/// The strategy is applied by [`super::EpubArchive::positions_by_reading_order`]
+/// automatically when a spine item is found in the encryption map and has a known
+/// original length.
+///
+/// For entries **without** a `<Compression OriginalLength>` annotation (e.g. IDPF/Adobe
+/// font obfuscation), the strategy transparently falls back to the archive entry length,
+/// because font obfuscation only XORs the header bytes and does not change the file size.
+///
+/// # Comparison with go-toolkit
+///
+/// go-toolkit's `OriginalLength` strategy exists in `positions_service.go` but ships
+/// with a `math.Min` / `math.Max` bug that caps every result to 1. This implementation
+/// is correct: `max(ceil(original_length / page_length), 1)`.
+pub struct OriginalLength {
+    /// Number of bytes per reading position. Typically 1024.
+    pub page_length: usize,
+}
+
+impl ReflowableStrategy for OriginalLength {
+    fn position_count(&self, entry_length: u64) -> usize {
+        let page_len = (self.page_length.max(1)) as u64;
+        entry_length.div_ceil(page_len).max(1) as usize
+    }
+}
+
 /// Returns the recommended reflowable strategy: `ArchiveEntryLength { page_length: 1024 }`.
 pub fn recommended_reflowable_strategy() -> ArchiveEntryLength {
     ArchiveEntryLength {
@@ -105,12 +139,33 @@ impl<P: EpubProvider> EpubArchive<P> {
             );
 
             // Fixed layout: always 1 position.
-            // Reflowable: delegate to the strategy (ArchiveEntryLength by default).
+            // Reflowable: choose the effective byte length, then delegate to strategy.
             let position_count = if is_fixed {
                 1usize
             } else {
-                let byte_len = self.provider.entry_length(&manifest_item.href).unwrap_or(0); // graceful degradation for missing/unreadable files
-                strategy.position_count(byte_len)
+                // Resolve the ZIP path the same way read_resource_by_href does, so that
+                // the encryption map lookup uses the same key that was inserted at parse time.
+                let zip_path = if book.opf_dir.is_empty() {
+                    manifest_item.href.clone()
+                } else {
+                    super::EpubArchive::<P>::normalize_path(&book.opf_dir, &manifest_item.href)
+                };
+
+                // Archive entry length (uncompressed ZIP size) — the base measurement.
+                let archive_len = self.provider.entry_length(&zip_path).unwrap_or(0);
+
+                // Use the declared original plaintext length when available.
+                // This corrects position counts for LCP / AES-CBC encrypted EPUBs where
+                // the stored cipher-text is larger than the actual content.
+                // For IDPF/Adobe font obfuscation (original_length = None), archive_len
+                // is the correct value since those algorithms preserve the file size.
+                let effective_len = book
+                    .encryptions
+                    .get(&zip_path)
+                    .and_then(|enc| enc.original_length)
+                    .unwrap_or(archive_len);
+
+                strategy.position_count(effective_len)
             };
 
             let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(*spine_index, &item.idref);
@@ -645,6 +700,7 @@ mod tests {
                     href,
                     media_type: "application/xhtml+xml".to_string(),
                     properties: vec![],
+                    media_overlay: None,
                 },
             );
             spine.push(SpineItem {
