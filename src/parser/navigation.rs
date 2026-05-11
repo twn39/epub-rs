@@ -14,6 +14,46 @@ use quick_xml::events::Event;
 
 use super::EpubArchive;
 
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Resolves `rel_href` relative to `nav_dir` (the EPUB-root-relative directory
+/// that contains the nav document), per RFC 3986 §5.2.
+///
+/// Preserves any `#fragment` suffix.  External URLs and fragment-only refs are
+/// returned unchanged so the caller doesn't need to pre-filter them.
+fn nav_resolve_href(nav_dir: &str, rel_href: &str) -> String {
+    if rel_href.starts_with('#')
+        || rel_href.starts_with("http://")
+        || rel_href.starts_with("https://")
+        || rel_href.is_empty()
+        || nav_dir.is_empty()
+    {
+        return rel_href.to_string();
+    }
+
+    // The fragment must be appended verbatim after path resolution; normalising it
+    // as part of the path would corrupt any IDs that contain special characters.
+    let (path_part, fragment) = match rel_href.find('#') {
+        Some(i) => (&rel_href[..i], &rel_href[i..]),
+        None => (rel_href, ""),
+    };
+
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in nav_dir.split('/').chain(path_part.split('/')) {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            parts.pop();
+        } else {
+            parts.push(seg);
+        }
+    }
+
+    format!("{}{fragment}", parts.join("/"))
+}
+
+
 impl<P: EpubProvider> EpubArchive<P> {
     /// Parses **all** navigation data from the EPUB in a **single I/O + single parse** operation.
     ///
@@ -29,18 +69,36 @@ impl<P: EpubProvider> EpubArchive<P> {
     /// Calling both `get_toc()` and `get_page_list()` separately would read and parse the file
     /// twice; use this method when you need more than one navigation list.
     pub fn get_navigation(&mut self, book: &EpubBook) -> Result<NavigationDocument, EpubError> {
-        // 1. Prefer EPUB 3 nav.xhtml — one read, all types
+        // nav.xhtml supersedes the NCX in EPUB 3: it expresses all three navigation
+        // types (toc, page-list, landmarks) in a single HTML file.  Using it first
+        // avoids loading the NCX at all for the vast majority of modern EPUBs.
         if let Some(nav_item) = book
             .manifest
             .values()
             .find(|i| i.properties.iter().any(|p| p == "nav"))
         {
+            // The nav item's href is relative to the OPF directory.
+            // Build the EPUB-root-relative path so we can derive the nav document's
+            // own directory — hrefs inside nav.xhtml are resolved relative to *it*,
+            // not relative to the OPF or the EPUB root (RFC 3986 §5.2).
+            let nav_root_href = if book.opf_dir.is_empty() {
+                nav_item.href.clone()
+            } else {
+                format!("{}/{}", book.opf_dir, nav_item.href)
+            };
+            let nav_dir = match nav_root_href.rfind('/') {
+                Some(i) => nav_root_href[..i].to_string(),
+                None => String::new(), // nav.xhtml is at the EPUB root
+            };
+
             let bytes = self.get_resource_by_id(book, &nav_item.id)?;
             let html = String::from_utf8_lossy(&bytes).to_string();
-            return Self::parse_nav_xhtml_all(&html);
+            return Self::parse_nav_xhtml_all(&html, &nav_dir);
         }
 
-        // 2. Fallback to EPUB 2 NCX — one read, toc + page-list
+        // EPUB 2 publications (and some EPUB 3 publications that omit nav.xhtml for
+        // backward compatibility) carry an NCX file instead.  toc_id points to the
+        // manifest item referenced by the spine's toc attribute.
         if let Some(toc_id) = &book.toc_id
             && let Some(ncx_item) = book.manifest.get(toc_id)
         {
@@ -76,32 +134,29 @@ impl<P: EpubProvider> EpubArchive<P> {
         Ok(self.get_navigation(book)?.page_list)
     }
 
-    /// Parse a `nav.xhtml` document, extracting **all** `<nav epub:type="…">` elements
-    /// in a single DOM traversal.
+    /// Extracts all navigation lists from a `nav.xhtml` document in one DOM traversal.
     ///
-    /// Mirrors go-toolkit `ParseNavDoc`:
-    /// ```go
-    /// for _, nav := range body.SelectElements("//nav") {
-    ///     types, links := parseNavElement(nav, ...)
-    ///     ret[type] = links   // collects ALL types in one loop
-    /// }
-    /// ```
+    /// A single pass is used deliberately: re-parsing the document for each nav type
+    /// (toc, page-list, landmarks) would triple the DOM construction cost for a file
+    /// that is frequently several hundred kilobytes in real-world EPUBs.
     ///
-    /// The same `parse_ol_node` method is reused for every nav type (toc, page-list,
-    /// landmarks) — no duplication.
-    pub(super) fn parse_nav_xhtml_all(html: &str) -> Result<NavigationDocument, EpubError> {
+    /// `nav_dir` is the EPUB-root-relative directory of the nav document itself
+    /// (e.g. `"OEBPS"` when the file lives at `"OEBPS/nav.xhtml"`). Hrefs inside
+    /// the nav document are relative to that file, not to the OPF or the EPUB root,
+    /// so we resolve them here to produce consistent EPUB-root-relative paths for
+    /// all callers regardless of where the nav file is stored.
+    pub(super) fn parse_nav_xhtml_all(
+        html: &str,
+        nav_dir: &str,
+    ) -> Result<NavigationDocument, EpubError> {
         let document = kuchikiki::parse_html().one(html);
         let mut nav_doc = NavigationDocument::default();
 
-        // Iterate ALL <nav> elements (one DOM parse, multiple results)
         let nav_nodes = document.select("nav").unwrap_or_else(|_| {
-            // select() only errors on invalid CSS; "nav" is always valid
             panic!("'nav' is a valid CSS selector")
         });
 
         for nav in nav_nodes {
-            // Read epub:type attribute. kuchikiki stores the attribute name
-            // verbatim; the colon is escaped in CSS but stored as-is in attrs.
             let attrs = nav.attributes.borrow();
             let epub_type = attrs.get("epub:type").unwrap_or("").to_string();
             drop(attrs);
@@ -110,10 +165,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                 continue;
             }
 
-            // Parse the <ol> — identical method for ALL nav types.
-            // This is the key reuse: parse_ol_node is called once per nav element.
             let entries = match nav.as_node().select_first("ol") {
-                Ok(ol) => Self::parse_ol_node(ol.as_node()),
+                Ok(ol) => Self::parse_ol_node(ol.as_node(), nav_dir),
                 Err(_) => continue,
             };
 
@@ -121,22 +174,19 @@ impl<P: EpubProvider> EpubArchive<P> {
                 continue;
             }
 
-            // epub:type may contain multiple space-separated tokens per EPUB spec.
-            // We handle each token — e.g. `epub:type="toc landmarks"`.
             for token in epub_type.split_whitespace() {
-                // Strip any "epub:" namespace prefix that may appear in the attribute value
                 let key = token.trim_start_matches("epub:");
                 match key {
                     "toc" => nav_doc.toc = entries.clone(),
                     "page-list" => nav_doc.page_list = entries.clone(),
                     "landmarks" => nav_doc.landmarks = entries.clone(),
-                    _ => {} // ignore unknown types (forward-compatible)
+                    _ => {}
                 }
             }
         }
 
-        // Fallback for malformed nav.xhtml that lacks epub:type:
-        // if TOC is still empty, try <nav id="toc"> then first <nav>.
+        // epub:type is required by the EPUB 3 spec but commonly omitted by older
+        // authoring tools. Fall back gracefully so the TOC is never silently lost.
         if nav_doc.toc.is_empty() {
             let toc_node = document
                 .select_first("nav#toc")
@@ -144,7 +194,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             if let Ok(nav) = toc_node
                 && let Ok(ol) = nav.as_node().select_first("ol")
             {
-                nav_doc.toc = Self::parse_ol_node(ol.as_node());
+                nav_doc.toc = Self::parse_ol_node(ol.as_node(), nav_dir);
             }
         }
 
@@ -153,11 +203,13 @@ impl<P: EpubProvider> EpubArchive<P> {
 
     /// Parse an `<ol>` element into a flat or nested list of [`TocEntry`] items.
     ///
-    /// Used uniformly for every nav type: TOC (with nesting), page-list (flat),
-    /// and landmarks (flat). This is the single shared implementation.
-    pub(super) fn parse_ol_node(ol: &kuchikiki::NodeRef) -> Vec<TocEntry> {
+    /// `nav_dir` is the EPUB-root-relative directory of the nav document; it is used
+    /// to resolve relative `href` values into EPUB-root-relative paths (RFC 3986 §5.2).
+    pub(super) fn parse_ol_node(ol: &kuchikiki::NodeRef, nav_dir: &str) -> Vec<TocEntry> {
         let mut entries = Vec::new();
-        // Since `select` might grab deep children, we manually iterate direct children.
+        // kuchikiki's `select("li")` descends into nested <ol> elements, which would
+        // return grandchild <li> items alongside top-level ones.  We iterate direct
+        // children only and recurse explicitly to maintain the correct nesting depth.
         for li in ol.children().filter(|c| {
             c.as_element()
                 .is_some_and(|e| e.name.local.as_ref() == "li")
@@ -169,16 +221,39 @@ impl<P: EpubProvider> EpubArchive<P> {
                     .get("href")
                     .unwrap_or("")
                     .to_string();
-                let href = percent_encoding::percent_decode_str(&raw_href)
+
+                // EPUB hrefs may be percent-encoded in authoring tools; decode before
+                // any path arithmetic so "..%2F" is never treated as a literal segment.
+                let decoded = percent_encoding::percent_decode_str(&raw_href)
                     .decode_utf8_lossy()
                     .into_owned();
+
+                let href = if decoded.starts_with('#')
+                    || decoded.starts_with("http://")
+                    || decoded.starts_with("https://")
+                    || decoded.is_empty()
+                    || nav_dir.is_empty()
+                {
+                    decoded
+                } else {
+                    // Fragment must survive resolution unchanged; split it out before
+                    // passing the bare path to nav_resolve_href.
+                    let (path_part, fragment) = match decoded.find('#') {
+                        Some(i) => (&decoded[..i], &decoded[i..]),
+                        None => (decoded.as_str(), ""),
+                    };
+                    let resolved = nav_resolve_href(nav_dir, path_part);
+                    format!("{resolved}{fragment}")
+                };
+
                 let title = a_node.text_contents().trim().to_string();
 
                 let mut entry = TocEntry::new(title, href);
 
-                // Recursively parse nested <ol> — used by TOC; ignored for page-list/landmarks
+                // Nesting is meaningful only for TOC hierarchies; page-list and landmarks
+                // are flat by spec, so if they carry a nested <ol> it is ignored here.
                 if let Ok(nested_ol) = li.select_first("ol") {
-                    entry.children = Self::parse_ol_node(nested_ol.as_node());
+                    entry.children = Self::parse_ol_node(nested_ol.as_node(), nav_dir);
                 }
                 entries.push(entry);
             }
@@ -472,7 +547,7 @@ mod tests {
         </body>
         </html>"#;
 
-        let nav = TestArchive::parse_nav_xhtml_all(html).unwrap();
+        let nav = TestArchive::parse_nav_xhtml_all(html, "").unwrap();
         assert_eq!(nav.toc.len(), 2);
         assert!(nav.page_list.is_empty());
         assert!(nav.landmarks.is_empty());
@@ -501,7 +576,7 @@ mod tests {
         </body>
         </html>"#;
 
-        let nav = TestArchive::parse_nav_xhtml_all(html).unwrap();
+        let nav = TestArchive::parse_nav_xhtml_all(html, "").unwrap();
         assert_eq!(nav.toc.len(), 1);
         assert_eq!(nav.toc[0].title, "Chapter 1");
         assert_eq!(nav.page_list.len(), 3);
@@ -528,7 +603,7 @@ mod tests {
         </body>
         </html>"#;
 
-        let nav = TestArchive::parse_nav_xhtml_all(html).unwrap();
+        let nav = TestArchive::parse_nav_xhtml_all(html, "").unwrap();
         assert_eq!(nav.toc.len(), 1);
         assert!(nav.page_list.is_empty());
         assert_eq!(nav.landmarks.len(), 3);
@@ -554,7 +629,7 @@ mod tests {
         </body>
         </html>"#;
 
-        let nav = TestArchive::parse_nav_xhtml_all(html).unwrap();
+        let nav = TestArchive::parse_nav_xhtml_all(html, "").unwrap();
         assert_eq!(nav.toc.len(), 1);
         assert_eq!(nav.page_list.len(), 1);
         assert_eq!(nav.landmarks.len(), 1);
@@ -572,7 +647,7 @@ mod tests {
         </body>
         </html>"#;
 
-        let nav = TestArchive::parse_nav_xhtml_all(html).unwrap();
+        let nav = TestArchive::parse_nav_xhtml_all(html, "").unwrap();
         assert_eq!(nav.toc.len(), 1);
         assert_eq!(nav.toc[0].title, "Chapter 1");
         assert!(nav.page_list.is_empty());
@@ -586,5 +661,106 @@ mod tests {
         let mut nav = NavigationDocument::default();
         nav.toc.push(TocEntry::new("Ch1", "ch1.xhtml"));
         assert!(!nav.is_empty());
+    }
+
+    // ── P0-2: nav href relative-path resolution ───────────────────────────────
+
+    #[test]
+    fn test_nav_xhtml_href_resolved_from_subdir() {
+        // nav.xhtml lives at OEBPS/nav/nav.xhtml; hrefs relative to OEBPS/nav/
+        // so "../text/ch1.xhtml" must resolve to "OEBPS/text/ch1.xhtml".
+        let html = r#"<!DOCTYPE html>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body>
+          <nav epub:type="toc">
+            <ol>
+              <li><a href="../text/ch1.xhtml">Chapter 1</a></li>
+              <li><a href="../text/ch2.xhtml#section-2">Chapter 2 §2</a></li>
+            </ol>
+          </nav>
+        </body>
+        </html>"#;
+
+        let nav = TestArchive::parse_nav_xhtml_all(html, "OEBPS/nav").unwrap();
+        assert_eq!(nav.toc.len(), 2);
+        assert_eq!(nav.toc[0].href, "OEBPS/text/ch1.xhtml");
+        // Fragment must be preserved after path resolution
+        assert_eq!(nav.toc[1].href, "OEBPS/text/ch2.xhtml#section-2");
+    }
+
+    #[test]
+    fn test_nav_xhtml_href_root_nav_unchanged() {
+        // nav_dir = "" means nav is at EPUB root; simple paths pass through as-is.
+        let html = r#"<!DOCTYPE html>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body>
+          <nav epub:type="toc">
+            <ol><li><a href="text/ch1.xhtml">Ch1</a></li></ol>
+          </nav>
+        </body>
+        </html>"#;
+
+        let nav = TestArchive::parse_nav_xhtml_all(html, "").unwrap();
+        assert_eq!(nav.toc[0].href, "text/ch1.xhtml",
+            "root-level nav: href must not be modified");
+    }
+
+    #[test]
+    fn test_nav_xhtml_fragment_only_href_unchanged() {
+        let html = r##"<!DOCTYPE html>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body>
+          <nav epub:type="toc">
+            <ol><li><a href="#intro">Intro</a></li></ol>
+          </nav>
+        </body>
+        </html>"##;
+
+        let nav = TestArchive::parse_nav_xhtml_all(html, "OEBPS/nav").unwrap();
+        assert_eq!(nav.toc[0].href, "#intro",
+            "fragment-only href must pass through unchanged");
+    }
+
+    // ── nav_resolve_href unit tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_nav_resolve_href_parent_traversal() {
+        assert_eq!(
+            super::nav_resolve_href("OEBPS/nav", "../text/ch1.xhtml"),
+            "OEBPS/text/ch1.xhtml"
+        );
+    }
+
+    #[test]
+    fn test_nav_resolve_href_same_dir() {
+        assert_eq!(
+            super::nav_resolve_href("OEBPS", "text/ch1.xhtml"),
+            "OEBPS/text/ch1.xhtml"
+        );
+    }
+
+    #[test]
+    fn test_nav_resolve_href_fragment_preserved() {
+        assert_eq!(
+            super::nav_resolve_href("OEBPS/nav", "../text/ch2.xhtml#s2"),
+            "OEBPS/text/ch2.xhtml#s2"
+        );
+    }
+
+    #[test]
+    fn test_nav_resolve_href_absolute_url_passthrough() {
+        assert_eq!(
+            super::nav_resolve_href("OEBPS", "https://example.com/page"),
+            "https://example.com/page"
+        );
+    }
+
+    #[test]
+    fn test_nav_resolve_href_empty_nav_dir() {
+        // nav_dir="" means nav is at root; href is returned as-is.
+        assert_eq!(
+            super::nav_resolve_href("", "text/ch1.xhtml"),
+            "text/ch1.xhtml"
+        );
     }
 }

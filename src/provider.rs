@@ -16,10 +16,24 @@ pub trait EpubProvider {
     /// Read a file from the package into a reader stream.
     fn read_file<'a>(&'a mut self, path: &str) -> Result<Box<dyn Read + 'a>, EpubError>;
 
-    /// Returns the uncompressed byte size of the entry at `path`.
+    /// Returns the **uncompressed** byte size of the entry at `path`.
     ///
-    /// Used by the byte-based position algorithm (`ArchiveEntryLength` strategy) to determine
-    /// how many reading positions a spine item contributes, without reading its full content.
+    /// # Semantics
+    ///
+    /// This always returns the *plaintext* size — i.e. the number of bytes the
+    /// file occupies **after** decompression but **before** any EPUB-level
+    /// encryption is removed.  This matches what `zip::ZipFile::size()` returns
+    /// and what the Readium `ArchiveEntryLength` position strategy expects:
+    ///
+    /// | Entry state | What `entry_length` returns |
+    /// |-------------|----------------------------|
+    /// | Stored (no compression) | raw file size |
+    /// | Deflate-compressed | **decompressed** size |
+    /// | AES-encrypted (LCP) | cipher-text size (uncompressed) |
+    ///
+    /// For encrypted EPUB resources the [`crate::parser::OriginalLength`] strategy
+    /// should be used instead, which reads the `OriginalLength` attribute from
+    /// `META-INF/encryption.xml` to obtain the true plaintext byte count.
     fn entry_length(&mut self, path: &str) -> Result<u64, EpubError>;
 }
 

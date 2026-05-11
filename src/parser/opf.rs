@@ -62,8 +62,14 @@ struct RawTitle {
 // ── EpubArchive impl ────────────────────────────────────────────────────
 
 impl<P: EpubProvider> EpubArchive<P> {
-    /// Reads `META-INF/container.xml` to find the paths of the OPF files.
-    pub(super) fn parse_container(&mut self) -> Result<Vec<String>, EpubError> {
+    /// Reads `META-INF/container.xml` and returns every declared rendition with its
+    /// selection attributes, preserving document order.
+    ///
+    /// The first entry is always the default rendition (OCF §3.5.1); callers must
+    /// be prepared to handle containers with only one rootfile.
+    pub(super) fn parse_container(
+        &mut self,
+    ) -> Result<Vec<crate::model::RenditionInfo>, EpubError> {
         let mut container_file = self
             .provider
             .read_file("META-INF/container.xml")
@@ -75,17 +81,42 @@ impl<P: EpubProvider> EpubArchive<P> {
         let mut reader = Reader::from_str(&buf);
         reader.config_mut().trim_text(true);
 
-        let mut rootfiles = Vec::new();
+        let mut renditions: Vec<crate::model::RenditionInfo> = Vec::new();
         let mut event_buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
-                Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"rootfile" => {
-                    for attr in e.attributes() {
-                        let attr = attr?;
-                        if attr.key.as_ref() == b"full-path" {
-                            rootfiles.push(String::from_utf8_lossy(&attr.value).into_owned());
+                Event::Empty(ref e) | Event::Start(ref e)
+                    if e.name().as_ref() == b"rootfile" =>
+                {
+                    let mut info = crate::model::RenditionInfo::default();
+
+                    for attr in e.attributes().flatten() {
+                        // Older EPUB authoring tools omit the namespace declaration but
+                        // still prefix attributes as "rendition:layout", so we strip
+                        // everything up to and including the last colon rather than
+                        // relying on proper namespace expansion.
+                        let key = String::from_utf8_lossy(attr.key.into_inner()).into_owned();
+                        let val = String::from_utf8_lossy(&attr.value).into_owned();
+
+                        let local = match key.rfind(':') {
+                            Some(i) => &key[i + 1..],
+                            None => key.as_str(),
+                        };
+
+                        match local {
+                            "full-path" => info.opf_path = val,
+                            "layout" => info.layout = Some(val),
+                            "media" => info.media = Some(val),
+                            "language" => info.language = Some(val),
+                            "label" => info.label = Some(val),
+                            "accessMode" => info.access_mode = Some(val),
+                            _ => {} // media-type and others are intentionally ignored
                         }
+                    }
+
+                    if !info.opf_path.is_empty() {
+                        renditions.push(info);
                     }
                 }
                 Event::Eof => break,
@@ -94,14 +125,15 @@ impl<P: EpubProvider> EpubArchive<P> {
             event_buf.clear();
         }
 
-        if rootfiles.is_empty() {
+        if renditions.is_empty() {
             Err(EpubError::InvalidFormat(
                 "No rootfile full-path found in container.xml".to_string(),
             ))
         } else {
-            Ok(rootfiles)
+            Ok(renditions)
         }
     }
+
 
     /// Reads `META-INF/encryption.xml` to find obfuscated/encrypted resources.
     ///
@@ -887,5 +919,91 @@ mod tests {
         assert_eq!(book.metadata.titles[0].value, "Simple Book");
         assert!(book.metadata.titles[0].lang.is_none());
         assert!(book.metadata.titles[0].title_type.is_none());
+    }
+
+    // ── parse_container: RenditionInfo ────────────────────────────────────────
+
+    fn epub_zip_with_container(container_xml: &str) -> Vec<u8> {
+        let opf = b"<?xml version=\"1.0\"?>\
+            <package version=\"3.0\" xmlns=\"http://www.idpf.org/2007/opf\" unique-identifier=\"uid\">\
+              <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+                <dc:title>Test</dc:title>\
+              </metadata>\
+              <manifest/><spine/>\
+            </package>";
+        let mut buf = Vec::new();
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("META-INF/container.xml", stored).unwrap();
+        zip.write_all(container_xml.as_bytes()).unwrap();
+        zip.start_file("content.opf", stored).unwrap();
+        zip.write_all(opf).unwrap();
+        zip.finish().unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_parse_container_single_rootfile() {
+        let container = r#"<?xml version="1.0"?>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+              <rootfiles>
+                <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+              </rootfiles>
+            </container>"#;
+        let bytes = epub_zip_with_container(container);
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let renditions = archive.get_renditions().unwrap();
+
+        assert_eq!(renditions.len(), 1);
+        assert_eq!(renditions[0].opf_path, "content.opf");
+        // No selection attributes present — all optional fields are None
+        assert!(renditions[0].layout.is_none());
+        assert!(renditions[0].label.is_none());
+        assert!(renditions[0].is_reflowable(), "absent layout = reflowable per spec");
+    }
+
+    #[test]
+    fn test_parse_container_multiple_renditions_with_selection_attrs() {
+        // Simulates a manga EPUB that ships both a fixed-layout and a reflowable edition.
+        let container = r#"<?xml version="1.0"?>
+            <container version="1.0"
+                       xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+                       xmlns:rendition="http://www.idpf.org/2013/rendition">
+              <rootfiles>
+                <rootfile full-path="content.opf"
+                          media-type="application/oebps-package+xml"
+                          rendition:layout="pre-paginated"
+                          rendition:label="漫画版"
+                          rendition:accessMode="visual"/>
+                <rootfile full-path="text.opf"
+                          media-type="application/oebps-package+xml"
+                          rendition:layout="reflowable"
+                          rendition:label="阅读版"
+                          rendition:accessMode="textual"
+                          rendition:language="zh-Hant"/>
+              </rootfiles>
+            </container>"#;
+        let bytes = epub_zip_with_container(container);
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let renditions = archive.get_renditions().unwrap();
+
+        assert_eq!(renditions.len(), 2);
+
+        // First is default (fixed-layout manga)
+        assert_eq!(renditions[0].opf_path, "content.opf");
+        assert_eq!(renditions[0].layout.as_deref(), Some("pre-paginated"));
+        assert_eq!(renditions[0].label.as_deref(), Some("漫画版"));
+        assert_eq!(renditions[0].access_mode.as_deref(), Some("visual"));
+        assert!(renditions[0].is_fixed_layout());
+        assert!(!renditions[0].is_reflowable());
+
+        // Second is the text edition
+        assert_eq!(renditions[1].opf_path, "text.opf");
+        assert_eq!(renditions[1].layout.as_deref(), Some("reflowable"));
+        assert_eq!(renditions[1].label.as_deref(), Some("阅读版"));
+        assert_eq!(renditions[1].access_mode.as_deref(), Some("textual"));
+        assert_eq!(renditions[1].language.as_deref(), Some("zh-Hant"));
+        assert!(renditions[1].is_reflowable());
     }
 }
