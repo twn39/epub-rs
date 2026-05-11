@@ -67,6 +67,7 @@ fn make_path(steps: &[(u32, bool)], local: &[(u32, bool)], offset: Option<u32>) 
             )
         },
         character_offset: offset,
+        side: None,
     }
 }
 
@@ -191,11 +192,13 @@ fn cfi_none_local_steps_equals_empty_local_steps() {
         steps: vec![CfiStep::new(6, None)],
         local_steps: None,
         character_offset: None,
+        side: None,
     };
     let with_empty = CfiPath {
         steps: vec![CfiStep::new(6, None)],
         local_steps: Some(vec![]),
         character_offset: None,
+        side: None,
     };
     // Both have empty local steps — should compare equal
     assert_eq!(
