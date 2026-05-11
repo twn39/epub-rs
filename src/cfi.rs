@@ -85,6 +85,11 @@ pub struct CfiResolved {
     /// Enables an O(1) `getElementById()` shortcut.
     /// When set, JS can jump directly to this element and skip earlier steps.
     pub id_shortcut: Option<String>,
+
+    /// Side bias from the CFI terminal `:before` / `:after`.
+    /// `None` means the CFI has no explicit side annotation (spec default is "before").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side: Option<CfiSide>,
 }
 
 /// The complete result of resolving a CFI string, covering both Point and Range forms.
@@ -170,12 +175,31 @@ impl fmt::Display for CfiStep {
     }
 }
 
+/// Side bias for a CFI character-offset terminal (`:before` / `:after`).
+///
+/// From EPUB CFI spec §2.2 terminus grammar:
+/// `terminus := ":" ( offset [ side ] | side )`
+///
+/// This field is intentionally absent from the EPUB 3 implementation in epub.js,
+/// which does not parse side bias.  epub-rs stores and round-trips it faithfully.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CfiSide {
+    /// The position is before the indexed character (spec default when omitted).
+    Before,
+    /// The position is after the indexed character.
+    After,
+}
+
 /// Represents a path sequence in a CFI.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CfiPath {
     pub steps: Vec<CfiStep>,
     pub local_steps: Option<Vec<CfiStep>>,
     pub character_offset: Option<u32>,
+    /// Side bias from the CFI terminal `:before` / `:after`.
+    /// `None` means the CFI string had no explicit side annotation.
+    pub side: Option<CfiSide>,
 }
 
 /// CfiPaths are compared step-by-step numerically (base steps, then local steps, then offset).
@@ -277,6 +301,7 @@ impl CfiPath {
             is_text_node,
             xpath: xpath_parts.join("/"),
             id_shortcut,
+            side: self.side.clone(),
         })
     }
 }
@@ -294,6 +319,13 @@ impl fmt::Display for CfiPath {
         }
         if let Some(offset) = self.character_offset {
             write!(f, ":{}", offset)?;
+        }
+        // Emit :before / :after side-bias annotation when present.
+        if let Some(ref side) = self.side {
+            match side {
+                CfiSide::Before => write!(f, ":before")?,
+                CfiSide::After => write!(f, ":after")?,
+            }
         }
         Ok(())
     }
@@ -521,6 +553,9 @@ impl EpubCfi {
                         steps: parent.steps.clone(),
                         local_steps: Some(combined_local),
                         character_offset: half.character_offset,
+                        // The half-path's side bias takes precedence; fall back
+                        // to the shared parent's side when the half-path has none.
+                        side: half.side.clone().or_else(|| parent.side.clone()),
                     };
                     combined.resolve(spine_index)
                 };
@@ -547,6 +582,39 @@ impl fmt::Display for EpubCfi {
     }
 }
 
+/// Splits the inner content of `epubcfi(...)` by top-level commas.
+///
+/// A "top-level" comma is one that is **not** inside an assertion bracket `[...]`
+/// and **not** preceded by the CFI escape character `^`.
+///
+/// This is necessary because EPUB CFI assertions can legally contain commas
+/// (e.g. `[chap,v2]`), which must not be mistaken for the Range separator.
+fn split_cfi_top_level(s: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut depth = 0u32; // bracket nesting depth
+    let mut escaped = false;
+    let mut last = 0usize;
+
+    for (i, c) in s.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '^' => escaped = true,
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&s[last..i]);
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[last..]);
+    parts
+}
+
 impl std::str::FromStr for EpubCfi {
     type Err = EpubError;
 
@@ -558,20 +626,24 @@ impl std::str::FromStr for EpubCfi {
         }
 
         let inner = &s[8..s.len() - 1]; // inside epubcfi(...)
-        let parts: Vec<&str> = inner.split(',').collect();
+        // Use bracket-aware splitting so commas inside assertion [...] are NOT
+        // treated as Range separators (e.g. /6/4[chap,v2]!/4/2,/1:5,/3:10).
+        let parts = split_cfi_top_level(inner);
 
-        if parts.len() == 1 {
-            let path = parse_path(parts[0])?;
-            Ok(EpubCfi::Point(path))
-        } else if parts.len() == 3 {
-            let parent = parse_path(parts[0])?;
-            let start = parse_path(parts[1])?;
-            let end = parse_path(parts[2])?;
-            Ok(EpubCfi::Range { parent, start, end })
-        } else {
-            Err(EpubError::InvalidFormat(
+        match parts.len() {
+            1 => {
+                let path = parse_path(parts[0])?;
+                Ok(EpubCfi::Point(path))
+            }
+            3 => {
+                let parent = parse_path(parts[0])?;
+                let start = parse_path(parts[1])?;
+                let end = parse_path(parts[2])?;
+                Ok(EpubCfi::Range { parent, start, end })
+            }
+            _ => Err(EpubError::InvalidFormat(
                 "Invalid CFI range structure".to_string(),
-            ))
+            )),
         }
     }
 }
@@ -581,16 +653,19 @@ fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
     let parts: Vec<&str> = s.split('!').collect();
 
     if parts.len() == 1 {
-        let (steps, offset) = parse_steps_and_offset(parts[0])?;
+        let (steps, offset, side) = parse_steps_and_offset(parts[0])?;
         path.steps = steps;
         path.character_offset = offset;
+        path.side = side;
     } else if parts.len() == 2 {
-        let (base_steps, _) = parse_steps_and_offset(parts[0])?;
+        // Base path (before '!') carries no terminal offset or side bias.
+        let (base_steps, _, _) = parse_steps_and_offset(parts[0])?;
         path.steps = base_steps;
 
-        let (local_steps, offset) = parse_steps_and_offset(parts[1])?;
+        let (local_steps, offset, side) = parse_steps_and_offset(parts[1])?;
         path.local_steps = Some(local_steps);
         path.character_offset = offset;
+        path.side = side;
     } else {
         return Err(EpubError::InvalidFormat(
             "Invalid CFI path structure".to_string(),
@@ -600,17 +675,28 @@ fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
     Ok(path)
 }
 
-fn parse_steps_and_offset(s: &str) -> Result<(Vec<CfiStep>, Option<u32>), EpubError> {
-    // We must find the colon that denotes the character offset.
-    // However, colons can appear inside `[id:assert]` or be escaped `^:`.
-    // We scan from the end or just do a single pass parsing.
-    let mut offset = None;
+/// Return type of [`parse_steps_and_offset`]: `(steps, char_offset, side_bias)`.
+type ParsedTerminal = (Vec<CfiStep>, Option<u32>, Option<CfiSide>);
+
+/// Scans `s` for the first unescaped `:` that is outside assertion brackets,
+/// then splits the terminal string into `(offset, side_bias)`.
+///
+/// Handles the EPUB CFI terminus grammar:
+/// ```text
+/// terminus := ":" ( offset [ side ] | side )
+/// side     := "before" | "after"
+/// ```
+///
+/// Returns `(steps, character_offset, side_bias)`.  The side bias is `None`
+/// when the CFI string has no `:before` / `:after` suffix.
+fn parse_steps_and_offset(s: &str) -> Result<ParsedTerminal, EpubError> {
     let mut path_str = s;
 
-    // Find unescaped ':' that is not inside an assertion '[' ']'
+    // Find the first unescaped ':' outside assertion brackets — this is the
+    // start of the terminal (character-offset + optional side bias).
     let mut in_assertion = false;
     let mut is_escaped = false;
-    let mut colon_idx = None;
+    let mut colon_idx: Option<usize> = None;
 
     for (i, c) in s.char_indices() {
         if is_escaped {
@@ -628,17 +714,33 @@ fn parse_steps_and_offset(s: &str) -> Result<(Vec<CfiStep>, Option<u32>), EpubEr
     }
 
     if let Some(idx) = colon_idx {
-        let offset_str = &s[idx + 1..];
-        offset = Some(
-            offset_str
-                .parse::<u32>()
-                .map_err(|_| EpubError::InvalidFormat("Invalid character offset".to_string()))?,
-        );
+        let terminal_str = &s[idx + 1..];
         path_str = &s[..idx];
+
+        // Check for `:N:before` or `:N:after` (side bias suffix).
+        // We use rfind(':') so nested colons inside the offset number (illegal
+        // per spec, but defensive) don't cause a false match.
+        let (offset_part, side) = if let Some(sep) = terminal_str.rfind(':') {
+            match &terminal_str[sep + 1..] {
+                "before" => (&terminal_str[..sep], Some(CfiSide::Before)),
+                "after" => (&terminal_str[..sep], Some(CfiSide::After)),
+                // Not a known side keyword — treat the whole string as offset.
+                _ => (terminal_str, None),
+            }
+        } else {
+            (terminal_str, None)
+        };
+
+        let offset = offset_part.parse::<u32>().map_err(|_| {
+            EpubError::InvalidFormat(format!("Invalid CFI character offset: '{offset_part}'"))
+        })?;
+
+        let steps = parse_steps(path_str)?;
+        return Ok((steps, Some(offset), side));
     }
 
     let steps = parse_steps(path_str)?;
-    Ok((steps, offset))
+    Ok((steps, None, None))
 }
 
 fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
@@ -734,11 +836,13 @@ mod tests {
             steps: vec![CfiStep::new(6, None), CfiStep::new(4, None)],
             local_steps: None,
             character_offset: None,
+            side: None,
         };
         let p10 = CfiPath {
             steps: vec![CfiStep::new(6, None), CfiStep::new(10, None)],
             local_steps: None,
             character_offset: None,
+            side: None,
         };
         assert!(p4 < p10);
     }
@@ -834,6 +938,7 @@ mod tests {
             steps: vec![CfiStep::new(6, None), CfiStep::new(4, Some("ch1".into()))],
             local_steps: None,
             character_offset: None,
+            side: None,
         };
         assert!(path.resolve(0).is_none());
     }
@@ -853,6 +958,7 @@ mod tests {
                 CfiStep::new(2, None),
             ]),
             character_offset: None,
+            side: None,
         };
         let resolved = path.resolve(1).unwrap();
 
@@ -890,6 +996,7 @@ mod tests {
                 CfiStep::new(1, None), // TEXT,    index=0
             ]),
             character_offset: Some(3),
+            side: None,
         };
         let resolved = path.resolve(1).unwrap();
 
@@ -916,6 +1023,7 @@ mod tests {
                 CfiStep::new(6, Some("para99".into())),
             ]),
             character_offset: None,
+            side: None,
         };
         let resolved = path.resolve(0).unwrap();
         assert_eq!(resolved.id_shortcut, Some("para99".into())); // deepest wins
@@ -1002,12 +1110,14 @@ mod tests {
                 CfiStep::new(1, None), // TEXT ← last in parent local
             ]),
             character_offset: None,
+            side: None,
         };
         // Simulate start half: local = [] + extra text step
         let start_half = CfiPath {
             steps: vec![],
             local_steps: Some(vec![CfiStep::new(3, None)]), // text
             character_offset: Some(7),
+            side: None,
         };
         let cfi = EpubCfi::Range {
             parent: path.clone(),
@@ -1016,6 +1126,7 @@ mod tests {
                 steps: vec![],
                 local_steps: None,
                 character_offset: Some(12),
+                side: None,
             },
         };
 
@@ -1039,8 +1150,135 @@ mod tests {
             steps: vec![CfiStep::new(6, None), CfiStep::new(4, None)],
             local_steps: None,
             character_offset: None,
+            side: None,
         };
         let cfi = EpubCfi::Point(path);
         assert!(cfi.resolve().is_none());
+    }
+
+    // ── Edge-case: assertion-comma must not split Range (P0) ─────────────────
+
+    #[test]
+    fn test_cfi_range_assertion_comma_not_split() {
+        // [chap,v2] contains a comma inside the assertion — it must NOT be
+        // treated as a Range separator.  Before the fix, this parsed as 4 parts
+        // and returned an "Invalid CFI range structure" error.
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[chap,v2]!/4/2,/1:5,/3:10)").unwrap();
+        assert!(
+            matches!(cfi, EpubCfi::Range { .. }),
+            "Expected Range, got: {cfi:?}"
+        );
+        if let EpubCfi::Range { parent, .. } = &cfi {
+            assert_eq!(
+                parent.steps[1].assertion.as_deref(),
+                Some("chap,v2"),
+                "Assertion must be preserved intact"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cfi_range_multiple_commas_in_assertions() {
+        // Multiple commas in a single assertion [a,b,c]
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[a,b,c]!/4/2,/1:0,/3:5)").unwrap();
+        assert!(matches!(cfi, EpubCfi::Range { .. }));
+        if let EpubCfi::Range { parent, .. } = &cfi {
+            assert_eq!(parent.steps[1].assertion.as_deref(), Some("a,b,c"));
+        }
+    }
+
+    #[test]
+    fn test_cfi_point_assertion_comma_preserved() {
+        // Point CFI with comma in assertion: [foo,bar] must survive the parser.
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[foo,bar]!/4/2:3)").unwrap();
+        if let EpubCfi::Point(path) = &cfi {
+            assert_eq!(path.steps[1].assertion.as_deref(), Some("foo,bar"));
+        }
+    }
+
+    // ── Edge-case: :before / :after side bias (P1) ───────────────────────────
+
+    #[test]
+    fn test_cfi_side_before_parsed() {
+        // :5:before — before the 5th character
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2/1:5:before)").unwrap();
+        if let EpubCfi::Point(path) = &cfi {
+            assert_eq!(path.character_offset, Some(5));
+            assert_eq!(path.side, Some(CfiSide::Before));
+        } else {
+            panic!("Expected Point CFI");
+        }
+    }
+
+    #[test]
+    fn test_cfi_side_after_parsed() {
+        // :3:after — after the 3rd character
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2/1:3:after)").unwrap();
+        if let EpubCfi::Point(path) = &cfi {
+            assert_eq!(path.character_offset, Some(3));
+            assert_eq!(path.side, Some(CfiSide::After));
+        } else {
+            panic!("Expected Point CFI");
+        }
+    }
+
+    #[test]
+    fn test_cfi_no_side_is_none() {
+        // Plain offset — no side annotation
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2/1:5)").unwrap();
+        if let EpubCfi::Point(path) = &cfi {
+            assert_eq!(path.character_offset, Some(5));
+            assert_eq!(path.side, None);
+        } else {
+            panic!("Expected Point CFI");
+        }
+    }
+
+    #[test]
+    fn test_cfi_side_round_trips_via_display() {
+        // parse → Display → re-parse must preserve side bias
+        let original = "epubcfi(/6/4[ch1]!/4/2/1:5:before)";
+        let cfi = EpubCfi::from_str(original).unwrap();
+        let rendered = cfi.to_string();
+        assert_eq!(rendered, original);
+
+        let reparsed = EpubCfi::from_str(&rendered).unwrap();
+        if let EpubCfi::Point(path) = &reparsed {
+            assert_eq!(path.side, Some(CfiSide::Before));
+        }
+
+        // :after
+        let original_after = "epubcfi(/6/4[ch1]!/4/2/1:3:after)";
+        let cfi_after = EpubCfi::from_str(original_after).unwrap();
+        assert_eq!(cfi_after.to_string(), original_after);
+    }
+
+    #[test]
+    fn test_cfi_side_propagated_to_resolved() {
+        // resolve() must expose side on CfiResolved
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2/1:5:before)").unwrap();
+        let resolution = cfi.resolve().unwrap();
+        assert_eq!(resolution.start.side, Some(CfiSide::Before));
+        assert_eq!(resolution.start.character_offset, Some(5));
+    }
+
+    // ── split_cfi_top_level unit tests ────────────────────────────────────────
+
+    #[test]
+    fn test_split_top_level_point() {
+        let parts = split_cfi_top_level("/6/4[ch1]!/4/2:5");
+        assert_eq!(parts, vec!["/6/4[ch1]!/4/2:5"]);
+    }
+
+    #[test]
+    fn test_split_top_level_range_no_assertion() {
+        let parts = split_cfi_top_level("/6/4!/4/2,/1:5,/3:10");
+        assert_eq!(parts, vec!["/6/4!/4/2", "/1:5", "/3:10"]);
+    }
+
+    #[test]
+    fn test_split_top_level_range_with_assertion_comma() {
+        let parts = split_cfi_top_level("/6/4[a,b]!/4/2,/1:5,/3:10");
+        assert_eq!(parts, vec!["/6/4[a,b]!/4/2", "/1:5", "/3:10"]);
     }
 }
