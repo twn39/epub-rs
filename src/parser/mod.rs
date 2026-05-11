@@ -50,18 +50,138 @@ impl EpubArchive<DirProvider> {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 impl<P: EpubProvider> EpubArchive<P> {
-    /// Get all available renditions (rootfiles) in the EPUB container.
-    pub fn get_renditions(&mut self) -> Result<Vec<String>, EpubError> {
+    /// Returns all renditions declared in `META-INF/container.xml`.
+    ///
+    /// Per OCF §3.5.1 the **first** entry is the *default rendition* and must be processed
+    /// by every conformant Reading System.  Additional entries carry optional selection
+    /// attributes (`rendition:layout`, `rendition:language`, etc.) defined by the EPUB
+    /// Multiple-Rendition Publications specification.
+    ///
+    /// # Usage
+    /// ```no_run
+    /// # use epub_rs::parser::EpubArchive;
+    /// # use std::io::Cursor;
+    /// # let data: Vec<u8> = vec![];
+    /// let mut archive = EpubArchive::new(Cursor::new(data)).unwrap();
+    /// let renditions = archive.get_renditions().unwrap();
+    /// // renditions[0] is always the default
+    /// for r in &renditions {
+    ///     println!("{} — layout: {:?}", r.opf_path, r.layout);
+    /// }
+    /// ```
+    pub fn get_renditions(
+        &mut self,
+    ) -> Result<Vec<crate::model::RenditionInfo>, EpubError> {
         self.parse_container()
     }
 
-    /// Parse the EPUB archive and extract metadata, manifest, and spine.
+    /// Parse the EPUB's **default rendition** (the first `<rootfile>` in `container.xml`).
+    ///
+    /// This is the standard entry point for single-rendition EPUBs (the vast majority of
+    /// publications).  For multi-rendition containers, prefer [`parse_best_for`] or
+    /// [`parse_by_index`] to select the most appropriate version.
     pub fn parse(&mut self) -> Result<EpubBook, EpubError> {
-        let rootfiles = self.parse_container()?;
-        self.parse_rendition(&rootfiles[0])
+        let renditions = self.parse_container()?;
+        // Per OCF §3.5.1, the default rendition is always at index 0.
+        self.parse_rendition(&renditions[0].opf_path)
+    }
+
+    /// Parse a specific rendition selected by its 0-based index in `container.xml`.
+    ///
+    /// Returns `Err(EpubError::InvalidFormat)` if `index` is out of range.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use epub_rs::parser::EpubArchive;
+    /// # use std::io::Cursor;
+    /// # let data: Vec<u8> = vec![];
+    /// let mut archive = EpubArchive::new(Cursor::new(data)).unwrap();
+    /// // Parse the second rendition (index 1) — e.g. the reflowable text edition
+    /// let book = archive.parse_by_index(1).unwrap();
+    /// ```
+    pub fn parse_by_index(&mut self, index: usize) -> Result<EpubBook, EpubError> {
+        let renditions = self.parse_container()?;
+        let info = renditions.into_iter().nth(index).ok_or_else(|| {
+            EpubError::InvalidFormat(format!(
+                "Rendition index {index} is out of range (container has fewer rootfiles)"
+            ))
+        })?;
+        self.parse_rendition(&info.opf_path)
+    }
+
+    /// Parse the best-matching rendition for the given preferences.
+    ///
+    /// Selection strategy (first match wins, falls back to default rendition):
+    ///
+    /// 1. Both `layout` and `language` match → exact match
+    /// 2. Only `layout` matches
+    /// 3. Only `language` matches  
+    /// 4. Default rendition (index 0)
+    ///
+    /// Pass `None` for any preference you don't care about.
+    ///
+    /// # Example — prefer the reflowable text edition in Traditional Chinese
+    /// ```no_run
+    /// # use epub_rs::parser::EpubArchive;
+    /// # use std::io::Cursor;
+    /// # let data: Vec<u8> = vec![];
+    /// let mut archive = EpubArchive::new(Cursor::new(data)).unwrap();
+    /// let book = archive.parse_best_for(Some("reflowable"), Some("zh-Hant")).unwrap();
+    /// ```
+    pub fn parse_best_for(
+        &mut self,
+        layout: Option<&str>,
+        language: Option<&str>,
+    ) -> Result<EpubBook, EpubError> {
+        let renditions = self.parse_container()?;
+
+        // Layout match outweighs language match (weight 2 vs 1) because choosing the
+        // wrong layout (e.g. pre-paginated on a small screen) is a rendering failure,
+        // while a wrong language edition is merely inconvenient.
+        let scored: Option<&crate::model::RenditionInfo> = renditions
+            .iter()
+            .max_by_key(|r| {
+                let mut score: u8 = 0;
+                if let Some(want_layout) = layout {
+                    if r.layout.as_deref() == Some(want_layout)
+                        || (want_layout == "reflowable" && r.layout.is_none())
+                    {
+                        score += 2;
+                    }
+                }
+                if let Some(want_lang) = language {
+                    if r.language.as_deref() == Some(want_lang) {
+                        score += 1;
+                    }
+                }
+                score
+            })
+            .filter(|r| {
+                // max_by_key always returns *some* element, even when every score is 0.
+                // The filter gates on at least one criterion matching so we never
+                // accidentally return a non-default rendition when nothing matched.
+                let want_layout = layout.map(|l| {
+                    r.layout.as_deref() == Some(l) || (l == "reflowable" && r.layout.is_none())
+                });
+                let want_lang = language.map(|l| r.language.as_deref() == Some(l));
+                want_layout.unwrap_or(false) || want_lang.unwrap_or(false)
+            });
+
+        let opf_path = match scored {
+            Some(r) => r.opf_path.clone(),
+            // Nothing satisfied the caller's constraints; OCF requires every Reading
+            // System to be able to process the first rootfile, so it is always safe.
+            None => renditions[0].opf_path.clone(),
+        };
+
+        self.parse_rendition(&opf_path)
     }
 
     /// Parse a specific rendition by its OPF path.
+    ///
+    /// `encryption.xml` is loaded unconditionally because there is no cheap way to
+    /// know whether a given rendition contains encrypted resources before parsing
+    /// the manifest; a missing or empty file produces an empty map.
     pub fn parse_rendition(&mut self, opf_path: &str) -> Result<EpubBook, EpubError> {
         let mut book = self.parse_opf(opf_path)?;
         book.encryptions = self.parse_encryption().unwrap_or_default();

@@ -206,7 +206,10 @@ fn roundtrip_toc_titles_and_hrefs() {
 
     assert_eq!(nav.toc.len(), 2, "top-level TOC should have 2 entries");
     assert_eq!(nav.toc[0].title, "第一章");
-    assert_eq!(nav.toc[0].href, "text/ch1.xhtml");
+    // The generator places nav.xhtml at OEBPS/nav.xhtml, so nav_dir = "OEBPS".
+    // TOC hrefs are OPF-relative ("text/ch1.xhtml") and must be resolved to
+    // EPUB-root-relative ("OEBPS/text/ch1.xhtml") per RFC 3986 §5.2.
+    assert_eq!(nav.toc[0].href, "OEBPS/text/ch1.xhtml");
     assert_eq!(
         nav.toc[0].children.len(),
         1,
@@ -214,6 +217,7 @@ fn roundtrip_toc_titles_and_hrefs() {
     );
     assert_eq!(nav.toc[0].children[0].title, "第一节");
     assert_eq!(nav.toc[1].title, "第二章");
+    assert_eq!(nav.toc[1].href, "OEBPS/text/ch2.xhtml");
 }
 
 // ── EPUB version roundtrip ────────────────────────────────────────────────────

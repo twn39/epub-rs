@@ -234,16 +234,16 @@ mod tests {
 
         let renditions = archive.get_renditions().expect("Failed to get renditions");
         assert_eq!(renditions.len(), 2);
-        assert_eq!(renditions[0], "OEBPS/book_reflowable.opf");
-        assert_eq!(renditions[1], "OEBPS/book_fixed.opf");
+        assert_eq!(renditions[0].opf_path, "OEBPS/book_reflowable.opf");
+        assert_eq!(renditions[1].opf_path, "OEBPS/book_fixed.opf");
 
         let book1 = archive
-            .parse_rendition(&renditions[0])
+            .parse_rendition(&renditions[0].opf_path)
             .expect("Failed to parse first rendition");
         assert_eq!(book1.metadata.title.as_deref(), Some("Reflowable Version"));
 
         let book2 = archive
-            .parse_rendition(&renditions[1])
+            .parse_rendition(&renditions[1].opf_path)
             .expect("Failed to parse second rendition");
         assert_eq!(book2.metadata.title.as_deref(), Some("Fixed Version"));
 
@@ -254,6 +254,7 @@ mod tests {
             Some("Reflowable Version")
         );
     }
+
 
     #[test]
     fn test_error_handling_bad_zip() {
