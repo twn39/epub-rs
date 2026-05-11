@@ -47,8 +47,8 @@ fn cfi_child_path(parent: &str, index: usize, assertion: &str) -> String {
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use html::{
-    extract_text, extract_text_stream, inject_head_content, normalize_path, rewrite_links,
-    rewrite_links_stream, rewrite_resources,
+    extract_text, extract_text_stream, inject_head_content, normalize_path, rewrite_css,
+    rewrite_links, rewrite_links_stream, rewrite_resources,
 };
 
 pub use cfi::{SearchResult, inject_cfi_dom, search_chapter};
