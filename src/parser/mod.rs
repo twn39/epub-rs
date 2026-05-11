@@ -19,7 +19,7 @@ use std::io::{Read, Seek};
 
 // Re-export public types that were previously in parser.rs top-level
 pub use positions::{
-    ArchiveEntryLength, OriginalLength, BYTES_PER_POSITION, PositionIndex, ReflowableStrategy,
+    ArchiveEntryLength, BYTES_PER_POSITION, OriginalLength, PositionIndex, ReflowableStrategy,
     recommended_reflowable_strategy,
 };
 
@@ -259,7 +259,9 @@ impl<P: EpubProvider> EpubArchive<P> {
     /// determine whether an EPUB is an audiobook with synchronized text–audio playback
     /// before calling [`Self::get_media_overlay`] for individual chapters.
     pub fn has_media_overlays(&self, book: &EpubBook) -> bool {
-        book.manifest.values().any(|item| item.media_overlay.is_some())
+        book.manifest
+            .values()
+            .any(|item| item.media_overlay.is_some())
     }
 
     /// Parses and returns the SMIL Media Overlay for a spine content document.
@@ -295,15 +297,12 @@ impl<P: EpubProvider> EpubArchive<P> {
         };
 
         // Resolve the SMIL file path
-        let smil_item = book
-            .manifest
-            .get(&overlay_id)
-            .ok_or_else(|| {
-                EpubError::InvalidFormat(format!(
-                    "media-overlay ID '{}' not found in manifest",
-                    overlay_id
-                ))
-            })?;
+        let smil_item = book.manifest.get(&overlay_id).ok_or_else(|| {
+            EpubError::InvalidFormat(format!(
+                "media-overlay ID '{}' not found in manifest",
+                overlay_id
+            ))
+        })?;
 
         let smil_href = smil_item.href.clone();
         let smil_path = if book.opf_dir.is_empty() {
@@ -346,7 +345,10 @@ impl<P: EpubProvider> EpubArchive<P> {
             .collect();
 
         let cur_pos = overlay_hrefs.iter().position(|h| *h == smil_path);
-        let prev_smil_href = cur_pos.and_then(|i| i.checked_sub(1)).and_then(|i| overlay_hrefs.get(i)).cloned();
+        let prev_smil_href = cur_pos
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| overlay_hrefs.get(i))
+            .cloned();
         let next_smil_href = cur_pos.and_then(|i| overlay_hrefs.get(i + 1)).cloned();
 
         Ok(Some(crate::model::SmilDocument {

@@ -110,8 +110,7 @@ impl<P: EpubProvider> EpubArchive<P> {
     /// plaintext length from `<Compression OriginalLength="N">`.
     pub(super) fn parse_encryption(
         &mut self,
-    ) -> Result<std::collections::HashMap<String, crate::crypto::EncryptionInfo>, EpubError>
-    {
+    ) -> Result<std::collections::HashMap<String, crate::crypto::EncryptionInfo>, EpubError> {
         let mut encryptions = std::collections::HashMap::new();
 
         let mut enc_file = match self.provider.read_file("META-INF/encryption.xml") {
@@ -146,11 +145,9 @@ impl<P: EpubProvider> EpubArchive<P> {
                             {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 if val == "http://www.idpf.org/2008/embedding" {
-                                    current_algo =
-                                        Some(crate::crypto::ObfuscationAlgorithm::Idpf);
+                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
                                 } else if val == "http://ns.adobe.com/pdf/enc#RC" {
-                                    current_algo =
-                                        Some(crate::crypto::ObfuscationAlgorithm::Adobe);
+                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
                                 }
                             }
                         }
@@ -585,9 +582,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                             // ── Media Overlays OPF metadata ──────────────────────────────────
                             // Spec: EPUB 3.3 §9.3.5.2 / Appendix D.8
                             "media:duration" => {
-                                if let Some(secs) =
-                                    super::smil::parse_clock_value(&text)
-                                {
+                                if let Some(secs) = super::smil::parse_clock_value(&text) {
                                     // `refines` is already stripped in the MetaGlobal branch above;
                                     // for media:duration with refines we land in MetaRefines, not here.
                                     // This branch captures the GLOBAL duration (no refines).
@@ -732,10 +727,10 @@ impl<P: EpubProvider> EpubArchive<P> {
         //    Those land in `refinements[smil-id]["media:duration"]`; extract them now.
         if let Some(mut mo) = mo_meta {
             for (item_id, props) in &refinements {
-                if let Some(dur_str) = props.get("media:duration") {
-                    if let Some(secs) = super::smil::parse_clock_value(dur_str) {
-                        mo.durations.insert(item_id.clone(), secs);
-                    }
+                if let Some(dur_str) = props.get("media:duration")
+                    && let Some(secs) = super::smil::parse_clock_value(dur_str)
+                {
+                    mo.durations.insert(item_id.clone(), secs);
                 }
             }
             book.metadata.media_overlays = Some(mo);

@@ -76,10 +76,10 @@ pub(super) fn parse_smil(xml: &str, smil_dir: &str) -> Result<Vec<SmilObject>, E
                     }
                     // <text> and <audio> inside a <par>
                     "text" => {
-                        if let Some(ref mut p) = cur_par {
-                            if let Some(src) = attr_value(e, "src") {
-                                p.text_ref = resolve_src(Some(&src), smil_dir).unwrap_or(src);
-                            }
+                        if let Some(ref mut p) = cur_par
+                            && let Some(src) = attr_value(e, "src")
+                        {
+                            p.text_ref = resolve_src(Some(&src), smil_dir).unwrap_or(src);
                         }
                     }
                     "audio" => {
@@ -95,10 +95,10 @@ pub(super) fn parse_smil(xml: &str, smil_dir: &str) -> Result<Vec<SmilObject>, E
                 let local = local_name_str(e.name().into_inner());
                 match local.as_str() {
                     "text" => {
-                        if let Some(ref mut p) = cur_par {
-                            if let Some(src) = attr_value(e, "src") {
-                                p.text_ref = resolve_src(Some(&src), smil_dir).unwrap_or(src);
-                            }
+                        if let Some(ref mut p) = cur_par
+                            && let Some(src) = attr_value(e, "src")
+                        {
+                            p.text_ref = resolve_src(Some(&src), smil_dir).unwrap_or(src);
                         }
                     }
                     "audio" => {
@@ -122,36 +122,34 @@ pub(super) fn parse_smil(xml: &str, smil_dir: &str) -> Result<Vec<SmilObject>, E
                         in_body = false;
                     }
                     "par" => {
-                        if let Some(p) = cur_par.take() {
-                            if !p.text_ref.is_empty() || p.audio_src.is_some() {
-                                let audio_ref = p.audio_src.map(|src| {
-                                    format_media_fragment(&src, p.clip_begin, p.clip_end)
-                                });
-                                let obj = SmilObject {
-                                    text_ref: p.text_ref,
-                                    audio_ref,
-                                    role: p.role,
-                                    children: Vec::new(),
-                                };
-                                if let Some(frame) = stack.last_mut() {
-                                    frame.children.push(obj);
-                                }
+                        if let Some(p) = cur_par.take()
+                            && (!p.text_ref.is_empty() || p.audio_src.is_some())
+                        {
+                            let audio_ref = p
+                                .audio_src
+                                .map(|src| format_media_fragment(&src, p.clip_begin, p.clip_end));
+                            let obj = SmilObject {
+                                text_ref: p.text_ref,
+                                audio_ref,
+                                role: p.role,
+                                children: Vec::new(),
+                            };
+                            if let Some(frame) = stack.last_mut() {
+                                frame.children.push(obj);
                             }
                         }
                     }
-                    "seq" => {
-                        // Pop the innermost seq frame and fold into its parent.
-                        if stack.len() > 1 {
-                            let frame = stack.pop().unwrap();
-                            let obj = SmilObject {
-                                text_ref: frame.text_ref,
-                                audio_ref: None,
-                                role: frame.role,
-                                children: frame.children,
-                            };
-                            if let Some(parent) = stack.last_mut() {
-                                parent.children.push(obj);
-                            }
+                    // Pop the innermost seq frame and fold into its parent.
+                    "seq" if stack.len() > 1 => {
+                        let frame = stack.pop().unwrap();
+                        let obj = SmilObject {
+                            text_ref: frame.text_ref,
+                            audio_ref: None,
+                            role: frame.role,
+                            children: frame.children,
+                        };
+                        if let Some(parent) = stack.last_mut() {
+                            parent.children.push(obj);
                         }
                     }
                     _ => {}
@@ -163,7 +161,11 @@ pub(super) fn parse_smil(xml: &str, smil_dir: &str) -> Result<Vec<SmilObject>, E
         event_buf.clear();
     }
 
-    Ok(stack.into_iter().next().map(|f| f.children).unwrap_or_default())
+    Ok(stack
+        .into_iter()
+        .next()
+        .map(|f| f.children)
+        .unwrap_or_default())
 }
 
 // ── State machine frames ──────────────────────────────────────────────────────
@@ -274,9 +276,9 @@ pub(super) fn parse_clock_value(s: &str) -> Option<f64> {
 fn format_media_fragment(src: &str, begin: Option<f64>, end: Option<f64>) -> String {
     match (begin, end) {
         (Some(b), Some(e)) => format!("{src}#t={b:.3},{e:.3}"),
-        (Some(b), None)    => format!("{src}#t={b:.3}"),
-        (None, Some(e))    => format!("{src}#t=0.000,{e:.3}"),
-        (None, None)       => src.to_string(),
+        (Some(b), None) => format!("{src}#t={b:.3}"),
+        (None, Some(e)) => format!("{src}#t=0.000,{e:.3}"),
+        (None, None) => src.to_string(),
     }
 }
 
@@ -285,7 +287,10 @@ fn format_media_fragment(src: &str, begin: Option<f64>, end: Option<f64>) -> Str
 /// Returns the local name (stripping any namespace prefix) as a `String`.
 fn local_name_str(name: &[u8]) -> String {
     let s = std::str::from_utf8(name).unwrap_or("");
-    s.rsplit_once(':').map(|(_, local)| local).unwrap_or(s).to_string()
+    s.rsplit_once(':')
+        .map(|(_, local)| local)
+        .unwrap_or(s)
+        .to_string()
 }
 
 /// Returns the value of a named attribute from a start/empty element.
