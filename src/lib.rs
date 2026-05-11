@@ -11,6 +11,7 @@ pub use cfi::EpubCfi;
 pub use error::EpubError;
 pub use model::EpubBook;
 pub use model::{MediaOverlayMetadata, SmilDocument, SmilObject};
+pub use processor::rewrite_css;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
