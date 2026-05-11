@@ -15,6 +15,35 @@ pub enum ObfuscationAlgorithm {
     Adobe,
 }
 
+/// Full encryption metadata for a single entry listed in `META-INF/encryption.xml`.
+///
+/// Stored in [`crate::model::EpubBook::encryptions`] keyed by the ZIP-relative
+/// path of the encrypted resource.
+///
+/// Mirrors go-toolkit's `manifest.Encryption` struct, which is the authoritative
+/// reference for how `OriginalLength` flows from `encryption.xml` into position
+/// computation via the `OriginalLength` reflowable strategy.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct EncryptionInfo {
+    /// The obfuscation or encryption algorithm applied to this entry.
+    pub algorithm: ObfuscationAlgorithm,
+
+    /// Original **plaintext** byte length before encryption (and before any
+    /// pre-encryption compression), as declared by the
+    /// `<comp:Compression OriginalLength="N">` element inside
+    /// `<EncryptionProperties>` in `encryption.xml`.
+    ///
+    /// - `None` — element absent; typical for IDPF/Adobe *font* obfuscation,
+    ///   which only XORs the header and does not change the file size.
+    /// - `Some(n)` — present for LCP / AES-CBC full-content encryption where
+    ///   AES padding and the IV inflate the stored cipher-text beyond the
+    ///   original content length.
+    ///
+    /// Used by the [`crate::parser::OriginalLength`] reflowable strategy to
+    /// compute accurate reading positions for encrypted EPUBs.
+    pub original_length: Option<u64>,
+}
+
 /// Generates a 20-byte key for the IDPF font obfuscation algorithm based on the EPUB Unique Identifier.
 pub fn generate_idpf_key(identifier: &str) -> Vec<u8> {
     // Strip all whitespace characters from the identifier

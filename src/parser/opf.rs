@@ -103,10 +103,14 @@ impl<P: EpubProvider> EpubArchive<P> {
         }
     }
 
-    /// Reads `META-INF/encryption.xml` to find obfuscated resources.
+    /// Reads `META-INF/encryption.xml` to find obfuscated/encrypted resources.
+    ///
+    /// Returns a map from ZIP-relative path to [`crate::crypto::EncryptionInfo`],
+    /// which carries both the obfuscation algorithm and the optional original
+    /// plaintext length from `<Compression OriginalLength="N">`.
     pub(super) fn parse_encryption(
         &mut self,
-    ) -> Result<std::collections::HashMap<String, crate::crypto::ObfuscationAlgorithm>, EpubError>
+    ) -> Result<std::collections::HashMap<String, crate::crypto::EncryptionInfo>, EpubError>
     {
         let mut encryptions = std::collections::HashMap::new();
 
@@ -124,12 +128,17 @@ impl<P: EpubProvider> EpubArchive<P> {
         reader.config_mut().trim_text(true);
 
         let mut current_algo = None;
+        // Original plaintext length from <Compression OriginalLength="N">.
+        // Only present for LCP/AES full-content encryption; absent for IDPF/Adobe font obfuscation.
+        let mut current_original_length: Option<u64> = None;
+        let mut current_uri: Option<String> = None;
         let mut event_buf = Vec::new();
 
         loop {
             match reader.read_event_into(&mut event_buf) {
                 Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => {
                     let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
+
                     if name.ends_with("EncryptionMethod") {
                         for attr in e.attributes() {
                             if let Ok(attr) = attr
@@ -137,9 +146,11 @@ impl<P: EpubProvider> EpubArchive<P> {
                             {
                                 let val = String::from_utf8_lossy(&attr.value);
                                 if val == "http://www.idpf.org/2008/embedding" {
-                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
+                                    current_algo =
+                                        Some(crate::crypto::ObfuscationAlgorithm::Idpf);
                                 } else if val == "http://ns.adobe.com/pdf/enc#RC" {
-                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
+                                    current_algo =
+                                        Some(crate::crypto::ObfuscationAlgorithm::Adobe);
                                 }
                             }
                         }
@@ -153,9 +164,20 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 let decoded_uri = percent_encoding::percent_decode_str(&uri)
                                     .decode_utf8_lossy()
                                     .into_owned();
-                                if let Some(algo) = current_algo {
-                                    encryptions.insert(decoded_uri, algo);
-                                }
+                                current_uri = Some(decoded_uri);
+                            }
+                        }
+                    } else if name.ends_with("Compression") {
+                        // <comp:Compression Method="8" OriginalLength="13291">
+                        // Method 8 = deflate was applied before encryption.
+                        // Method 4 = stored (no compression) before encryption.
+                        // OriginalLength = plaintext size; absent for font obfuscation.
+                        for attr in e.attributes() {
+                            if let Ok(attr) = attr
+                                && attr.key.as_ref() == b"OriginalLength"
+                            {
+                                let val = String::from_utf8_lossy(&attr.value);
+                                current_original_length = val.parse::<u64>().ok();
                             }
                         }
                     }
@@ -163,7 +185,19 @@ impl<P: EpubProvider> EpubArchive<P> {
                 Ok(Event::End(ref e)) => {
                     let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
                     if name.ends_with("EncryptedData") {
+                        // Commit the entry when we have both an algorithm and a URI.
+                        if let (Some(algo), Some(uri)) = (current_algo, current_uri.take()) {
+                            encryptions.insert(
+                                uri,
+                                crate::crypto::EncryptionInfo {
+                                    algorithm: algo,
+                                    original_length: current_original_length,
+                                },
+                            );
+                        }
+                        // Reset per-entry state.
                         current_algo = None;
+                        current_original_length = None;
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -212,6 +246,8 @@ impl<P: EpubProvider> EpubArchive<P> {
         let mut current_title_lang: Option<String> = None;
         // Collects (meta_id, collection_name) for belongs-to-collection post-processing
         let mut pending_collections: Vec<(String, String)> = Vec::new();
+        // Accumulates media:* metadata; None until the first media: property is seen
+        let mut mo_meta: Option<crate::model::MediaOverlayMetadata> = None;
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
@@ -381,6 +417,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                         let mut href = String::new();
                         let mut media_type = String::new();
                         let mut properties = Vec::new();
+                        let mut media_overlay: Option<String> = None;
 
                         for attr in e.attributes() {
                             let attr = attr?;
@@ -401,6 +438,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                                     properties =
                                         value.split_whitespace().map(|s| s.to_string()).collect()
                                 }
+                                "media-overlay" => media_overlay = Some(value),
                                 _ => {}
                             }
                         }
@@ -413,6 +451,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                                     href,
                                     media_type,
                                     properties,
+                                    media_overlay,
                                 },
                             );
                         }
@@ -543,6 +582,31 @@ impl<P: EpubProvider> EpubArchive<P> {
                                     pending_collections.push((mid.clone(), text));
                                 }
                             }
+                            // ── Media Overlays OPF metadata ──────────────────────────────────
+                            // Spec: EPUB 3.3 §9.3.5.2 / Appendix D.8
+                            "media:duration" => {
+                                if let Some(secs) =
+                                    super::smil::parse_clock_value(&text)
+                                {
+                                    // `refines` is already stripped in the MetaGlobal branch above;
+                                    // for media:duration with refines we land in MetaRefines, not here.
+                                    // This branch captures the GLOBAL duration (no refines).
+                                    let mo = mo_meta.get_or_insert_with(Default::default);
+                                    mo.total_duration = Some(secs);
+                                }
+                            }
+                            "media:narrator" => {
+                                let mo = mo_meta.get_or_insert_with(Default::default);
+                                mo.narrators.push(text);
+                            }
+                            "media:active-class" => {
+                                let mo = mo_meta.get_or_insert_with(Default::default);
+                                mo.active_class = Some(text);
+                            }
+                            "media:playback-active-class" => {
+                                let mo = mo_meta.get_or_insert_with(Default::default);
+                                mo.playback_active_class = Some(text);
+                            }
                             _ => {}
                         },
                         OpfState::None => {}
@@ -661,6 +725,20 @@ impl<P: EpubProvider> EpubArchive<P> {
                 collection_type,
                 position,
             });
+        }
+
+        // 4. Finalize Media Overlays metadata
+        //    Per-SMIL durations are stored as `<meta property="media:duration" refines="#smil-id">`.
+        //    Those land in `refinements[smil-id]["media:duration"]`; extract them now.
+        if let Some(mut mo) = mo_meta {
+            for (item_id, props) in &refinements {
+                if let Some(dur_str) = props.get("media:duration") {
+                    if let Some(secs) = super::smil::parse_clock_value(dur_str) {
+                        mo.durations.insert(item_id.clone(), secs);
+                    }
+                }
+            }
+            book.metadata.media_overlays = Some(mo);
         }
 
         Ok(book)
