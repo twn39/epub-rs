@@ -59,11 +59,15 @@ fn rewrite_srcset<F>(srcset: &str, base_dir: &str, resolver: &mut F) -> String
 where
     F: FnMut(&str) -> Option<String>,
 {
-    // Split on commas that separate candidates.  A data: URL may contain an
-    // internal comma (e.g. `data:image/png;base64,iVBOR…`), but data: URLs
-    // are detected by `is_external_url` and emitted unchanged, so splitting
-    // naively on ',' is safe: the data URL fragment after the comma won't
-    // match a valid relative path and the resolver will return None for it.
+    // WHATWG HTML §4.8.4.3.10 mandates that any literal comma inside a URL
+    // must be percent-encoded as %2C before it appears in a srcset attribute.
+    // Therefore every literal ',' is a valid candidate delimiter — naive
+    // split(',') is spec-correct for well-formed srcset values.
+    // A data: URL containing an unencoded comma is non-conforming; the
+    // "data:" prefix candidate will be skipped by is_external_url, and the
+    // fragment after the comma will reach the resolver with an invalid path
+    // (resolver returns None, output is unchanged).  This behaviour is
+    // acceptable because the input is already spec-violating.
     let mut out = String::with_capacity(srcset.len());
     let mut first = true;
 
@@ -462,7 +466,10 @@ where
                 // fragment identifying the symbol to render.  Only the path
                 // portion is resolved; the fragment ("#arrow") is preserved.
                 // Pure internal references ("#local-id") are skipped entirely.
-                element!("use", {
+                // "svg use" scopes the selector to SVG foreign content only,
+                // preventing accidental matches on hypothetical custom HTML
+                // elements named <use>.
+                element!("svg use", {
                     let resolver = Arc::clone(&resolver_arc);
                     let base_dir = base_dir.clone();
                     move |el| {
