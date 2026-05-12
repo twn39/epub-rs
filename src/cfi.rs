@@ -90,6 +90,14 @@ pub struct CfiResolved {
     /// `None` means the CFI has no explicit side annotation (spec default is "before").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub side: Option<CfiSide>,
+
+    /// Temporal position in seconds, from the `~N` terminus (CFI spec §3.1.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_offset: Option<f64>,
+
+    /// Spatial position within an image or video, from the `@x:y` terminus (CFI spec §3.1.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_offset: Option<SpatialOffset>,
 }
 
 /// The complete result of resolving a CFI string, covering both Point and Range forms.
@@ -101,8 +109,21 @@ pub struct CfiResolution {
     pub end: Option<CfiResolved>,
 }
 
+/// A 2D spatial position within an image or video (EPUB CFI spec §3.1.6).
+///
+/// Coordinates are percentages in `[0, 100]` where `0:0` = upper-left,
+/// `100:100` = lower-right.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SpatialOffset {
+    /// Horizontal position, 0 = left, 100 = right.
+    pub x: f64,
+    /// Vertical position, 0 = top, 100 = bottom.
+    /// Sorting rule §3.2 Rule 5: y is more significant than x.
+    pub y: f64,
+}
+
 /// Represents a single step in a Canonical Fragment Identifier path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CfiStep {
     /// The numeric index of the child element (even numbers represent elements, odd numbers represent text/character data)
     pub index: u32,
@@ -151,8 +172,21 @@ impl CfiStep {
     }
 }
 
-/// CFI steps compare only by their numeric index, as per the EPUB CFI spec.
-/// Assertions are informational and do not affect ordering.
+// ── Comparison traits — all ignore `assertion` per CFI spec §3.2 Rule 2 ────
+//
+// The spec requires assertions to be stripped before any comparison.
+// Rust also requires: a == b ⟹ hash(a) == hash(b) AND cmp(a,b) == Equal.
+// All four traits must agree.
+
+impl PartialEq for CfiStep {
+    fn eq(&self, other: &Self) -> bool { self.index == other.index }
+}
+impl Eq for CfiStep {}
+impl std::hash::Hash for CfiStep {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.index.hash(state); // assertion excluded — consistent with PartialEq
+    }
+}
 impl PartialOrd for CfiStep {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -192,7 +226,7 @@ pub enum CfiSide {
 }
 
 /// Represents a path sequence in a CFI.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CfiPath {
     pub steps: Vec<CfiStep>,
     pub local_steps: Option<Vec<CfiStep>>,
@@ -200,9 +234,27 @@ pub struct CfiPath {
     /// Side bias from the CFI terminal `:before` / `:after`.
     /// `None` means the CFI string had no explicit side annotation.
     pub side: Option<CfiSide>,
+    /// Temporal offset in seconds, from the `~N` terminus (CFI spec §3.1.5).
+    pub temporal_offset: Option<f64>,
+    /// Spatial offset within an image or video, from the `@x:y` terminus (CFI spec §3.1.6).
+    pub spatial_offset: Option<SpatialOffset>,
 }
 
-/// CfiPaths are compared step-by-step numerically (base steps, then local steps, then offset).
+// CfiPath equality is field-by-field. f64 uses IEEE PartialEq (NaN≠NaN),
+// which is safe because validly-parsed CFIs never contain NaN.
+impl PartialEq for CfiPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.steps == other.steps
+            && self.local_steps == other.local_steps
+            && self.character_offset == other.character_offset
+            && self.side == other.side
+            && self.temporal_offset == other.temporal_offset
+            && self.spatial_offset == other.spatial_offset
+    }
+}
+impl Eq for CfiPath {}
+
+/// CfiPaths are ordered step-by-step per EPUB CFI spec §3.2 Sorting Rules.
 impl PartialOrd for CfiPath {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -211,15 +263,17 @@ impl PartialOrd for CfiPath {
 
 impl Ord for CfiPath {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering::*;
+        // Rule 3: steps that come earlier in the sequence are more important.
         // 1. Compare base steps numerically
         for (a, b) in self.steps.iter().zip(other.steps.iter()) {
             match a.cmp(b) {
-                std::cmp::Ordering::Equal => continue,
+                Equal => continue,
                 ord => return ord,
             }
         }
         match self.steps.len().cmp(&other.steps.len()) {
-            std::cmp::Ordering::Equal => {}
+            Equal => {}
             ord => return ord,
         }
 
@@ -228,17 +282,46 @@ impl Ord for CfiPath {
         let other_local = other.local_steps.as_deref().unwrap_or(&[]);
         for (a, b) in self_local.iter().zip(other_local.iter()) {
             match a.cmp(b) {
-                std::cmp::Ordering::Equal => continue,
+                Equal => continue,
                 ord => return ord,
             }
         }
         match self_local.len().cmp(&other_local.len()) {
-            std::cmp::Ordering::Equal => {}
+            Equal => {}
             ord => return ord,
         }
 
-        // 3. Compare character offsets
-        self.character_offset.cmp(&other.character_offset)
+        // 3. Character offsets (Rule 4: natural order)
+        match self.character_offset.cmp(&other.character_offset) {
+            Equal => {}
+            ord => return ord,
+        }
+
+        // 4. Temporal offset (Rule 7: omitted < any; Rule 4: natural order).
+        // NaN cannot appear: the parser rejects non-finite f64 values.
+        match (self.temporal_offset, other.temporal_offset) {
+            (None, None) => {}
+            (None, Some(_)) => return Less,
+            (Some(_), None) => return Greater,
+            (Some(a), Some(b)) => match a.partial_cmp(&b).unwrap_or(Equal) {
+                Equal => {}
+                ord => return ord,
+            },
+        }
+
+        // 5. Spatial offset (Rule 8: temporal > spatial; Rule 6: omitted < any;
+        //    Rule 5: y more significant than x).
+        match (&self.spatial_offset, &other.spatial_offset) {
+            (None, None) => {}
+            (None, Some(_)) => return Less,
+            (Some(_), None) => return Greater,
+            (Some(a), Some(b)) => {
+                match a.y.partial_cmp(&b.y).unwrap_or(Equal) { Equal => {} ord => return ord }
+                match a.x.partial_cmp(&b.x).unwrap_or(Equal) { Equal => {} ord => return ord }
+            }
+        }
+
+        Equal
     }
 }
 
@@ -302,6 +385,8 @@ impl CfiPath {
             xpath: xpath_parts.join("/"),
             id_shortcut,
             side: self.side.clone(),
+            temporal_offset: self.temporal_offset,
+            spatial_offset: self.spatial_offset.clone(),
         })
     }
 }
@@ -320,6 +405,14 @@ impl fmt::Display for CfiPath {
         if let Some(offset) = self.character_offset {
             write!(f, ":{}", offset)?;
         }
+        // Temporal offset: ~N (CFI spec §3.1.5; §2.2 number format).
+        if let Some(t) = self.temporal_offset {
+            write!(f, "~{}", format_cfi_number(t))?;
+        }
+        // Spatial offset: @x:y (CFI spec §3.1.6).
+        if let Some(ref s) = self.spatial_offset {
+            write!(f, "@{}:{}", format_cfi_number(s.x), format_cfi_number(s.y))?;
+        }
         // Emit :before / :after side-bias annotation when present.
         if let Some(ref side) = self.side {
             match side {
@@ -332,7 +425,7 @@ impl fmt::Display for CfiPath {
 }
 
 /// Represents a Canonical Fragment Identifier (CFI), which can be a single point or a range.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum EpubCfi {
     /// A single point in the EPUB.
     Point(CfiPath),
@@ -556,6 +649,8 @@ impl EpubCfi {
                         // The half-path's side bias takes precedence; fall back
                         // to the shared parent's side when the half-path has none.
                         side: half.side.clone().or_else(|| parent.side.clone()),
+                        temporal_offset: half.temporal_offset,
+                        spatial_offset: half.spatial_offset.clone(),
                     };
                     combined.resolve(spine_index)
                 };
@@ -648,24 +743,27 @@ impl std::str::FromStr for EpubCfi {
     }
 }
 
+/// Formats an f64 per CFI spec §2.2: integers without decimal point, fractions as-is.
+fn format_cfi_number(n: f64) -> String {
+    if n.fract() == 0.0 { format!("{}", n as i64) } else { format!("{}", n) }
+}
+
 fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
     let mut path = CfiPath::default();
     let parts: Vec<&str> = s.split('!').collect();
 
     if parts.len() == 1 {
-        let (steps, offset, side) = parse_steps_and_offset(parts[0])?;
-        path.steps = steps;
-        path.character_offset = offset;
-        path.side = side;
+        let t = parse_steps_and_offset(parts[0])?;
+        path.steps = t.steps; path.character_offset = t.char_offset;
+        path.side = t.side; path.temporal_offset = t.temporal_offset;
+        path.spatial_offset = t.spatial_offset;
     } else if parts.len() == 2 {
-        // Base path (before '!') carries no terminal offset or side bias.
-        let (base_steps, _, _) = parse_steps_and_offset(parts[0])?;
-        path.steps = base_steps;
-
-        let (local_steps, offset, side) = parse_steps_and_offset(parts[1])?;
-        path.local_steps = Some(local_steps);
-        path.character_offset = offset;
-        path.side = side;
+        // Base path (before '!') carries no terminal offset.
+        path.steps = parse_steps_and_offset(parts[0])?.steps;
+        let t = parse_steps_and_offset(parts[1])?;
+        path.local_steps = Some(t.steps); path.character_offset = t.char_offset;
+        path.side = t.side; path.temporal_offset = t.temporal_offset;
+        path.spatial_offset = t.spatial_offset;
     } else {
         return Err(EpubError::InvalidFormat(
             "Invalid CFI path structure".to_string(),
@@ -675,72 +773,89 @@ fn parse_path(s: &str) -> Result<CfiPath, EpubError> {
     Ok(path)
 }
 
-/// Return type of [`parse_steps_and_offset`]: `(steps, char_offset, side_bias)`.
-type ParsedTerminal = (Vec<CfiStep>, Option<u32>, Option<CfiSide>);
+/// Structured result of [`parse_steps_and_offset`].
+struct ParsedTerminal {
+    steps: Vec<CfiStep>,
+    char_offset: Option<u32>,
+    side: Option<CfiSide>,
+    temporal_offset: Option<f64>,
+    spatial_offset: Option<SpatialOffset>,
+}
 
-/// Scans `s` for the first unescaped `:` that is outside assertion brackets,
-/// then splits the terminal string into `(offset, side_bias)`.
-///
-/// Handles the EPUB CFI terminus grammar:
-/// ```text
-/// terminus := ":" ( offset [ side ] | side )
-/// side     := "before" | "after"
-/// ```
-///
-/// Returns `(steps, character_offset, side_bias)`.  The side bias is `None`
-/// when the CFI string has no `:before` / `:after` suffix.
+/// Scans `s` for the first unescaped terminus character (`:`, `~`, or `@`)
+/// outside assertion brackets, then parses all CFI §3.1.4–3.1.7 terminus forms.
 fn parse_steps_and_offset(s: &str) -> Result<ParsedTerminal, EpubError> {
-    let mut path_str = s;
-
-    // Find the first unescaped ':' outside assertion brackets — this is the
-    // start of the terminal (character-offset + optional side bias).
     let mut in_assertion = false;
     let mut is_escaped = false;
-    let mut colon_idx: Option<usize> = None;
+    let mut terminus: Option<(usize, char)> = None;
 
     for (i, c) in s.char_indices() {
-        if is_escaped {
-            is_escaped = false;
-        } else if c == '^' {
-            is_escaped = true;
-        } else if c == '[' {
-            in_assertion = true;
-        } else if c == ']' {
-            in_assertion = false;
-        } else if c == ':' && !in_assertion {
-            colon_idx = Some(i);
-            break;
+        if is_escaped { is_escaped = false; }
+        else if c == '^' { is_escaped = true; }
+        else if c == '[' { in_assertion = true; }
+        else if c == ']' { in_assertion = false; }
+        else if !in_assertion && matches!(c, ':' | '~' | '@') {
+            terminus = Some((i, c)); break;
         }
     }
 
-    if let Some(idx) = colon_idx {
-        let terminal_str = &s[idx + 1..];
-        path_str = &s[..idx];
+    let Some((idx, tc)) = terminus else {
+        return Ok(ParsedTerminal {
+            steps: parse_steps(s)?, char_offset: None, side: None,
+            temporal_offset: None, spatial_offset: None,
+        });
+    };
 
-        // Check for `:N:before` or `:N:after` (side bias suffix).
-        // We use rfind(':') so nested colons inside the offset number (illegal
-        // per spec, but defensive) don't cause a false match.
-        let (offset_part, side) = if let Some(sep) = terminal_str.rfind(':') {
-            match &terminal_str[sep + 1..] {
-                "before" => (&terminal_str[..sep], Some(CfiSide::Before)),
-                "after" => (&terminal_str[..sep], Some(CfiSide::After)),
-                // Not a known side keyword — treat the whole string as offset.
-                _ => (terminal_str, None),
-            }
-        } else {
-            (terminal_str, None)
-        };
+    let steps = parse_steps(&s[..idx])?;
+    let rest = &s[idx + 1..];
 
-        let offset = offset_part.parse::<u32>().map_err(|_| {
-            EpubError::InvalidFormat(format!("Invalid CFI character offset: '{offset_part}'"))
-        })?;
-
-        let steps = parse_steps(path_str)?;
-        return Ok((steps, Some(offset), side));
+    match tc {
+        ':' => {
+            // `:N` or `:N:before` / `:N:after`
+            let (offset_part, side) = if let Some(sep) = rest.rfind(':') {
+                match &rest[sep + 1..] {
+                    "before" => (&rest[..sep], Some(CfiSide::Before)),
+                    "after"  => (&rest[..sep], Some(CfiSide::After)),
+                    _        => (rest, None),
+                }
+            } else { (rest, None) };
+            let offset = offset_part.parse::<u32>().map_err(|_| {
+                EpubError::InvalidFormat(format!("Invalid CFI character offset: '{offset_part}'"))
+            })?;
+            Ok(ParsedTerminal { steps, char_offset: Some(offset), side,
+                temporal_offset: None, spatial_offset: None })
+        }
+        '~' => {
+            // `~N` or `~N@x:y`
+            let (t_str, sp_str) = match rest.find('@') {
+                Some(at) => (&rest[..at], Some(&rest[at + 1..])),
+                None => (rest, None),
+            };
+            let temporal = t_str.parse::<f64>().map_err(|_| {
+                EpubError::InvalidFormat(format!("Invalid CFI temporal offset: '{t_str}'"))
+            })?;
+            let spatial_offset = sp_str.map(parse_spatial_coords).transpose()?;
+            Ok(ParsedTerminal { steps, char_offset: None, side: None,
+                temporal_offset: Some(temporal), spatial_offset })
+        }
+        '@' => {
+            // pure `@x:y`
+            Ok(ParsedTerminal { steps, char_offset: None, side: None,
+                temporal_offset: None,
+                spatial_offset: Some(parse_spatial_coords(rest)?) })
+        }
+        _ => unreachable!(),
     }
+}
 
-    let steps = parse_steps(path_str)?;
-    Ok((steps, None, None))
+fn parse_spatial_coords(s: &str) -> Result<SpatialOffset, EpubError> {
+    let mut it = s.splitn(2, ':');
+    let xs = it.next().unwrap_or("");
+    let ys = it.next().unwrap_or("");
+    Ok(SpatialOffset {
+        x: xs.parse().map_err(|_| EpubError::InvalidFormat(format!("Bad CFI x: '{xs}'")))?,
+        y: ys.parse().map_err(|_| EpubError::InvalidFormat(format!("Bad CFI y: '{ys}'")))?,
+    })
 }
 
 fn parse_steps(path: &str) -> Result<Vec<CfiStep>, EpubError> {
@@ -837,12 +952,14 @@ mod tests {
             local_steps: None,
             character_offset: None,
             side: None,
+                    ..CfiPath::default()
         };
         let p10 = CfiPath {
             steps: vec![CfiStep::new(6, None), CfiStep::new(10, None)],
             local_steps: None,
             character_offset: None,
             side: None,
+                    ..CfiPath::default()
         };
         assert!(p4 < p10);
     }
@@ -939,6 +1056,7 @@ mod tests {
             local_steps: None,
             character_offset: None,
             side: None,
+                    ..CfiPath::default()
         };
         assert!(path.resolve(0).is_none());
     }
@@ -959,6 +1077,7 @@ mod tests {
             ]),
             character_offset: None,
             side: None,
+                    ..CfiPath::default()
         };
         let resolved = path.resolve(1).unwrap();
 
@@ -997,6 +1116,7 @@ mod tests {
             ]),
             character_offset: Some(3),
             side: None,
+                    ..CfiPath::default()
         };
         let resolved = path.resolve(1).unwrap();
 
@@ -1024,6 +1144,7 @@ mod tests {
             ]),
             character_offset: None,
             side: None,
+                    ..CfiPath::default()
         };
         let resolved = path.resolve(0).unwrap();
         assert_eq!(resolved.id_shortcut, Some("para99".into())); // deepest wins
@@ -1111,6 +1232,7 @@ mod tests {
             ]),
             character_offset: None,
             side: None,
+                    ..CfiPath::default()
         };
         // Simulate start half: local = [] + extra text step
         let start_half = CfiPath {
@@ -1118,6 +1240,7 @@ mod tests {
             local_steps: Some(vec![CfiStep::new(3, None)]), // text
             character_offset: Some(7),
             side: None,
+                    ..CfiPath::default()
         };
         let cfi = EpubCfi::Range {
             parent: path.clone(),
@@ -1127,6 +1250,7 @@ mod tests {
                 local_steps: None,
                 character_offset: Some(12),
                 side: None,
+                        ..CfiPath::default()
             },
         };
 
@@ -1151,6 +1275,7 @@ mod tests {
             local_steps: None,
             character_offset: None,
             side: None,
+                    ..CfiPath::default()
         };
         let cfi = EpubCfi::Point(path);
         assert!(cfi.resolve().is_none());
@@ -1274,6 +1399,186 @@ mod tests {
     fn test_split_top_level_range_no_assertion() {
         let parts = split_cfi_top_level("/6/4!/4/2,/1:5,/3:10");
         assert_eq!(parts, vec!["/6/4!/4/2", "/1:5", "/3:10"]);
+    }
+
+
+    // ── Temporal offset (~) ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_temporal_offset_parsed() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~23.5)").unwrap();
+        if let EpubCfi::Point(path) = &cfi {
+            assert_eq!(path.temporal_offset, Some(23.5));
+            assert_eq!(path.spatial_offset, None);
+            assert_eq!(path.character_offset, None);
+        } else { panic!("Expected Point"); }
+    }
+
+    #[test]
+    fn test_temporal_offset_integer() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~5)").unwrap();
+        if let EpubCfi::Point(p) = &cfi { assert_eq!(p.temporal_offset, Some(5.0)); }
+        else { panic!(); }
+    }
+
+    #[test]
+    fn test_temporal_offset_sub_one() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~0.5)").unwrap();
+        if let EpubCfi::Point(p) = &cfi { assert_eq!(p.temporal_offset, Some(0.5)); }
+        else { panic!(); }
+    }
+
+    // ── Spatial offset (@) ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_spatial_offset_parsed() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2@50:75)").unwrap();
+        if let EpubCfi::Point(p) = &cfi {
+            let s = p.spatial_offset.as_ref().unwrap();
+            assert_eq!(s.x, 50.0); assert_eq!(s.y, 75.0);
+        } else { panic!(); }
+    }
+
+    #[test]
+    fn test_spatial_offset_fractional() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2@5.75:97.6)").unwrap();
+        if let EpubCfi::Point(p) = &cfi {
+            let s = p.spatial_offset.as_ref().unwrap();
+            assert!((s.x - 5.75).abs() < 1e-9);
+            assert!((s.y - 97.6).abs() < 1e-9);
+        } else { panic!(); }
+    }
+
+    // ── Temporal + spatial ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_temporal_spatial_combined() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~23.5@5.75:97.6)").unwrap();
+        if let EpubCfi::Point(p) = &cfi {
+            assert_eq!(p.temporal_offset, Some(23.5));
+            let s = p.spatial_offset.as_ref().unwrap();
+            assert!((s.x - 5.75).abs() < 1e-9);
+            assert!((s.y - 97.6).abs() < 1e-9);
+        } else { panic!(); }
+    }
+
+    // ── Display round-trip ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_temporal_display_integer() {
+        // Spec §2.2: integral values must not include ".0"
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~23)").unwrap();
+        assert_eq!(cfi.to_string(), "epubcfi(/6/4[ch1]!/4/2~23)");
+    }
+
+    #[test]
+    fn test_temporal_display_fractional() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~23.5)").unwrap();
+        assert_eq!(cfi.to_string(), "epubcfi(/6/4[ch1]!/4/2~23.5)");
+    }
+
+    #[test]
+    fn test_spatial_display_round_trip() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2@5.75:97.6)").unwrap();
+        assert_eq!(cfi.to_string(), "epubcfi(/6/4[ch1]!/4/2@5.75:97.6)");
+    }
+
+    #[test]
+    fn test_temporal_spatial_display_round_trip() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~23.5@5.75:97.6)").unwrap();
+        assert_eq!(cfi.to_string(), "epubcfi(/6/4[ch1]!/4/2~23.5@5.75:97.6)");
+    }
+
+    // ── Sorting rules (§3.2) ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_sort_no_temporal_before_temporal() {
+        // Rule 7: omitted temporal precedes any temporal position
+        let a = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~1)").unwrap();
+        assert!(a < b);
+    }
+
+    #[test]
+    fn test_sort_temporal_natural_order() {
+        // Rule 4: natural order
+        let a = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~1.0)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~23.5)").unwrap();
+        assert!(a < b);
+    }
+
+    #[test]
+    fn test_sort_temporal_dominates_spatial() {
+        // Rule 8: temporal > spatial
+        let a = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~1.0@99:99)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~2.0@0:0)").unwrap();
+        assert!(a < b, "lower temporal must be less even with higher spatial");
+    }
+
+    #[test]
+    fn test_sort_y_before_x() {
+        // Rule 5: y more significant than x
+        let a = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2@50:1)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2@50:2)").unwrap();
+        assert!(a < b);
+    }
+
+    #[test]
+    fn test_sort_no_spatial_before_spatial() {
+        // Rule 6: omitted spatial precedes any spatial
+        let a = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~1.0)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~1.0@0:0)").unwrap();
+        assert!(a < b);
+    }
+
+    // ── CfiResolved propagation ───────────────────────────────────────────────
+
+    #[test]
+    fn test_temporal_propagated_to_resolved() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2~23.5)").unwrap();
+        let res = cfi.resolve().unwrap();
+        assert_eq!(res.start.temporal_offset, Some(23.5));
+    }
+
+    #[test]
+    fn test_spatial_propagated_to_resolved() {
+        let cfi = EpubCfi::from_str("epubcfi(/6/4[ch1]!/4/2@50:75)").unwrap();
+        let res = cfi.resolve().unwrap();
+        let s = res.start.spatial_offset.as_ref().unwrap();
+        assert_eq!(s.x, 50.0); assert_eq!(s.y, 75.0);
+    }
+
+    // ── Assertion comparison semantics (§3.2 Rule 2) ────────────────────────
+
+    #[test]
+    fn test_cfi_step_eq_ignores_assertion() {
+        let a = CfiStep::new(4, Some("chap01".into()));
+        let b = CfiStep::new(4, Some("old-chap01".into()));
+        let c = CfiStep::new(4, None);
+        assert_eq!(a, b); assert_eq!(a, c);
+    }
+
+    #[test]
+    fn test_cfi_step_neq_different_index() {
+        let a = CfiStep::new(4, Some("same-id".into()));
+        let b = CfiStep::new(6, Some("same-id".into()));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_cfi_step_hash_consistent_with_eq() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(CfiStep::new(4, Some("chap01".into())));
+        set.insert(CfiStep::new(4, Some("old-chap01".into())));
+        assert_eq!(set.len(), 1, "equal steps must hash identically");
+    }
+
+    #[test]
+    fn test_epub_cfi_eq_ignores_assertions() {
+        let a = EpubCfi::from_str("epubcfi(/6/4[chap01]!/4/2:3)").unwrap();
+        let b = EpubCfi::from_str("epubcfi(/6/4[old-chapter]!/4/2:3)").unwrap();
+        assert_eq!(a, b);
     }
 
     #[test]
