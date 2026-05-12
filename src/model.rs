@@ -365,6 +365,48 @@ pub struct TitleEntry {
     pub display_seq: Option<u32>,
 }
 
+/// A secondary identifier for the publication (ISBN, DOI, ARK, UUID, etc.).
+///
+/// Follows the Readium RWPM [`altIdentifier` schema](https://readium.org/webpub-manifest/schema/altIdentifier.schema.json).
+///
+/// The `#[serde(untagged)]` attribute drives the RWPM compact serialisation:
+/// - `Simple(v)` → serialises as a bare JSON string `"urn:isbn:..."`
+/// - `WithScheme { value, scheme }` → serialises as `{"value": "...", "scheme": "..."}`
+///
+/// This matches go-toolkit's `manifest.AltIdentifier` MarshalJSON behaviour.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum AltIdentifier {
+    /// Identifier with no scheme annotation.
+    Simple(String),
+    /// Identifier with a scheme annotation (e.g. `"ISBN"`, `"onix:codelist5"`).
+    WithScheme { value: String, scheme: String },
+}
+
+impl AltIdentifier {
+    /// Returns the identifier string regardless of variant.
+    pub fn value(&self) -> &str {
+        match self {
+            Self::Simple(v) | Self::WithScheme { value: v, .. } => v,
+        }
+    }
+
+    /// Returns the scheme annotation if present.
+    pub fn scheme(&self) -> Option<&str> {
+        match self {
+            Self::Simple(_) => None,
+            Self::WithScheme { scheme, .. } => Some(scheme),
+        }
+    }
+
+    /// Consumes the value, returning the inner string.
+    pub fn into_value(self) -> String {
+        match self {
+            Self::Simple(v) | Self::WithScheme { value: v, .. } => v,
+        }
+    }
+}
+
 /// Represents the `metadata` block in the OPF package document.
 ///
 /// All fields added after the initial version carry `#[serde(default)]` to maintain
@@ -403,8 +445,25 @@ pub struct Metadata {
     pub languages: Vec<String>,
 
     // ── Identifiers ───────────────────────────────────────────────────────────
-    /// Unique identifier of the EPUB (e.g., ISBN, UUID), from `<dc:identifier>`.
+    /// Unique identifier of the EPUB (e.g., ISBN, UUID).
+    ///
+    /// This is the `dc:identifier` element whose `id` attribute matches the
+    /// `<package unique-identifier="...">` pointer. When that pointer is absent
+    /// or unresolvable, the first non-empty `dc:identifier` is used as a fallback.
     pub identifier: Option<String>,
+
+    /// Additional identifiers beyond the primary unique identifier.
+    ///
+    /// Collected from any `<dc:identifier>` elements that are not the designated
+    /// unique identifier. Each entry carries an optional `scheme` annotation
+    /// sourced from either the EPUB 2 `opf:scheme` attribute or the EPUB 3
+    /// `<meta property="identifier-type" refines="#id">` meta element.
+    ///
+    /// Serialises using the Readium RWPM altIdentifier compact form:
+    /// - no scheme → bare string `"urn:isbn:..."`
+    /// - with scheme → object `{"value": "...", "scheme": "..."}`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alt_identifiers: Vec<AltIdentifier>,
 
     // ── Publication info ──────────────────────────────────────────────────────
     pub publisher: Option<String>,
