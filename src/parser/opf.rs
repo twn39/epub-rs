@@ -36,6 +36,11 @@ pub(super) enum OpfState {
     MetaRefines {
         ref_id: String,
         property: String,
+        /// The element's own `id` attribute, if any.
+        /// Needed so that a11y elements that both refine another element AND
+        /// are themselves refined (e.g. `certifiedBy` refines `conformsTo` but
+        /// is refined by `certifierCredential`) can be correctly linked.
+        self_id: Option<String>,
     },
     /// Global `<meta property="...">` — carries the element's own `id` for refinement lookup
     MetaGlobal {
@@ -57,6 +62,23 @@ struct RawTitle {
     /// `true` when the EPUB 2 `opf:title-type="subtitle"` inline attribute
     /// was detected (before EPUB 3 refinements are applied).
     epub2_subtitle: bool,
+}
+
+// ── RawA11yMeta (parse-phase intermediate) ────────────────────────────────────
+
+/// A single accessibility-related `<meta>` element captured during OPF streaming.
+///
+/// All a11y metas are collected first, then post-processed together so that
+/// `refines` relationships can be resolved regardless of XML element order.
+struct RawA11yMeta {
+    /// Expanded property name, e.g. `"dcterms:conformsTo"`, `"schema:accessMode"`.
+    property: String,
+    /// Text content of the element.
+    value: String,
+    /// Value of the `id` attribute (without `#`), used so other elements can refine this one.
+    id: Option<String>,
+    /// Value of the `refines` attribute (without leading `#`), linking to another element's id.
+    refines: Option<String>,
 }
 
 // ── EpubArchive impl ────────────────────────────────────────────────────
@@ -277,6 +299,8 @@ impl<P: EpubProvider> EpubArchive<P> {
         let mut pending_collections: Vec<(String, String)> = Vec::new();
         // Accumulates media:* metadata; None until the first media: property is seen
         let mut mo_meta: Option<crate::model::MediaOverlayMetadata> = None;
+        // Collects all a11y-related <meta> elements; resolved in post-processing
+        let mut raw_a11y: Vec<RawA11yMeta> = Vec::new();
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
@@ -395,6 +419,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                             state = OpfState::MetaRefines {
                                 ref_id: r,
                                 property: p,
+                                self_id: meta_id,
                             };
                         } else if let Some(p) = property {
                             state = OpfState::MetaGlobal {
@@ -591,9 +616,19 @@ impl<P: EpubProvider> EpubArchive<P> {
                         OpfState::Modified => book.metadata.modified = Some(text),
                         OpfState::Rights => book.metadata.rights = Some(text),
                         OpfState::Subject => book.metadata.subjects.push(text),
-                        OpfState::MetaRefines { ref_id, property } => {
-                            let entry = refinements.entry(ref_id.clone()).or_default();
-                            entry.insert(property.clone(), text);
+                        OpfState::MetaRefines { ref_id, property, self_id } => {
+                            // Route a11y refinements to the dedicated collector
+                            if is_a11y_property(property) {
+                                raw_a11y.push(RawA11yMeta {
+                                    property: property.clone(),
+                                    value: text,
+                                    id: self_id.clone(),
+                                    refines: Some(ref_id.clone()),
+                                });
+                            } else {
+                                let entry = refinements.entry(ref_id.clone()).or_default();
+                                entry.insert(property.clone(), text);
+                            }
                         }
                         OpfState::MetaGlobal { property, id } => match property.as_str() {
                             "rendition:layout" => {
@@ -610,6 +645,21 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 if let Some(mid) = id {
                                     pending_collections.push((mid.clone(), text));
                                 }
+                            }
+                            // ── EPUB Accessibility metadata ───────────────────────────────────
+                            // Suffix-matched to handle any schema: / a11y: / dcterms: prefix
+                            // variant that authoring tools may emit.
+                            p if is_a11y_property(p) => {
+                                raw_a11y.push(RawA11yMeta {
+                                    property: p.to_owned(),
+                                    value: text,
+                                    id: id.clone(),
+                                    refines: None,
+                                });
+                                // Reset state so we don't fall into the default _ arm below
+                                state = OpfState::None;
+                                event_buf.clear();
+                                continue;
                             }
                             // ── Media Overlays OPF metadata ──────────────────────────────────
                             // Spec: EPUB 3.3 §9.3.5.2 / Appendix D.8
@@ -754,7 +804,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             });
         }
 
-        // 4. Finalize Media Overlays metadata
+        // 4. Finalise Media Overlays metadata
         //    Per-SMIL durations are stored as `<meta property="media:duration" refines="#smil-id">`.
         //    Those land in `refinements[smil-id]["media:duration"]`; extract them now.
         if let Some(mut mo) = mo_meta {
@@ -768,12 +818,184 @@ impl<P: EpubProvider> EpubArchive<P> {
             book.metadata.media_overlays = Some(mo);
         }
 
+        // 5. Build Accessibility metadata from collected raw metas
+        book.metadata.accessibility = build_accessibility(&raw_a11y);
+
         Ok(book)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A11y helper functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` if the OPF property belongs to an accessibility vocabulary.
+///
+/// We use suffix matching so that any authoring-tool prefix variant
+/// (e.g. `schema:accessMode`, `accessMode`, `http://schema.org/accessMode`)
+/// is correctly routed to the a11y collector.
+fn is_a11y_property(p: &str) -> bool {
+    matches!(
+        p,
+        "dcterms:conformsTo"
+            | "a11y:certifiedBy"
+            | "a11y:certifierCredential"
+            | "a11y:certifierReport"
+            | "a11y:exemption"
+            | "schema:accessMode"
+            | "schema:accessModeSufficient"
+            | "schema:accessibilityFeature"
+            | "schema:accessibilityHazard"
+            | "schema:accessibilitySummary"
+    ) || p.ends_with(":conformsTo")
+        || p.ends_with(":certifiedBy")
+        || p.ends_with(":certifierCredential")
+        || p.ends_with(":certifierReport")
+        || p.ends_with(":exemption")
+        || p.ends_with(":accessMode")
+        || p.ends_with(":accessModeSufficient")
+        || p.ends_with(":accessibilityFeature")
+        || p.ends_with(":accessibilityHazard")
+        || p.ends_with(":accessibilitySummary")
+}
+
+/// Build an [`crate::model::Accessibility`] from raw collected OPF meta elements.
+///
+/// Implements the two-pass strategy required because `refines` relationships
+/// may appear in any XML order:
+/// 1. All a11y `<meta>` elements are collected during SAX streaming.
+/// 2. This function correlates `id` ↔ `refines` to assemble the typed model.
+fn build_accessibility(metas: &[RawA11yMeta]) -> Option<crate::model::Accessibility> {
+    use crate::model::{
+        A11yAccessMode, A11yCertification, A11yExemption, A11yFeature, A11yHazard,
+        A11yPrimaryAccessMode, A11yProfile, Accessibility,
+    };
+
+    let mut a11y = Accessibility::default();
+
+    // ── 1. dcterms:conformsTo ─────────────────────────────────────────────────
+    // Spec §3.5.2: multiple conformsTo elements are allowed.
+    let conforms_to_metas: Vec<&RawA11yMeta> = metas
+        .iter()
+        .filter(|m| m.property.ends_with(":conformsTo") || m.property == "dcterms:conformsTo")
+        .collect();
+
+    for ct in &conforms_to_metas {
+        if let Some(profile) = A11yProfile::from_opf_value(&ct.value) {
+            if !a11y.conforms_to.contains(&profile) {
+                a11y.conforms_to.push(profile);
+            }
+        }
+    }
+    a11y.conforms_to.sort();
+
+    // ── 2. a11y:certifiedBy (refines a conformsTo meta, or stands alone) ──────
+    // Spec §3.5.3.1 Example 2/3: certifiedBy refines="#conf" where "conf" is the
+    // id of the dcterms:conformsTo meta.
+    let conf_ids: std::collections::HashSet<&str> = conforms_to_metas
+        .iter()
+        .filter_map(|m| m.id.as_deref())
+        .collect();
+
+    let certified_by_meta = metas.iter().find(|m| {
+        (m.property.ends_with(":certifiedBy") || m.property == "a11y:certifiedBy")
+            && m.refines
+                .as_deref()
+                // Accept when it refines a known conformsTo id, or has no refines (standalone)
+                .map_or(true, |r| conf_ids.contains(r))
+    });
+
+    if let Some(cb) = certified_by_meta {
+        let certifier_id = cb.id.as_deref();
+
+        let credential = certifier_id.and_then(|cid| {
+            metas.iter().find(|m| {
+                (m.property.ends_with(":certifierCredential")
+                    || m.property == "a11y:certifierCredential")
+                    && m.refines.as_deref() == Some(cid)
+            })
+        }).map(|m| m.value.trim().to_owned());
+
+        let report = certifier_id.and_then(|cid| {
+            metas.iter().find(|m| {
+                (m.property.ends_with(":certifierReport")
+                    || m.property == "a11y:certifierReport")
+                    && m.refines.as_deref() == Some(cid)
+            })
+        }).map(|m| m.value.trim().to_owned());
+
+        let cert = A11yCertification {
+            certified_by: cb.value.trim().to_owned(),
+            credential,
+            report,
+        };
+        if !cert.is_empty() {
+            a11y.certification = Some(cert);
+        }
+    }
+
+    // ── 3. schema:accessMode ──────────────────────────────────────────────────
+    a11y.access_modes = metas
+        .iter()
+        .filter(|m| m.property.ends_with(":accessMode") && !m.property.ends_with(":accessModeSufficient"))
+        .map(|m| A11yAccessMode::from_str(m.value.trim()))
+        .collect();
+
+    // ── 4. schema:accessModeSufficient ───────────────────────────────────────
+    // Each <meta> value is a comma-separated list representing one sufficient set.
+    for m in metas
+        .iter()
+        .filter(|m| m.property.ends_with(":accessModeSufficient"))
+    {
+        let set: Vec<A11yPrimaryAccessMode> = m
+            .value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(A11yPrimaryAccessMode::from_str)
+            .collect();
+        if !set.is_empty() {
+            a11y.access_modes_sufficient.push(set);
+        }
+    }
+
+    // ── 5. schema:accessibilityFeature ───────────────────────────────────────
+    a11y.features = metas
+        .iter()
+        .filter(|m| m.property.ends_with(":accessibilityFeature"))
+        .map(|m| A11yFeature::from_str(m.value.trim()))
+        .collect();
+
+    // ── 6. schema:accessibilityHazard ────────────────────────────────────────
+    a11y.hazards = metas
+        .iter()
+        .filter(|m| m.property.ends_with(":accessibilityHazard"))
+        .map(|m| A11yHazard::from_str(m.value.trim()))
+        .collect();
+
+    // ── 7. schema:accessibilitySummary ───────────────────────────────────────
+    a11y.summary = metas
+        .iter()
+        .find(|m| m.property.ends_with(":accessibilitySummary"))
+        .map(|m| m.value.trim().to_owned());
+
+    // ── 8. a11y:exemption ────────────────────────────────────────────────────
+    a11y.exemptions = metas
+        .iter()
+        .filter(|m| m.property.ends_with(":exemption") || m.property == "a11y:exemption")
+        .map(|m| A11yExemption::from_str(m.value.trim()))
+        .collect();
+
+    if a11y.is_empty() {
+        None
+    } else {
+        Some(a11y)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::model::{A11yAccessMode, A11yFeature, A11yHazard, A11yProfile};
     use crate::parser::EpubArchive;
     use std::io::{Cursor, Write};
 
@@ -1005,5 +1227,113 @@ mod tests {
         assert_eq!(renditions[1].access_mode.as_deref(), Some("textual"));
         assert_eq!(renditions[1].language.as_deref(), Some("zh-Hant"));
         assert!(renditions[1].is_reflowable());
+    }
+
+    // ── A11y: EPUB Accessibility 1.1 conformsTo text pattern ─────────────────
+
+    #[test]
+    fn test_a11y_conforms_to_epub_a11y_11() {
+        let bytes = epub_with_metadata(
+            r#"<meta property="dcterms:conformsTo">EPUB Accessibility 1.1 - WCAG 2.2 Level AA</meta>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+        let a11y = book.metadata.accessibility.expect("should have a11y");
+        assert_eq!(a11y.conforms_to.len(), 1);
+        assert_eq!(
+            a11y.conforms_to[0].0,
+            "EPUB Accessibility 1.1 - WCAG 2.2 Level AA"
+        );
+    }
+
+    // ── A11y: EPUB Accessibility 1.0 URL alias normalization ─────────────────
+
+    #[test]
+    fn test_a11y_conforms_to_epub_a11y_10_url() {
+        let bytes = epub_with_metadata(
+            r#"<meta property="dcterms:conformsTo">https://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aa</meta>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+        let a11y = book.metadata.accessibility.expect("should have a11y");
+        assert_eq!(
+            a11y.conforms_to[0].0,
+            A11yProfile::A10_WCAG_20_AA
+        );
+    }
+
+    // ── A11y: certifiedBy refines conformsTo ──────────────────────────────────
+
+    #[test]
+    fn test_a11y_certified_by_refines() {
+        let bytes = epub_with_metadata(
+            r##"<meta property="dcterms:conformsTo" id="conf">EPUB Accessibility 1.1 - WCAG 2.2 Level AA</meta>
+               <meta property="a11y:certifiedBy" id="cert" refines="#conf">Acme Accessibility Lab</meta>
+               <meta property="a11y:certifierCredential" refines="#cert">https://acme.example.com/badge</meta>"##,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+        let a11y = book.metadata.accessibility.expect("should have a11y");
+        let cert = a11y.certification.expect("should have certification");
+        assert_eq!(cert.certified_by, "Acme Accessibility Lab");
+        assert_eq!(
+            cert.credential.as_deref(),
+            Some("https://acme.example.com/badge")
+        );
+    }
+
+    // ── A11y: access modes and features ──────────────────────────────────────
+
+    #[test]
+    fn test_a11y_access_modes_and_features() {
+        let bytes = epub_with_metadata(
+            r#"<meta property="schema:accessMode">textual</meta>
+               <meta property="schema:accessMode">visual</meta>
+               <meta property="schema:accessModeSufficient">textual</meta>
+               <meta property="schema:accessModeSufficient">textual,visual</meta>
+               <meta property="schema:accessibilityFeature">alternativeText</meta>
+               <meta property="schema:accessibilityHazard">noFlashingHazard</meta>
+               <meta property="schema:accessibilitySummary">All images have alt text.</meta>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+        let a11y = book.metadata.accessibility.expect("should have a11y");
+
+        assert_eq!(a11y.access_modes.len(), 2);
+        assert!(a11y.access_modes.contains(&A11yAccessMode::Textual));
+        assert!(a11y.access_modes.contains(&A11yAccessMode::Visual));
+
+        assert_eq!(a11y.access_modes_sufficient.len(), 2);
+        assert_eq!(a11y.access_modes_sufficient[1].len(), 2); // "textual,visual"
+
+        assert!(a11y.features.contains(&A11yFeature::AlternativeText));
+        assert!(a11y.hazards.contains(&A11yHazard::NoFlashingHazard));
+        assert_eq!(a11y.summary.as_deref(), Some("All images have alt text."));
+    }
+
+    // ── A11y: absent metadata → accessibility is None ────────────────────────
+
+    #[test]
+    fn test_a11y_absent_gives_none() {
+        let bytes = epub_with_metadata(
+            r#"<dc:title>Plain Book</dc:title>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+        assert!(
+            book.metadata.accessibility.is_none(),
+            "no a11y meta → accessibility must be None"
+        );
+    }
+
+    // ── A11y: A11yProfile ordering ───────────────────────────────────────────
+
+    #[test]
+    fn test_a11y_profile_ordering() {
+        let aa = A11yProfile::from_opf_value("EPUB Accessibility 1.1 - WCAG 2.2 Level AA").unwrap();
+        let a  = A11yProfile::from_opf_value("EPUB Accessibility 1.1 - WCAG 2.0 Level A").unwrap();
+        let v10_aa = A11yProfile::from_opf_value(A11yProfile::A10_WCAG_20_AA).unwrap();
+        assert!(a < aa, "2.0 A should rank below 2.2 AA");
+        assert!(v10_aa < a, "1.0 AA should rank below 1.1 A");
     }
 }
