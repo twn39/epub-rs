@@ -53,7 +53,6 @@ fn nav_resolve_href(nav_dir: &str, rel_href: &str) -> String {
     format!("{}{fragment}", parts.join("/"))
 }
 
-
 impl<P: EpubProvider> EpubArchive<P> {
     /// Parses **all** navigation data from the EPUB in a **single I/O + single parse** operation.
     ///
@@ -152,9 +151,9 @@ impl<P: EpubProvider> EpubArchive<P> {
         let document = kuchikiki::parse_html().one(html);
         let mut nav_doc = NavigationDocument::default();
 
-        let nav_nodes = document.select("nav").unwrap_or_else(|_| {
-            panic!("'nav' is a valid CSS selector")
-        });
+        let nav_nodes = document
+            .select("nav")
+            .unwrap_or_else(|_| panic!("'nav' is a valid CSS selector"));
 
         for nav in nav_nodes {
             let attrs = nav.attributes.borrow();
@@ -701,8 +700,10 @@ mod tests {
         </html>"#;
 
         let nav = TestArchive::parse_nav_xhtml_all(html, "").unwrap();
-        assert_eq!(nav.toc[0].href, "text/ch1.xhtml",
-            "root-level nav: href must not be modified");
+        assert_eq!(
+            nav.toc[0].href, "text/ch1.xhtml",
+            "root-level nav: href must not be modified"
+        );
     }
 
     #[test]
@@ -717,8 +718,10 @@ mod tests {
         </html>"##;
 
         let nav = TestArchive::parse_nav_xhtml_all(html, "OEBPS/nav").unwrap();
-        assert_eq!(nav.toc[0].href, "#intro",
-            "fragment-only href must pass through unchanged");
+        assert_eq!(
+            nav.toc[0].href, "#intro",
+            "fragment-only href must pass through unchanged"
+        );
     }
 
     // ── nav_resolve_href unit tests ───────────────────────────────────────────
