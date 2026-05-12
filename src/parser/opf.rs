@@ -25,7 +25,10 @@ pub(super) enum OpfState {
     Creator(Option<String>),
     Contributor(Option<String>),
     Language,
-    Identifier { id: Option<String>, scheme: Option<String> },
+    Identifier {
+        id: Option<String>,
+        scheme: Option<String>,
+    },
 
     Publisher,
     Description,
@@ -127,9 +130,7 @@ impl<P: EpubProvider> EpubArchive<P> {
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
-                Event::Empty(ref e) | Event::Start(ref e)
-                    if e.name().as_ref() == b"rootfile" =>
-                {
+                Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"rootfile" => {
                     let mut info = crate::model::RenditionInfo::default();
 
                     for attr in e.attributes().flatten() {
@@ -174,7 +175,6 @@ impl<P: EpubProvider> EpubArchive<P> {
             Ok(renditions)
         }
     }
-
 
     /// Reads `META-INF/encryption.xml` to find obfuscated/encrypted resources.
     ///
@@ -410,7 +410,9 @@ impl<P: EpubProvider> EpubArchive<P> {
                         let scheme = e
                             .attributes()
                             .flatten()
-                            .find(|a| String::from_utf8_lossy(a.key.into_inner()).ends_with("scheme"))
+                            .find(|a| {
+                                String::from_utf8_lossy(a.key.into_inner()).ends_with("scheme")
+                            })
                             .map(|a| String::from_utf8_lossy(&a.value).into_owned());
                         state = OpfState::Identifier { id, scheme };
                     } else if name_str.ends_with("publisher") {
@@ -469,15 +471,14 @@ impl<P: EpubProvider> EpubArchive<P> {
                         // `scheme` attribute (e.g. "onix:codelist5") under a synthetic key.
                         // go-toolkit uses this scheme URI as AltIdentifier.Scheme rather than
                         // the text value (the code within the codelist).
-                        if let (Some(r), Some(p)) = (&refines, &property) {
-                            if p == "identifier-type" {
-                                if let Some(s) = &meta_scheme {
-                                    refinements
-                                        .entry(r.clone())
-                                        .or_default()
-                                        .insert("identifier-type-scheme".to_string(), s.clone());
-                                }
-                            }
+                        if let (Some(r), Some(p)) = (&refines, &property)
+                            && p == "identifier-type"
+                            && let Some(s) = &meta_scheme
+                        {
+                            refinements
+                                .entry(r.clone())
+                                .or_default()
+                                .insert("identifier-type-scheme".to_string(), s.clone());
                         }
                         if let (Some(r), Some(p)) = (refines, property.clone()) {
                             state = OpfState::MetaRefines {
@@ -691,7 +692,11 @@ impl<P: EpubProvider> EpubArchive<P> {
                         OpfState::Modified => book.metadata.modified = Some(text),
                         OpfState::Rights => book.metadata.rights = Some(text),
                         OpfState::Subject => book.metadata.subjects.push(text),
-                        OpfState::MetaRefines { ref_id, property, self_id } => {
+                        OpfState::MetaRefines {
+                            ref_id,
+                            property,
+                            self_id,
+                        } => {
                             // Route a11y refinements to the dedicated collector
                             if is_a11y_property(property) {
                                 raw_a11y.push(RawA11yMeta {
@@ -911,18 +916,17 @@ impl<P: EpubProvider> EpubArchive<P> {
             // in the refinements map; if a "identifier-type" property exists there,
             // use it as the scheme annotation (EPUB 2 opf:scheme is already in raw.scheme).
             for raw in &mut raw_identifiers {
-                if raw.scheme.is_none() {
-                    if let Some(id) = &raw.id {
-                        if let Some(props) = refinements.get(id) {
-                            // Prefer the identifier-type meta's own `scheme` attribute
-                            // (e.g. "onix:codelist5") over its text value (e.g. "15").
-                            // This matches go-toolkit which stores the codelist URI as Scheme.
-                            if let Some(s) = props.get("identifier-type-scheme") {
-                                raw.scheme = Some(s.clone());
-                            } else if let Some(itype) = props.get("identifier-type") {
-                                raw.scheme = Some(itype.clone());
-                            }
-                        }
+                if raw.scheme.is_none()
+                    && let Some(id) = &raw.id
+                    && let Some(props) = refinements.get(id)
+                {
+                    // Prefer the identifier-type meta's own `scheme` attribute
+                    // (e.g. "onix:codelist5") over its text value (e.g. "15").
+                    // This matches go-toolkit which stores the codelist URI as Scheme.
+                    if let Some(s) = props.get("identifier-type-scheme") {
+                        raw.scheme = Some(s.clone());
+                    } else if let Some(itype) = props.get("identifier-type") {
+                        raw.scheme = Some(itype.clone());
                     }
                 }
             }
@@ -939,8 +943,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             // If no pointer match, fall back to the first entry (go-toolkit lines 550-552).
             let primary_idx = primary_idx.unwrap_or(0);
 
-            book.metadata.identifier =
-                Some(raw_identifiers[primary_idx].value.clone());
+            book.metadata.identifier = Some(raw_identifiers[primary_idx].value.clone());
 
             // Everything else becomes an AltIdentifier.
             for (i, raw) in raw_identifiers.into_iter().enumerate() {
@@ -959,7 +962,6 @@ impl<P: EpubProvider> EpubArchive<P> {
         }
 
         Ok(book)
-
     }
 }
 
@@ -1019,10 +1021,10 @@ fn build_accessibility(metas: &[RawA11yMeta]) -> Option<crate::model::Accessibil
         .collect();
 
     for ct in &conforms_to_metas {
-        if let Some(profile) = A11yProfile::from_opf_value(&ct.value) {
-            if !a11y.conforms_to.contains(&profile) {
-                a11y.conforms_to.push(profile);
-            }
+        if let Some(profile) = A11yProfile::from_opf_value(&ct.value)
+            && !a11y.conforms_to.contains(&profile)
+        {
+            a11y.conforms_to.push(profile);
         }
     }
     a11y.conforms_to.sort();
@@ -1040,27 +1042,31 @@ fn build_accessibility(metas: &[RawA11yMeta]) -> Option<crate::model::Accessibil
             && m.refines
                 .as_deref()
                 // Accept when it refines a known conformsTo id, or has no refines (standalone)
-                .map_or(true, |r| conf_ids.contains(r))
+                .is_none_or(|r| conf_ids.contains(r))
     });
 
     if let Some(cb) = certified_by_meta {
         let certifier_id = cb.id.as_deref();
 
-        let credential = certifier_id.and_then(|cid| {
-            metas.iter().find(|m| {
-                (m.property.ends_with(":certifierCredential")
-                    || m.property == "a11y:certifierCredential")
-                    && m.refines.as_deref() == Some(cid)
+        let credential = certifier_id
+            .and_then(|cid| {
+                metas.iter().find(|m| {
+                    (m.property.ends_with(":certifierCredential")
+                        || m.property == "a11y:certifierCredential")
+                        && m.refines.as_deref() == Some(cid)
+                })
             })
-        }).map(|m| m.value.trim().to_owned());
+            .map(|m| m.value.trim().to_owned());
 
-        let report = certifier_id.and_then(|cid| {
-            metas.iter().find(|m| {
-                (m.property.ends_with(":certifierReport")
-                    || m.property == "a11y:certifierReport")
-                    && m.refines.as_deref() == Some(cid)
+        let report = certifier_id
+            .and_then(|cid| {
+                metas.iter().find(|m| {
+                    (m.property.ends_with(":certifierReport")
+                        || m.property == "a11y:certifierReport")
+                        && m.refines.as_deref() == Some(cid)
+                })
             })
-        }).map(|m| m.value.trim().to_owned());
+            .map(|m| m.value.trim().to_owned());
 
         let cert = A11yCertification {
             certified_by: cb.value.trim().to_owned(),
@@ -1075,7 +1081,9 @@ fn build_accessibility(metas: &[RawA11yMeta]) -> Option<crate::model::Accessibil
     // ── 3. schema:accessMode ──────────────────────────────────────────────────
     a11y.access_modes = metas
         .iter()
-        .filter(|m| m.property.ends_with(":accessMode") && !m.property.ends_with(":accessModeSufficient"))
+        .filter(|m| {
+            m.property.ends_with(":accessMode") && !m.property.ends_with(":accessModeSufficient")
+        })
         .map(|m| A11yAccessMode::from_str(m.value.trim()))
         .collect();
 
@@ -1124,11 +1132,7 @@ fn build_accessibility(metas: &[RawA11yMeta]) -> Option<crate::model::Accessibil
         .map(|m| A11yExemption::from_str(m.value.trim()))
         .collect();
 
-    if a11y.is_empty() {
-        None
-    } else {
-        Some(a11y)
-    }
+    if a11y.is_empty() { None } else { Some(a11y) }
 }
 
 #[cfg(test)]
@@ -1320,7 +1324,10 @@ mod tests {
         // No selection attributes present — all optional fields are None
         assert!(renditions[0].layout.is_none());
         assert!(renditions[0].label.is_none());
-        assert!(renditions[0].is_reflowable(), "absent layout = reflowable per spec");
+        assert!(
+            renditions[0].is_reflowable(),
+            "absent layout = reflowable per spec"
+        );
     }
 
     #[test]
@@ -1394,10 +1401,7 @@ mod tests {
         let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
         let book = archive.parse().unwrap();
         let a11y = book.metadata.accessibility.expect("should have a11y");
-        assert_eq!(
-            a11y.conforms_to[0].0,
-            A11yProfile::A10_WCAG_20_AA
-        );
+        assert_eq!(a11y.conforms_to[0].0, A11yProfile::A10_WCAG_20_AA);
     }
 
     // ── A11y: certifiedBy refines conformsTo ──────────────────────────────────
@@ -1453,9 +1457,7 @@ mod tests {
 
     #[test]
     fn test_a11y_absent_gives_none() {
-        let bytes = epub_with_metadata(
-            r#"<dc:title>Plain Book</dc:title>"#,
-        );
+        let bytes = epub_with_metadata(r#"<dc:title>Plain Book</dc:title>"#);
         let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
         let book = archive.parse().unwrap();
         assert!(
@@ -1469,7 +1471,7 @@ mod tests {
     #[test]
     fn test_a11y_profile_ordering() {
         let aa = A11yProfile::from_opf_value("EPUB Accessibility 1.1 - WCAG 2.2 Level AA").unwrap();
-        let a  = A11yProfile::from_opf_value("EPUB Accessibility 1.1 - WCAG 2.0 Level A").unwrap();
+        let a = A11yProfile::from_opf_value("EPUB Accessibility 1.1 - WCAG 2.0 Level A").unwrap();
         let v10_aa = A11yProfile::from_opf_value(A11yProfile::A10_WCAG_20_AA).unwrap();
         assert!(a < aa, "2.0 A should rank below 2.2 AA");
         assert!(v10_aa < a, "1.0 AA should rank below 1.1 A");
@@ -1535,7 +1537,10 @@ mod tests {
         );
         // The ISBN becomes an AltIdentifier (empty dc:identifier is dropped)
         assert_eq!(book.metadata.alt_identifiers.len(), 1);
-        assert_eq!(book.metadata.alt_identifiers[0].value(), "978-3-16-148410-0");
+        assert_eq!(
+            book.metadata.alt_identifiers[0].value(),
+            "978-3-16-148410-0"
+        );
         assert!(book.metadata.alt_identifiers[0].scheme().is_none());
     }
 
@@ -1572,9 +1577,15 @@ mod tests {
         let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
         let book = archive.parse().unwrap();
 
-        assert_eq!(book.metadata.identifier.as_deref(), Some("urn:uuid:primary"));
+        assert_eq!(
+            book.metadata.identifier.as_deref(),
+            Some("urn:uuid:primary")
+        );
         assert_eq!(book.metadata.alt_identifiers.len(), 1);
-        assert_eq!(book.metadata.alt_identifiers[0].value(), "978-0-306-40615-7");
+        assert_eq!(
+            book.metadata.alt_identifiers[0].value(),
+            "978-0-306-40615-7"
+        );
         assert_eq!(book.metadata.alt_identifiers[0].scheme(), Some("ISBN"));
     }
 
@@ -1596,9 +1607,11 @@ mod tests {
         assert_eq!(book.metadata.identifier.as_deref(), Some("urn:uuid:main"));
         assert_eq!(book.metadata.alt_identifiers.len(), 1);
         // scheme should be back-filled from identifier-type refinement
-        assert_eq!(book.metadata.alt_identifiers[0].scheme(), Some("onix:codelist5"));
+        assert_eq!(
+            book.metadata.alt_identifiers[0].scheme(),
+            Some("onix:codelist5")
+        );
     }
-
 
     // ── Identifier: empty/whitespace-only elements are filtered ──────────────
 

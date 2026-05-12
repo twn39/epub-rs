@@ -476,7 +476,8 @@ where
                         for attr in &["href", "xlink:href"] {
                             if let Some(href) = el.get_attribute(attr)
                                 && !is_external_url(&href)
-                                && !href.starts_with('#') // pure local ref → skip
+                                && !href.starts_with('#')
+                            // pure local ref → skip
                             {
                                 let (path_part, frag_part) = match href.find('#') {
                                     Some(idx) => (&href[..idx], &href[idx..]),
@@ -484,8 +485,7 @@ where
                                 };
                                 if !path_part.is_empty() {
                                     let abs_path = normalize_path(&base_dir, path_part);
-                                    if let Some(mut new_url) =
-                                        (resolver.lock().unwrap())(&abs_path)
+                                    if let Some(mut new_url) = (resolver.lock().unwrap())(&abs_path)
                                     {
                                         new_url.push_str(frag_part);
                                         el.set_attribute(attr, &new_url).unwrap();
@@ -1008,8 +1008,14 @@ mod tests {
         let srcset = "small.jpg 400w, ../img/large.jpg 800w";
         let base = "OEBPS/Text";
         let result = rewrite_srcset(srcset, base, &mut |p| Some(format!("blob:{p}")));
-        assert!(result.contains("blob:OEBPS/Text/small.jpg 400w"), "small.jpg: {result}");
-        assert!(result.contains("blob:OEBPS/img/large.jpg 800w"), "large.jpg: {result}");
+        assert!(
+            result.contains("blob:OEBPS/Text/small.jpg 400w"),
+            "small.jpg: {result}"
+        );
+        assert!(
+            result.contains("blob:OEBPS/img/large.jpg 800w"),
+            "large.jpg: {result}"
+        );
     }
 
     // ── rewrite_srcset: pixel-density descriptors ─────────────────────────────
@@ -1019,8 +1025,14 @@ mod tests {
         let srcset = "icon.png 1x, icon@2x.png 2x";
         let base = "OEBPS/Text";
         let result = rewrite_srcset(srcset, base, &mut |p| Some(format!("blob:{p}")));
-        assert!(result.contains("blob:OEBPS/Text/icon.png 1x"), "1x: {result}");
-        assert!(result.contains("blob:OEBPS/Text/icon@2x.png 2x"), "2x: {result}");
+        assert!(
+            result.contains("blob:OEBPS/Text/icon.png 1x"),
+            "1x: {result}"
+        );
+        assert!(
+            result.contains("blob:OEBPS/Text/icon@2x.png 2x"),
+            "2x: {result}"
+        );
     }
 
     // ── rewrite_srcset: bare URL with no descriptor ───────────────────────────
@@ -1046,8 +1058,14 @@ mod tests {
         });
         // Only the local URL should reach the resolver
         assert_eq!(resolver_called_with, vec!["OEBPS/Text/local.png"]);
-        assert!(result.contains("https://cdn.example.com/img.jpg 2x"), "ext: {result}");
-        assert!(result.contains("blob:OEBPS/Text/local.png 1x"), "local: {result}");
+        assert!(
+            result.contains("https://cdn.example.com/img.jpg 2x"),
+            "ext: {result}"
+        );
+        assert!(
+            result.contains("blob:OEBPS/Text/local.png 1x"),
+            "local: {result}"
+        );
     }
 
     // ── rewrite_srcset: data: URLs are passed through unchanged ───────────────
@@ -1065,11 +1083,16 @@ mod tests {
         // through is_external_url == false, reaches resolver, and gets rewritten.
         // What matters is: the "data:image/gif;base64" prefix candidate is SKIPPED,
         // and the explicitly local candidate "local.png" IS rewritten.
-        assert!(result.contains("blob:OEBPS/Text/local.png"), "local.png must be rewritten: {result}");
+        assert!(
+            result.contains("blob:OEBPS/Text/local.png"),
+            "local.png must be rewritten: {result}"
+        );
         // The data: scheme prefix survives
-        assert!(result.contains("data:image/gif;base64"), "data: prefix must survive: {result}");
+        assert!(
+            result.contains("data:image/gif;base64"),
+            "data: prefix must survive: {result}"
+        );
     }
-
 
     // ── rewrite_resources: <picture> with <source srcset> + <img> ─────────────
 
@@ -1090,12 +1113,24 @@ mod tests {
         .unwrap();
 
         // <img src> fallback
-        assert!(result.contains(r#"src="blob:OEBPS/img/fallback.jpg""#), "img src: {result}");
+        assert!(
+            result.contains(r#"src="blob:OEBPS/img/fallback.jpg""#),
+            "img src: {result}"
+        );
         // first <source srcset> — single URL, no descriptor
-        assert!(result.contains("blob:OEBPS/img/photo.webp"), "webp: {result}");
+        assert!(
+            result.contains("blob:OEBPS/img/photo.webp"),
+            "webp: {result}"
+        );
         // second <source srcset> — two candidates with descriptors
-        assert!(result.contains("blob:OEBPS/img/photo.avif 1x"), "avif 1x: {result}");
-        assert!(result.contains("blob:OEBPS/img/photo@2x.avif 2x"), "avif 2x: {result}");
+        assert!(
+            result.contains("blob:OEBPS/img/photo.avif 1x"),
+            "avif 1x: {result}"
+        );
+        assert!(
+            result.contains("blob:OEBPS/img/photo@2x.avif 2x"),
+            "avif 2x: {result}"
+        );
     }
 
     // ── rewrite_resources: SVG <use href="sprite.svg#id"> ────────────────────
@@ -1103,9 +1138,13 @@ mod tests {
     #[test]
     fn test_rewrite_svg_use_cross_file_href() {
         // Only the path part before '#' should be resolved; the fragment must survive.
-        let html = r#"<html><body><svg><use href="../images/sprite.svg#arrow"/></svg></body></html>"#;
+        let html =
+            r#"<html><body><svg><use href="../images/sprite.svg#arrow"/></svg></body></html>"#;
         let result = rewrite_resources(html, "OEBPS/Text/ch1.xhtml", |path| {
-            assert_eq!(path, "OEBPS/images/sprite.svg", "resolver must not receive fragment");
+            assert_eq!(
+                path, "OEBPS/images/sprite.svg",
+                "resolver must not receive fragment"
+            );
             Some("blob:sprite".to_string())
         })
         .unwrap();

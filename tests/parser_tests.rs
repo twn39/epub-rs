@@ -255,7 +255,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_error_handling_bad_zip() {
         use epub_rs::parser::EpubArchive;
