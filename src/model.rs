@@ -708,9 +708,12 @@ pub struct A11yProfile(pub String);
 
 impl A11yProfile {
     // EPUB Accessibility 1.0 canonical URLs
-    pub const A10_WCAG_20_A:   &'static str = "http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-a";
-    pub const A10_WCAG_20_AA:  &'static str = "http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aa";
-    pub const A10_WCAG_20_AAA: &'static str = "http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aaa";
+    pub const A10_WCAG_20_A: &'static str =
+        "http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-a";
+    pub const A10_WCAG_20_AA: &'static str =
+        "http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aa";
+    pub const A10_WCAG_20_AAA: &'static str =
+        "http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aaa";
 
     /// Normalise a raw OPF `dcterms:conformsTo` value into a canonical profile.
     ///
@@ -762,8 +765,8 @@ impl A11yProfile {
     /// Numeric rank for deterministic sorting; unknown profiles sort last.
     pub fn sort_rank(&self) -> u8 {
         match self.0.as_str() {
-            s if s == Self::A10_WCAG_20_A   => 1,
-            s if s == Self::A10_WCAG_20_AA  => 2,
+            s if s == Self::A10_WCAG_20_A => 1,
+            s if s == Self::A10_WCAG_20_AA => 2,
             s if s == Self::A10_WCAG_20_AAA => 3,
             s => parse_a11y_11_profile(s)
                 .map(|(_, wcag_ver, level)| {
@@ -775,12 +778,13 @@ impl A11yProfile {
                         _ => 9,
                     };
                     let level_offset: u8 = match level {
-                        "A"   => 1,
-                        "AA"  => 2,
+                        "A" => 1,
+                        "AA" => 2,
                         "AAA" => 3,
                         _ => 4,
                     };
-                    4u8.saturating_add(wcag_base).saturating_add(level_offset - 1)
+                    4u8.saturating_add(wcag_base)
+                        .saturating_add(level_offset - 1)
                 })
                 .unwrap_or(255),
         }
@@ -840,37 +844,38 @@ impl<'de> serde::Deserialize<'de> for A11yAccessMode {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         Ok(match s.as_str() {
-            "auditory"        => Self::Auditory,
-            "chartOnVisual"   => Self::ChartOnVisual,
-            "chemOnVisual"    => Self::ChemOnVisual,
-            "colorDependent"  => Self::ColorDependent,
+            "auditory" => Self::Auditory,
+            "chartOnVisual" => Self::ChartOnVisual,
+            "chemOnVisual" => Self::ChemOnVisual,
+            "colorDependent" => Self::ColorDependent,
             "diagramOnVisual" => Self::DiagramOnVisual,
-            "mathOnVisual"    => Self::MathOnVisual,
-            "musicOnVisual"   => Self::MusicOnVisual,
-            "tactile"         => Self::Tactile,
-            "textOnVisual"    => Self::TextOnVisual,
-            "textual"         => Self::Textual,
-            "visual"          => Self::Visual,
-            _                 => Self::Other(s),
+            "mathOnVisual" => Self::MathOnVisual,
+            "musicOnVisual" => Self::MusicOnVisual,
+            "tactile" => Self::Tactile,
+            "textOnVisual" => Self::TextOnVisual,
+            "textual" => Self::Textual,
+            "visual" => Self::Visual,
+            _ => Self::Other(s),
         })
     }
 }
 
 impl A11yAccessMode {
+    #[allow(clippy::should_implement_trait)] // intentional: infallible, returns Self not Result
     pub fn from_str(s: &str) -> Self {
         match s {
-            "auditory"        => Self::Auditory,
-            "chartOnVisual"   => Self::ChartOnVisual,
-            "chemOnVisual"    => Self::ChemOnVisual,
-            "colorDependent"  => Self::ColorDependent,
+            "auditory" => Self::Auditory,
+            "chartOnVisual" => Self::ChartOnVisual,
+            "chemOnVisual" => Self::ChemOnVisual,
+            "colorDependent" => Self::ColorDependent,
             "diagramOnVisual" => Self::DiagramOnVisual,
-            "mathOnVisual"    => Self::MathOnVisual,
-            "musicOnVisual"   => Self::MusicOnVisual,
-            "tactile"         => Self::Tactile,
-            "textOnVisual"    => Self::TextOnVisual,
-            "textual"         => Self::Textual,
-            "visual"          => Self::Visual,
-            _                 => Self::Other(s.to_owned()),
+            "mathOnVisual" => Self::MathOnVisual,
+            "musicOnVisual" => Self::MusicOnVisual,
+            "tactile" => Self::Tactile,
+            "textOnVisual" => Self::TextOnVisual,
+            "textual" => Self::Textual,
+            "visual" => Self::Visual,
+            _ => Self::Other(s.to_owned()),
         }
     }
 }
@@ -895,22 +900,23 @@ impl<'de> serde::Deserialize<'de> for A11yPrimaryAccessMode {
         let s = String::deserialize(d)?;
         Ok(match s.as_str() {
             "auditory" => Self::Auditory,
-            "tactile"  => Self::Tactile,
-            "textual"  => Self::Textual,
-            "visual"   => Self::Visual,
-            _          => Self::Other(s),
+            "tactile" => Self::Tactile,
+            "textual" => Self::Textual,
+            "visual" => Self::Visual,
+            _ => Self::Other(s),
         })
     }
 }
 
 impl A11yPrimaryAccessMode {
+    #[allow(clippy::should_implement_trait)] // intentional: infallible, returns Self not Result
     pub fn from_str(s: &str) -> Self {
         match s {
             "auditory" => Self::Auditory,
-            "tactile"  => Self::Tactile,
-            "textual"  => Self::Textual,
-            "visual"   => Self::Visual,
-            _          => Self::Other(s.to_owned()),
+            "tactile" => Self::Tactile,
+            "textual" => Self::Textual,
+            "visual" => Self::Visual,
+            _ => Self::Other(s.to_owned()),
         }
     }
 }
@@ -920,39 +926,72 @@ impl A11yPrimaryAccessMode {
 /// Values from <https://www.w3.org/2021/a11y-discov-vocab/latest/#accessibilityFeature>.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum A11yFeature {
-    #[serde(rename = "annotations")]        Annotations,
-    #[serde(rename = "ARIA")]              Aria,
-    #[serde(rename = "bookmark")]          Bookmarks,
-    #[serde(rename = "index")]             Index,
-    #[serde(rename = "pageBreakMarkers")]  PageBreakMarkers,
-    #[serde(rename = "pageNavigation")]    PageNavigation,
-    #[serde(rename = "readingOrder")]      ReadingOrder,
-    #[serde(rename = "structuralNavigation")] StructuralNavigation,
-    #[serde(rename = "tableOfContents")]   TableOfContents,
-    #[serde(rename = "taggedPDF")]         TaggedPdf,
-    #[serde(rename = "alternativeText")]   AlternativeText,
-    #[serde(rename = "audioDescription")]  AudioDescription,
-    #[serde(rename = "captions")]          Captions,
-    #[serde(rename = "describedMath")]     DescribedMath,
-    #[serde(rename = "longDescription")]   LongDescription,
-    #[serde(rename = "rubyAnnotations")]   RubyAnnotations,
-    #[serde(rename = "signLanguage")]      SignLanguage,
-    #[serde(rename = "transcript")]        Transcript,
-    #[serde(rename = "displayTransformability")] DisplayTransformability,
-    #[serde(rename = "synchronizedAudioText")]   SynchronizedAudioText,
-    #[serde(rename = "timingControl")]     TimingControl,
-    #[serde(rename = "unlocked")]          Unlocked,
-    #[serde(rename = "ChemML")]            ChemMl,
-    #[serde(rename = "latex")]             Latex,
-    #[serde(rename = "MathML")]            MathMl,
-    #[serde(rename = "ttsMarkup")]         TtsMarkup,
-    #[serde(rename = "highContrastAudio")] HighContrastAudio,
-    #[serde(rename = "highContrastDisplay")] HighContrastDisplay,
-    #[serde(rename = "largePrint")]        LargePrint,
-    #[serde(rename = "braille")]           Braille,
-    #[serde(rename = "tactileGraphic")]    TactileGraphic,
-    #[serde(rename = "tactileObject")]     TactileObject,
-    #[serde(rename = "none")]              None,
+    #[serde(rename = "annotations")]
+    Annotations,
+    #[serde(rename = "ARIA")]
+    Aria,
+    #[serde(rename = "bookmark")]
+    Bookmarks,
+    #[serde(rename = "index")]
+    Index,
+    #[serde(rename = "pageBreakMarkers")]
+    PageBreakMarkers,
+    #[serde(rename = "pageNavigation")]
+    PageNavigation,
+    #[serde(rename = "readingOrder")]
+    ReadingOrder,
+    #[serde(rename = "structuralNavigation")]
+    StructuralNavigation,
+    #[serde(rename = "tableOfContents")]
+    TableOfContents,
+    #[serde(rename = "taggedPDF")]
+    TaggedPdf,
+    #[serde(rename = "alternativeText")]
+    AlternativeText,
+    #[serde(rename = "audioDescription")]
+    AudioDescription,
+    #[serde(rename = "captions")]
+    Captions,
+    #[serde(rename = "describedMath")]
+    DescribedMath,
+    #[serde(rename = "longDescription")]
+    LongDescription,
+    #[serde(rename = "rubyAnnotations")]
+    RubyAnnotations,
+    #[serde(rename = "signLanguage")]
+    SignLanguage,
+    #[serde(rename = "transcript")]
+    Transcript,
+    #[serde(rename = "displayTransformability")]
+    DisplayTransformability,
+    #[serde(rename = "synchronizedAudioText")]
+    SynchronizedAudioText,
+    #[serde(rename = "timingControl")]
+    TimingControl,
+    #[serde(rename = "unlocked")]
+    Unlocked,
+    #[serde(rename = "ChemML")]
+    ChemMl,
+    #[serde(rename = "latex")]
+    Latex,
+    #[serde(rename = "MathML")]
+    MathMl,
+    #[serde(rename = "ttsMarkup")]
+    TtsMarkup,
+    #[serde(rename = "highContrastAudio")]
+    HighContrastAudio,
+    #[serde(rename = "highContrastDisplay")]
+    HighContrastDisplay,
+    #[serde(rename = "largePrint")]
+    LargePrint,
+    #[serde(rename = "braille")]
+    Braille,
+    #[serde(rename = "tactileGraphic")]
+    TactileGraphic,
+    #[serde(rename = "tactileObject")]
+    TactileObject,
+    #[serde(rename = "none")]
+    None,
     /// Any value not defined in the current vocabulary.
     #[serde(untagged)]
     Other(String),
@@ -966,42 +1005,43 @@ impl<'de> serde::Deserialize<'de> for A11yFeature {
 }
 
 impl A11yFeature {
+    #[allow(clippy::should_implement_trait)] // intentional: infallible, returns Self not Result
     pub fn from_str(s: &str) -> Self {
         match s {
-            "annotations"            => Self::Annotations,
-            "ARIA"                   => Self::Aria,
-            "bookmark"               => Self::Bookmarks,
-            "index"                  => Self::Index,
-            "pageBreakMarkers"       => Self::PageBreakMarkers,
-            "pageNavigation"         => Self::PageNavigation,
-            "readingOrder"           => Self::ReadingOrder,
-            "structuralNavigation"   => Self::StructuralNavigation,
-            "tableOfContents"        => Self::TableOfContents,
-            "taggedPDF"              => Self::TaggedPdf,
-            "alternativeText"        => Self::AlternativeText,
-            "audioDescription"       => Self::AudioDescription,
-            "captions"               => Self::Captions,
-            "describedMath"          => Self::DescribedMath,
-            "longDescription"        => Self::LongDescription,
-            "rubyAnnotations"        => Self::RubyAnnotations,
-            "signLanguage"           => Self::SignLanguage,
-            "transcript"             => Self::Transcript,
-            "displayTransformability"=> Self::DisplayTransformability,
-            "synchronizedAudioText"  => Self::SynchronizedAudioText,
-            "timingControl"          => Self::TimingControl,
-            "unlocked"               => Self::Unlocked,
-            "ChemML"                 => Self::ChemMl,
-            "latex"                  => Self::Latex,
-            "MathML"                 => Self::MathMl,
-            "ttsMarkup"              => Self::TtsMarkup,
-            "highContrastAudio"      => Self::HighContrastAudio,
-            "highContrastDisplay"    => Self::HighContrastDisplay,
-            "largePrint"             => Self::LargePrint,
-            "braille"                => Self::Braille,
-            "tactileGraphic"         => Self::TactileGraphic,
-            "tactileObject"          => Self::TactileObject,
-            "none"                   => Self::None,
-            _                        => Self::Other(s.to_owned()),
+            "annotations" => Self::Annotations,
+            "ARIA" => Self::Aria,
+            "bookmark" => Self::Bookmarks,
+            "index" => Self::Index,
+            "pageBreakMarkers" => Self::PageBreakMarkers,
+            "pageNavigation" => Self::PageNavigation,
+            "readingOrder" => Self::ReadingOrder,
+            "structuralNavigation" => Self::StructuralNavigation,
+            "tableOfContents" => Self::TableOfContents,
+            "taggedPDF" => Self::TaggedPdf,
+            "alternativeText" => Self::AlternativeText,
+            "audioDescription" => Self::AudioDescription,
+            "captions" => Self::Captions,
+            "describedMath" => Self::DescribedMath,
+            "longDescription" => Self::LongDescription,
+            "rubyAnnotations" => Self::RubyAnnotations,
+            "signLanguage" => Self::SignLanguage,
+            "transcript" => Self::Transcript,
+            "displayTransformability" => Self::DisplayTransformability,
+            "synchronizedAudioText" => Self::SynchronizedAudioText,
+            "timingControl" => Self::TimingControl,
+            "unlocked" => Self::Unlocked,
+            "ChemML" => Self::ChemMl,
+            "latex" => Self::Latex,
+            "MathML" => Self::MathMl,
+            "ttsMarkup" => Self::TtsMarkup,
+            "highContrastAudio" => Self::HighContrastAudio,
+            "highContrastDisplay" => Self::HighContrastDisplay,
+            "largePrint" => Self::LargePrint,
+            "braille" => Self::Braille,
+            "tactileGraphic" => Self::TactileGraphic,
+            "tactileObject" => Self::TactileObject,
+            "none" => Self::None,
+            _ => Self::Other(s.to_owned()),
         }
     }
 }
@@ -1011,14 +1051,22 @@ impl A11yFeature {
 /// Values from <https://www.w3.org/2021/a11y-discov-vocab/latest/#accessibilityHazard>.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum A11yHazard {
-    #[serde(rename = "flashing")]               Flashing,
-    #[serde(rename = "noFlashingHazard")]        NoFlashingHazard,
-    #[serde(rename = "motionSimulation")]        MotionSimulation,
-    #[serde(rename = "noMotionSimulationHazard")]NoMotionSimulationHazard,
-    #[serde(rename = "sound")]                   Sound,
-    #[serde(rename = "noSoundHazard")]           NoSoundHazard,
-    #[serde(rename = "unknown")]                 Unknown,
-    #[serde(rename = "none")]                    None,
+    #[serde(rename = "flashing")]
+    Flashing,
+    #[serde(rename = "noFlashingHazard")]
+    NoFlashingHazard,
+    #[serde(rename = "motionSimulation")]
+    MotionSimulation,
+    #[serde(rename = "noMotionSimulationHazard")]
+    NoMotionSimulationHazard,
+    #[serde(rename = "sound")]
+    Sound,
+    #[serde(rename = "noSoundHazard")]
+    NoSoundHazard,
+    #[serde(rename = "unknown")]
+    Unknown,
+    #[serde(rename = "none")]
+    None,
     /// Any value not defined in the current vocabulary.
     #[serde(untagged)]
     Other(String),
@@ -1032,17 +1080,18 @@ impl<'de> serde::Deserialize<'de> for A11yHazard {
 }
 
 impl A11yHazard {
+    #[allow(clippy::should_implement_trait)] // intentional: infallible, returns Self not Result
     pub fn from_str(s: &str) -> Self {
         match s {
-            "flashing"                  => Self::Flashing,
-            "noFlashingHazard"          => Self::NoFlashingHazard,
-            "motionSimulation"          => Self::MotionSimulation,
-            "noMotionSimulationHazard"  => Self::NoMotionSimulationHazard,
-            "sound"                     => Self::Sound,
-            "noSoundHazard"             => Self::NoSoundHazard,
-            "unknown"                   => Self::Unknown,
-            "none"                      => Self::None,
-            _                           => Self::Other(s.to_owned()),
+            "flashing" => Self::Flashing,
+            "noFlashingHazard" => Self::NoFlashingHazard,
+            "motionSimulation" => Self::MotionSimulation,
+            "noMotionSimulationHazard" => Self::NoMotionSimulationHazard,
+            "sound" => Self::Sound,
+            "noSoundHazard" => Self::NoSoundHazard,
+            "unknown" => Self::Unknown,
+            "none" => Self::None,
+            _ => Self::Other(s.to_owned()),
         }
     }
 }
@@ -1052,9 +1101,12 @@ impl A11yHazard {
 /// Values from the EPUB Accessibility Exemptions vocabulary.
 #[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
 pub enum A11yExemption {
-    #[serde(rename = "eaa-disproportionate-burden")] EaaDisproportionateBurden,
-    #[serde(rename = "eaa-fundamental-alteration")]  EaaFundamentalAlteration,
-    #[serde(rename = "eaa-microenterprise")]          EaaMicroenterprise,
+    #[serde(rename = "eaa-disproportionate-burden")]
+    EaaDisproportionateBurden,
+    #[serde(rename = "eaa-fundamental-alteration")]
+    EaaFundamentalAlteration,
+    #[serde(rename = "eaa-microenterprise")]
+    EaaMicroenterprise,
     /// Any value not defined in the current vocabulary.
     #[serde(untagged)]
     Other(String),
@@ -1068,12 +1120,13 @@ impl<'de> serde::Deserialize<'de> for A11yExemption {
 }
 
 impl A11yExemption {
+    #[allow(clippy::should_implement_trait)] // intentional: infallible, returns Self not Result
     pub fn from_str(s: &str) -> Self {
         match s {
             "eaa-disproportionate-burden" => Self::EaaDisproportionateBurden,
-            "eaa-fundamental-alteration"  => Self::EaaFundamentalAlteration,
-            "eaa-microenterprise"         => Self::EaaMicroenterprise,
-            _                            => Self::Other(s.to_owned()),
+            "eaa-fundamental-alteration" => Self::EaaFundamentalAlteration,
+            "eaa-microenterprise" => Self::EaaMicroenterprise,
+            _ => Self::Other(s.to_owned()),
         }
     }
 }

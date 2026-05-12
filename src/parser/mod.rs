@@ -69,9 +69,7 @@ impl<P: EpubProvider> EpubArchive<P> {
     ///     println!("{} — layout: {:?}", r.opf_path, r.layout);
     /// }
     /// ```
-    pub fn get_renditions(
-        &mut self,
-    ) -> Result<Vec<crate::model::RenditionInfo>, EpubError> {
+    pub fn get_renditions(&mut self) -> Result<Vec<crate::model::RenditionInfo>, EpubError> {
         self.parse_container()
     }
 
@@ -142,17 +140,16 @@ impl<P: EpubProvider> EpubArchive<P> {
             .iter()
             .max_by_key(|r| {
                 let mut score: u8 = 0;
-                if let Some(want_layout) = layout {
-                    if r.layout.as_deref() == Some(want_layout)
-                        || (want_layout == "reflowable" && r.layout.is_none())
-                    {
-                        score += 2;
-                    }
+                if let Some(want_layout) = layout
+                    && (r.layout.as_deref() == Some(want_layout)
+                        || (want_layout == "reflowable" && r.layout.is_none()))
+                {
+                    score += 2;
                 }
-                if let Some(want_lang) = language {
-                    if r.language.as_deref() == Some(want_lang) {
-                        score += 1;
-                    }
+                if let Some(want_lang) = language
+                    && r.language.as_deref() == Some(want_lang)
+                {
+                    score += 1;
                 }
                 score
             })
