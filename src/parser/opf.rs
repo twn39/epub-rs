@@ -25,7 +25,8 @@ pub(super) enum OpfState {
     Creator(Option<String>),
     Contributor(Option<String>),
     Language,
-    Identifier,
+    Identifier { id: Option<String>, scheme: Option<String> },
+
     Publisher,
     Description,
     Date,
@@ -62,6 +63,24 @@ struct RawTitle {
     /// `true` when the EPUB 2 `opf:title-type="subtitle"` inline attribute
     /// was detected (before EPUB 3 refinements are applied).
     epub2_subtitle: bool,
+}
+
+// ── RawIdentifier (parse-phase intermediate) ──────────────────────────────────
+
+/// A `<dc:identifier>` element captured during OPF streaming.
+///
+/// All identifiers are collected first so that EPUB 3 `identifier-type`
+/// refinements (which may appear after the element in the XML) can be
+/// back-filled in post-processing before the `AltIdentifier` list is built.
+struct RawIdentifier {
+    /// Value of the element's own `id` attribute.
+    /// Matched against `package@unique-identifier` to identify the primary ID.
+    id: Option<String>,
+    /// Scheme annotation: EPUB 2 `opf:scheme` attribute or EPUB 3 `identifier-type`
+    /// meta value (resolved in post-processing).
+    scheme: Option<String>,
+    /// Trimmed text content of the element.
+    value: String,
 }
 
 // ── RawA11yMeta (parse-phase intermediate) ────────────────────────────────────
@@ -301,6 +320,10 @@ impl<P: EpubProvider> EpubArchive<P> {
         let mut mo_meta: Option<crate::model::MediaOverlayMetadata> = None;
         // Collects all a11y-related <meta> elements; resolved in post-processing
         let mut raw_a11y: Vec<RawA11yMeta> = Vec::new();
+        // Tracks `package@unique-identifier` — the id of the primary dc:identifier element
+        let mut unique_id_ref: Option<String> = None;
+        // Collects all dc:identifier elements; primary is singled out in post-processing
+        let mut raw_identifiers: Vec<RawIdentifier> = Vec::new();
 
         loop {
             match reader.read_event_into(&mut event_buf)? {
@@ -310,6 +333,16 @@ impl<P: EpubProvider> EpubArchive<P> {
 
                     if name_str.ends_with("metadata") {
                         in_metadata = true;
+                    } else if name_str == "package" || name_str.ends_with(":package") {
+                        // Capture the unique-identifier pointer that designates the primary
+                        // dc:identifier. Appears on the root element before <metadata>.
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.into_inner());
+                            if key == "unique-identifier" {
+                                unique_id_ref =
+                                    Some(String::from_utf8_lossy(&attr.value).into_owned());
+                            }
+                        }
                     } else if name_str.ends_with("spine") {
                         for attr in e.attributes().flatten() {
                             let key = String::from_utf8_lossy(attr.key.into_inner());
@@ -367,7 +400,19 @@ impl<P: EpubProvider> EpubArchive<P> {
                     } else if name_str.ends_with("language") {
                         state = OpfState::Language;
                     } else if name_str.ends_with("identifier") {
-                        state = OpfState::Identifier;
+                        // Read the element's `id` attribute (matched against package@unique-identifier)
+                        // and `opf:scheme` / `scheme` attribute (EPUB 2 scheme annotation).
+                        let id = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| a.key.as_ref() == b"id")
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                        let scheme = e
+                            .attributes()
+                            .flatten()
+                            .find(|a| String::from_utf8_lossy(a.key.into_inner()).ends_with("scheme"))
+                            .map(|a| String::from_utf8_lossy(&a.value).into_owned());
+                        state = OpfState::Identifier { id, scheme };
                     } else if name_str.ends_with("publisher") {
                         state = OpfState::Publisher;
                     } else if name_str.ends_with("description") {
@@ -395,6 +440,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                         let mut refines = None;
                         let mut property = None;
                         let mut meta_id = None;
+                        let mut meta_scheme = None;
                         for attr in e.attributes().flatten() {
                             let key = String::from_utf8_lossy(attr.key.into_inner());
                             match key.as_ref() {
@@ -412,7 +458,25 @@ impl<P: EpubProvider> EpubArchive<P> {
                                     meta_id =
                                         Some(String::from_utf8_lossy(&attr.value).into_owned());
                                 }
+                                "scheme" => {
+                                    meta_scheme =
+                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
+                                }
                                 _ => {}
+                            }
+                        }
+                        // For identifier-type refinements, eagerly store the meta element's own
+                        // `scheme` attribute (e.g. "onix:codelist5") under a synthetic key.
+                        // go-toolkit uses this scheme URI as AltIdentifier.Scheme rather than
+                        // the text value (the code within the codelist).
+                        if let (Some(r), Some(p)) = (&refines, &property) {
+                            if p == "identifier-type" {
+                                if let Some(s) = &meta_scheme {
+                                    refinements
+                                        .entry(r.clone())
+                                        .or_default()
+                                        .insert("identifier-type-scheme".to_string(), s.clone());
+                                }
                             }
                         }
                         if let (Some(r), Some(p)) = (refines, property.clone()) {
@@ -609,7 +673,18 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 book.metadata.language = Some(text);
                             }
                         }
-                        OpfState::Identifier => book.metadata.identifier = Some(text),
+                        OpfState::Identifier { id, scheme } => {
+                            // Collect into raw_identifiers; post-processing resolves which is primary.
+                            // Empty values are discarded here rather than later to avoid index confusion.
+                            let trimmed = text.trim().to_owned();
+                            if !trimmed.is_empty() {
+                                raw_identifiers.push(RawIdentifier {
+                                    id: id.clone(),
+                                    scheme: scheme.clone(),
+                                    value: trimmed,
+                                });
+                            }
+                        }
                         OpfState::Publisher => book.metadata.publisher = Some(text),
                         OpfState::Description => book.metadata.description = Some(text),
                         OpfState::Date => book.metadata.date = Some(text),
@@ -821,7 +896,70 @@ impl<P: EpubProvider> EpubArchive<P> {
         // 5. Build Accessibility metadata from collected raw metas
         book.metadata.accessibility = build_accessibility(&raw_a11y);
 
+        // 6. Resolve dc:identifier elements into primary + alt identifiers.
+        //
+        //    EPUB 3.3 §5.5.3.1.1: the `<package unique-identifier="uid">` attribute
+        //    names the `dc:identifier` element (by its `id` attribute) that is the
+        //    canonical publication identifier. All other non-empty dc:identifier
+        //    elements are alternate identifiers (e.g. ISBN-13 alongside a UUID).
+        //
+        //    EPUB 3 identifier-type refinements that arrived in `refinements` are
+        //    back-filled here so that scheme information is available regardless of
+        //    XML element order.
+        if !raw_identifiers.is_empty() {
+            // Back-fill EPUB 3 identifier-type: look up each raw identifier's own id
+            // in the refinements map; if a "identifier-type" property exists there,
+            // use it as the scheme annotation (EPUB 2 opf:scheme is already in raw.scheme).
+            for raw in &mut raw_identifiers {
+                if raw.scheme.is_none() {
+                    if let Some(id) = &raw.id {
+                        if let Some(props) = refinements.get(id) {
+                            // Prefer the identifier-type meta's own `scheme` attribute
+                            // (e.g. "onix:codelist5") over its text value (e.g. "15").
+                            // This matches go-toolkit which stores the codelist URI as Scheme.
+                            if let Some(s) = props.get("identifier-type-scheme") {
+                                raw.scheme = Some(s.clone());
+                            } else if let Some(itype) = props.get("identifier-type") {
+                                raw.scheme = Some(itype.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Find which entry is the primary unique identifier.
+            // unique_id_ref == None means the OPF has no unique-identifier pointer
+            // (technically invalid but common in malformed EPUB 2 files).
+            let primary_idx = unique_id_ref.as_deref().and_then(|uid| {
+                raw_identifiers
+                    .iter()
+                    .position(|r| r.id.as_deref() == Some(uid))
+            });
+
+            // If no pointer match, fall back to the first entry (go-toolkit lines 550-552).
+            let primary_idx = primary_idx.unwrap_or(0);
+
+            book.metadata.identifier =
+                Some(raw_identifiers[primary_idx].value.clone());
+
+            // Everything else becomes an AltIdentifier.
+            for (i, raw) in raw_identifiers.into_iter().enumerate() {
+                if i == primary_idx {
+                    continue;
+                }
+                let alt = match raw.scheme {
+                    Some(s) => crate::model::AltIdentifier::WithScheme {
+                        value: raw.value,
+                        scheme: s,
+                    },
+                    None => crate::model::AltIdentifier::Simple(raw.value),
+                };
+                book.metadata.alt_identifiers.push(alt);
+            }
+        }
+
         Ok(book)
+
     }
 }
 
@@ -1335,5 +1473,180 @@ mod tests {
         let v10_aa = A11yProfile::from_opf_value(A11yProfile::A10_WCAG_20_AA).unwrap();
         assert!(a < aa, "2.0 A should rank below 2.2 AA");
         assert!(v10_aa < a, "1.0 AA should rank below 1.1 A");
+    }
+
+    // ── Identifier helpers ────────────────────────────────────────────────────
+
+    /// Build a minimal EPUB with a custom `unique-identifier` attribute on `<package>`.
+    fn epub_with_opf(unique_id_attr: &str, metadata_xml: &str) -> Vec<u8> {
+        let opf = format!(
+            "<?xml version=\"1.0\"?>\n\
+             <package version=\"3.0\" xmlns=\"http://www.idpf.org/2007/opf\" {unique_id_attr}>\n\
+               <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n\
+                         xmlns:opf=\"http://www.idpf.org/2007/opf\">\n\
+                 {metadata_xml}\n\
+               </metadata>\n\
+               <manifest/>\n\
+               <spine/>\n\
+             </package>",
+        );
+        let container = b"<?xml version=\"1.0\"?>\n\
+            <container version=\"1.0\"\n\
+            \n  xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n\
+              <rootfiles>\n\
+                <rootfile full-path=\"content.opf\"\n\
+            \n              media-type=\"application/oebps-package+xml\"/>\n\
+              </rootfiles>\n\
+            </container>";
+
+        let mut buf = Vec::new();
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("META-INF/container.xml", stored).unwrap();
+        zip.write_all(container).unwrap();
+        zip.start_file("content.opf", stored).unwrap();
+        zip.write_all(opf.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        buf
+    }
+
+    // ── Identifier: unique-identifier pointer selects correct primary ─────────
+
+    #[test]
+    fn test_identifier_unique_by_id() {
+        // OPF with three dc:identifier elements; unique-identifier points to "pub-id"
+        // which is the second one.  Matches the go-toolkit identifier-unique.opf fixture.
+        let bytes = epub_with_opf(
+            r#"unique-identifier="pub-id""#,
+            r#"<dc:title>Test</dc:title>
+               <dc:identifier>   </dc:identifier>
+               <dc:identifier id="isbn">978-3-16-148410-0</dc:identifier>
+               <dc:identifier id="pub-id">urn:uuid:2</dc:identifier>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        // Primary identifier must be the element matched by unique-identifier
+        assert_eq!(
+            book.metadata.identifier.as_deref(),
+            Some("urn:uuid:2"),
+            "primary identifier must follow unique-identifier pointer"
+        );
+        // The ISBN becomes an AltIdentifier (empty dc:identifier is dropped)
+        assert_eq!(book.metadata.alt_identifiers.len(), 1);
+        assert_eq!(book.metadata.alt_identifiers[0].value(), "978-3-16-148410-0");
+        assert!(book.metadata.alt_identifiers[0].scheme().is_none());
+    }
+
+    // ── Identifier: fallback to first when no unique-identifier ──────────────
+
+    #[test]
+    fn test_identifier_fallback_to_first() {
+        // No unique-identifier attribute; first dc:identifier should become primary.
+        let bytes = epub_with_opf(
+            "", // no unique-identifier
+            r#"<dc:title>Test</dc:title>
+               <dc:identifier>urn:uuid:first</dc:identifier>
+               <dc:identifier>urn:uuid:second</dc:identifier>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.identifier.as_deref(), Some("urn:uuid:first"));
+        assert_eq!(book.metadata.alt_identifiers.len(), 1);
+        assert_eq!(book.metadata.alt_identifiers[0].value(), "urn:uuid:second");
+    }
+
+    // ── Identifier: EPUB 2 opf:scheme attribute preserved ────────────────────
+
+    #[test]
+    fn test_identifier_epub2_scheme() {
+        // EPUB 2 uses opf:scheme attribute to annotate the identifier type.
+        let bytes = epub_with_opf(
+            r#"unique-identifier="book-id""#,
+            r#"<dc:title>Test</dc:title>
+               <dc:identifier id="book-id">urn:uuid:primary</dc:identifier>
+               <dc:identifier opf:scheme="ISBN">978-0-306-40615-7</dc:identifier>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.identifier.as_deref(), Some("urn:uuid:primary"));
+        assert_eq!(book.metadata.alt_identifiers.len(), 1);
+        assert_eq!(book.metadata.alt_identifiers[0].value(), "978-0-306-40615-7");
+        assert_eq!(book.metadata.alt_identifiers[0].scheme(), Some("ISBN"));
+    }
+
+    // ── Identifier: EPUB 3 identifier-type refinement back-filled ────────────
+
+    #[test]
+    fn test_identifier_epub3_type_refines() {
+        // EPUB 3 refines an alt identifier with its type via identifier-type property.
+        let bytes = epub_with_opf(
+            r#"unique-identifier="pub-id""#,
+            "<dc:title>Test</dc:title>\n\
+               <dc:identifier id=\"pub-id\">urn:uuid:main</dc:identifier>\n\
+               <dc:identifier id=\"isbn-id\">978-3-16-148410-0</dc:identifier>\n\
+               <meta refines=\"#isbn-id\" property=\"identifier-type\" scheme=\"onix:codelist5\">15</meta>",
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.identifier.as_deref(), Some("urn:uuid:main"));
+        assert_eq!(book.metadata.alt_identifiers.len(), 1);
+        // scheme should be back-filled from identifier-type refinement
+        assert_eq!(book.metadata.alt_identifiers[0].scheme(), Some("onix:codelist5"));
+    }
+
+
+    // ── Identifier: empty/whitespace-only elements are filtered ──────────────
+
+    #[test]
+    fn test_identifier_empty_filtered() {
+        // An empty dc:identifier element must be silently ignored.
+        let bytes = epub_with_opf(
+            r#"unique-identifier="pub-id""#,
+            r#"<dc:title>Test</dc:title>
+               <dc:identifier>   </dc:identifier>
+               <dc:identifier id="pub-id">urn:uuid:real</dc:identifier>"#,
+        );
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        assert_eq!(book.metadata.identifier.as_deref(), Some("urn:uuid:real"));
+        assert!(
+            book.metadata.alt_identifiers.is_empty(),
+            "empty identifier must not appear in alt_identifiers"
+        );
+    }
+
+    // ── AltIdentifier: serde bare-string form (no scheme) ────────────────────
+
+    #[test]
+    fn test_alt_identifier_serde_no_scheme() {
+        let alt = crate::model::AltIdentifier::Simple("urn:isbn:9780306406157".to_string());
+        let json = serde_json::to_string(&alt).unwrap();
+        assert_eq!(json, r#""urn:isbn:9780306406157""#);
+
+        let back: crate::model::AltIdentifier = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.value(), "urn:isbn:9780306406157");
+        assert!(back.scheme().is_none());
+    }
+
+    // ── AltIdentifier: serde object form (with scheme) ────────────────────────
+
+    #[test]
+    fn test_alt_identifier_serde_with_scheme() {
+        let alt = crate::model::AltIdentifier::WithScheme {
+            value: "978-3-16-148410-0".to_string(),
+            scheme: "ISBN".to_string(),
+        };
+        let json = serde_json::to_string(&alt).unwrap();
+        assert_eq!(json, r#"{"value":"978-3-16-148410-0","scheme":"ISBN"}"#);
+
+        let back: crate::model::AltIdentifier = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.value(), "978-3-16-148410-0");
+        assert_eq!(back.scheme(), Some("ISBN"));
     }
 }
