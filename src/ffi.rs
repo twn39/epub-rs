@@ -548,6 +548,7 @@ pub unsafe extern "C" fn epub_get_resource(
 ///     "spine_index": 1,
 ///     "steps": [{"node_type": "element", "index": 2, "id": "section1"}, ...],
 ///     "xpath": "//*[@id='section1']/...",
+///     "xpath_ns_agnostic": "//*[local-name()][position()=...]",
 ///     "id_shortcut": "para5",
 ///     "character_offset": 3,
 ///     "is_text_node": true

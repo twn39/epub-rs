@@ -81,6 +81,11 @@ pub struct CfiResolved {
     /// Equivalent to epub.js `stepsToXpath(steps)`.
     pub xpath: String,
 
+    /// Fully namespace-agnostic XPath expression (using `*[local-name()]` to ignore
+    /// any default XML/XHTML namespaces like `xmlns="http://www.w3.org/1999/xhtml"`).
+    /// Safe for JSDOM or environments without a registered namespace resolver.
+    pub xpath_ns_agnostic: String,
+
     /// The `id` attribute of the **deepest** element step that carries an assertion.
     /// Enables an O(1) `getElementById()` shortcut.
     /// When set, JS can jump directly to this element and skip earlier steps.
@@ -361,6 +366,7 @@ impl CfiPath {
         // *[N] and text()[N] both use 1-based positions.
         // *[N] counts ELEMENT siblings only — correct for CFI semantics.
         let mut xpath_parts: Vec<String> = vec![".".into(), "*".into()];
+        let mut xpath_ns_agnostic_parts: Vec<String> = vec![".".into(), "*[local-name()]".into()];
 
         for step in steps {
             let pos = step.child_index() + 1; // 1-based for XPath
@@ -368,15 +374,18 @@ impl CfiPath {
             if step.is_text_node() {
                 // text()[N] — XPath can address text nodes directly
                 xpath_parts.push(format!("text()[{pos}]"));
+                xpath_ns_agnostic_parts.push(format!("text()[{pos}]"));
                 // text steps carry no id; stop XPath building here
             } else {
                 if let Some(ref id) = step.assertion {
                     // epub.js: "*[position()=N and @id='id']"
                     xpath_parts.push(format!("*[position()={pos} and @id='{id}']"));
+                    xpath_ns_agnostic_parts.push(format!("*[local-name()][position()={pos} and @id='{id}']"));
                     // Track the deepest id for the getElementById shortcut
                     id_shortcut = Some(id.clone());
                 } else {
                     xpath_parts.push(format!("*[{pos}]"));
+                    xpath_ns_agnostic_parts.push(format!("*[local-name()][{pos}]"));
                 }
             }
 
@@ -391,6 +400,7 @@ impl CfiPath {
             character_offset: self.character_offset,
             is_text_node,
             xpath: xpath_parts.join("/"),
+            xpath_ns_agnostic: xpath_ns_agnostic_parts.join("/"),
             id_shortcut,
             side: self.side.clone(),
             temporal_offset: self.temporal_offset,
@@ -1131,6 +1141,10 @@ mod tests {
             resolved.xpath,
             "./*/*[position()=2 and @id='body01']/*[position()=5 and @id='para05']/*[1]"
         );
+        assert_eq!(
+            resolved.xpath_ns_agnostic,
+            "./*[local-name()]/*[local-name()][position()=2 and @id='body01']/*[local-name()][position()=5 and @id='para05']/*[local-name()][1]"
+        );
         // id_shortcut: deepest id (para05, not body01)
         assert_eq!(resolved.id_shortcut, Some("para05".into()));
         assert!(!resolved.is_text_node);
@@ -1167,6 +1181,7 @@ mod tests {
 
         // XPath ends with text()[1]
         assert!(resolved.xpath.ends_with("/text()[1]"));
+        assert!(resolved.xpath_ns_agnostic.ends_with("/text()[1]"));
         // is_text_node must be true
         assert!(resolved.is_text_node);
         // character_offset propagated

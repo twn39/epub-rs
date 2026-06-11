@@ -312,6 +312,7 @@ impl EpubParser {
 ///     "spine_index": 1,
 ///     "steps": [{"node_type": "element", "index": 1, "id": "body01"}, ...],
 ///     "xpath": ".//p[@id='para05']",
+///     "xpath_ns_agnostic": ".//*[local-name()][position()=...]",
 ///     "id_shortcut": "para05",
 ///     "character_offset": 3,
 ///     "is_text_node": true
