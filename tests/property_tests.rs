@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Property-based tests using `proptest`.
 //!
 //! Each test asserts an invariant that must hold for ALL inputs,

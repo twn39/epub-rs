@@ -433,7 +433,7 @@ impl fmt::Display for CfiPath {
 }
 
 /// Represents a Canonical Fragment Identifier (CFI), which can be a single point or a range.
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(clippy::large_enum_variant)] // Range is intentionally larger: it holds 3 paths
 pub enum EpubCfi {
     /// A single point in the EPUB.

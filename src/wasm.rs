@@ -23,11 +23,7 @@ pub struct EpubParser {
 // `wasm-bindgen` only processes methods inside `#[wasm_bindgen] impl` blocks.
 impl EpubParser {
     /// Lazily parse the OPF on first call; subsequent calls return the cached result.
-    ///
-    /// Mirrors `EpubHandle::ensure_parsed()` in `ffi.rs`. Returns `&EpubBook` directly
-    /// so public methods can access the book without an inline `if self.book.is_none()`
-    /// block, reducing 8 copies of the same 3-line lazy-init pattern to a single call.
-    fn ensure_parsed(&mut self) -> Result<&EpubBook, JsValue> {
+    fn ensure_parsed(&mut self) -> Result<(), JsValue> {
         if self.book.is_none() {
             self.book = Some(
                 self.archive
@@ -35,7 +31,7 @@ impl EpubParser {
                     .map_err(|e| JsValue::from_str(&e.to_string()))?,
             );
         }
-        Ok(self.book.as_ref().unwrap())
+        Ok(())
     }
 }
 
@@ -57,7 +53,8 @@ impl EpubParser {
     /// This returns a JavaScript object representing the `EpubBook` model.
     #[wasm_bindgen]
     pub fn parse(&mut self) -> Result<JsValue, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         serde_wasm_bindgen::to_value(book).map_err(|e| e.to_string().into())
     }
 
@@ -88,10 +85,11 @@ impl EpubParser {
     /// Returns a JS Array where [0] is the Uint8Array of the image bytes, and [1] is the MIME type string.
     #[wasm_bindgen]
     pub fn get_cover_image(&mut self) -> Result<js_sys::Array, JsValue> {
-        let book = self.ensure_parsed()?.clone();
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let (bytes, mime) = self
             .archive
-            .get_cover_image(&book)
+            .get_cover_image(book)
             .map_err(|e| e.to_string())?;
 
         let uint8arr = js_sys::Uint8Array::from(&bytes[..]);
@@ -106,7 +104,8 @@ impl EpubParser {
     /// Retrieve the Table of Contents (TOC) of the EPUB.
     #[wasm_bindgen]
     pub fn get_toc(&mut self) -> Result<JsValue, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let toc = self.archive.get_toc(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&toc).map_err(|e| e.to_string().into())
     }
@@ -144,7 +143,8 @@ impl EpubParser {
     /// For chapter-grouped positions use `positions_by_reading_order` instead.
     #[wasm_bindgen]
     pub fn generate_locations(&mut self, bytes_per_position: usize) -> Result<JsValue, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let locations = self
             .archive
             .generate_locations(book, bytes_per_position)
@@ -164,7 +164,8 @@ impl EpubParser {
         &mut self,
         bytes_per_position: usize,
     ) -> Result<JsValue, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let strategy = crate::parser::ArchiveEntryLength {
             page_length: if bytes_per_position == 0 {
                 crate::parser::BYTES_PER_POSITION
@@ -198,7 +199,8 @@ impl EpubParser {
     /// - `landmarks` — Structural navigation points (epub:type="landmarks"; empty for EPUB 2)
     #[wasm_bindgen]
     pub fn get_navigation(&mut self) -> Result<JsValue, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let nav = self
             .archive
             .get_navigation(book)
@@ -216,7 +218,8 @@ impl EpubParser {
     /// Returns `[]` if no page list is present (page lists are optional per EPUB spec).
     #[wasm_bindgen]
     pub fn get_page_list(&mut self) -> Result<JsValue, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let nav = self
             .archive
             .get_navigation(book)
@@ -238,7 +241,8 @@ impl EpubParser {
         &mut self,
         bytes_per_position: usize,
     ) -> Result<JsValue, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let index = self
             .archive
             .generate_location_index(book, bytes_per_position)
@@ -262,7 +266,8 @@ impl EpubParser {
     /// **Algorithm**: O(|cfi_str|) — direct mathematical computation, no binary search.
     #[wasm_bindgen]
     pub fn location_from_cfi(&mut self, cfi_str: &str) -> Result<i64, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let index = self
             .archive
             .generate_location_index(book, 0)
@@ -279,7 +284,8 @@ impl EpubParser {
     /// O(1) — direct array access.
     #[wasm_bindgen]
     pub fn cfi_from_location(&mut self, idx: usize) -> Result<Option<String>, JsValue> {
-        let book = self.ensure_parsed()?;
+        self.ensure_parsed()?;
+        let book = self.book.as_ref().unwrap();
         let index = self
             .archive
             .generate_location_index(book, 0)
@@ -300,27 +306,31 @@ impl EpubParser {
 ///
 /// JSON shape:
 ///
-///     {
-///       "start": {
-///         "spine_index": 1,
-///         "steps": [{"node_type": "element", "index": 1, "id": "body01"}, ...],
-///         "xpath": ".//p[@id='para05']",
-///         "id_shortcut": "para05",
-///         "character_offset": 3,
-///         "is_text_node": true
-///       },
-///       "end": null
-///     }
+/// ```json
+/// {
+///   "start": {
+///     "spine_index": 1,
+///     "steps": [{"node_type": "element", "index": 1, "id": "body01"}, ...],
+///     "xpath": ".//p[@id='para05']",
+///     "id_shortcut": "para05",
+///     "character_offset": 3,
+///     "is_text_node": true
+///   },
+///   "end": null
+/// }
+/// ```
 ///
 /// JS usage example:
 ///
-///     const result = resolve_cfi("epubcfi(/6/4[ch1]!/4[body]/10[p5]/2/1:3)");
-///     const { start } = result;
-///     let node = start.id_shortcut
-///       ? doc.getElementById(start.id_shortcut)
-///       : doc.evaluate(start.xpath, doc, null, 9, null).singleNodeValue;
-///     if (start.is_text_node && start.character_offset != null)
-///       range.setStart(node, start.character_offset);
+/// ```javascript
+/// const result = resolve_cfi("epubcfi(/6/4[ch1]!/4[body]/10[p5]/2/1:3)");
+/// const { start } = result;
+/// let node = start.id_shortcut
+///   ? doc.getElementById(start.id_shortcut)
+///   : doc.evaluate(start.xpath, doc, null, 9, null).singleNodeValue;
+/// if (start.is_text_node && start.character_offset != null)
+///   range.setStart(node, start.character_offset);
+/// ```
 ///
 /// **Why no CSS selector?** `*:nth-child(N)` counts all sibling nodes (including
 /// text nodes), while CFI indices count only element siblings via `parent.children`.
@@ -658,7 +668,7 @@ mod tests {
         assert!(!bytes.is_empty(), "Generated EPUB should not be empty");
 
         // Now, pass the bytes into the parser
-        let parser = EpubParser::new(&bytes);
+        let mut parser = EpubParser::new(&bytes).unwrap();
 
         // Parse metadata into a JS object
         let book_js_val = parser.parse().expect("Failed to parse the generated EPUB");
@@ -728,7 +738,7 @@ mod tests {
         let bytes = generator
             .generate()
             .expect("Failed to generate EPUB with advanced metadata");
-        let parser = EpubParser::new(&bytes);
+        let mut parser = EpubParser::new(&bytes).unwrap();
         let book_js = parser.parse().unwrap();
 
         // We verify that the metadata survived the roundtrip
@@ -740,7 +750,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_wasm_cfi_utilities() {
         let start_cfi = "epubcfi(/6/4[chap01ref]!/4[body01]/10[para05]/2/1:3)";
-        let end_cfi = "epubcfi(/6/4[chap01ref]!/4[body01]/10[para05],/2/1:1,/3:4)";
+        let end_cfi = "epubcfi(/6/4[chap01ref]!/4[body01]/10[para05]/2/1:6)";
 
         // Compare same strings
         let cmp = compare_cfi(start_cfi, start_cfi).unwrap();
@@ -807,7 +817,7 @@ mod tests {
 
         // Generate the EPUB byte array
         let bytes = generator.generate().expect("Failed to generate EPUB bytes");
-        let parser = EpubParser::new(&bytes);
+        let mut parser = EpubParser::new(&bytes).unwrap();
         parser.parse().unwrap();
 
         // Note: The generator prefixes "OEBPS/" automatically for resources and chapters
@@ -889,7 +899,7 @@ mod tests {
         );
 
         let bytes = generator.generate().expect("Failed to generate EPUB bytes");
-        let parser = EpubParser::new(&bytes);
+        let mut parser = EpubParser::new(&bytes).unwrap();
 
         // Generate locations using 512 bytes per position (small value to ensure multiple positions)
         let locations_js = parser

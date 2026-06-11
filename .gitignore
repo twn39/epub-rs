@@ -24,3 +24,5 @@ Cargo.lock
 ebooks/
 pkg
 node_modules
+.codegraph
+AGENTS.md

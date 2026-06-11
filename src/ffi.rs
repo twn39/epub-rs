@@ -63,24 +63,11 @@ pub struct EpubHandle {
 
 impl EpubHandle {
     /// Lazily parse the OPF on first call; subsequent calls return the cached result.
-    ///
-    /// Returns `&EpubBook` directly so callers can use the book **without cloning**:
-    ///
-    /// ```rust,ignore
-    /// let book = match h.ensure_parsed() {
-    ///     Ok(b) => b,
-    ///     Err(e) => { set_error(e); return ptr::null_mut(); }
-    /// };
-    /// h.archive.some_method(book)   // &mut h.archive + &h.book — disjoint, allowed by NLL
-    /// ```
-    ///
-    /// Rust's NLL (Non-Lexical Lifetimes) permits `&mut h.archive` and `&h.book`
-    /// simultaneously because they are distinct fields of `EpubHandle`.
-    fn ensure_parsed(&mut self) -> Result<&EpubBook, String> {
+    fn ensure_parsed(&mut self) -> Result<(), String> {
         if self.book.is_none() {
             self.book = Some(self.archive.parse().map_err(|e| e.to_string())?);
         }
-        Ok(self.book.as_ref().unwrap())
+        Ok(())
     }
 }
 
@@ -246,7 +233,7 @@ pub unsafe extern "C" fn epub_parse(handle: *mut EpubHandle) -> *mut c_char {
     };
 
     match h.ensure_parsed() {
-        Ok(book) => to_json(book),
+        Ok(()) => to_json(h.book.as_ref().unwrap()),
         Err(e) => {
             set_error(e);
             ptr::null_mut()
