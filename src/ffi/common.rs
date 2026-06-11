@@ -26,6 +26,126 @@ pub(crate) fn clear_error() {
     });
 }
 
+// ── FFI Error and Panic Boundary Wrapper ────────────────────────────────────────
+
+pub(crate) enum FfiError {
+    Str(&'static str),
+    String(String),
+    Epub(crate::error::EpubError),
+    Json(serde_json::Error),
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for FfiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FfiError::Str(s) => write!(f, "{}", s),
+            FfiError::String(s) => write!(f, "{}", s),
+            FfiError::Epub(e) => write!(f, "{}", e),
+            FfiError::Json(e) => write!(f, "{}", e),
+            FfiError::Io(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl From<&'static str> for FfiError {
+    fn from(s: &'static str) -> Self {
+        FfiError::Str(s)
+    }
+}
+
+impl From<String> for FfiError {
+    fn from(s: String) -> Self {
+        FfiError::String(s)
+    }
+}
+
+impl From<crate::error::EpubError> for FfiError {
+    fn from(e: crate::error::EpubError) -> Self {
+        FfiError::Epub(e)
+    }
+}
+
+impl From<serde_json::Error> for FfiError {
+    fn from(e: serde_json::Error) -> Self {
+        FfiError::Json(e)
+    }
+}
+
+impl From<std::io::Error> for FfiError {
+    fn from(e: std::io::Error) -> Self {
+        FfiError::Io(e)
+    }
+}
+
+pub(crate) fn catch_ffi_result<T, F>(default: T, f: F) -> T
+where
+    F: FnOnce() -> Result<T, FfiError> + std::panic::UnwindSafe,
+{
+    clear_error();
+    match std::panic::catch_unwind(f) {
+        Ok(Ok(val)) => val,
+        Ok(Err(err)) => {
+            set_error(err.to_string());
+            default
+        }
+        Err(panic_err) => {
+            let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                *s
+            } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                s.as_str()
+            } else {
+                "Unknown panic in FFI boundary"
+            };
+            set_error(format!("Panic: {}", msg));
+            default
+        }
+    }
+}
+
+pub(crate) fn catch_ffi_void<F>(f: F)
+where
+    F: FnOnce() -> Result<(), FfiError> + std::panic::UnwindSafe,
+{
+    clear_error();
+    match std::panic::catch_unwind(f) {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            set_error(err.to_string());
+        }
+        Err(panic_err) => {
+            let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                *s
+            } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                s.as_str()
+            } else {
+                "Unknown panic in FFI boundary"
+            };
+            set_error(format!("Panic: {}", msg));
+        }
+    }
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! ffi_boundary {
+    ($default:expr, $body:block) => {
+        $crate::ffi::common::catch_ffi_result($default, ::std::panic::AssertUnwindSafe(|| -> Result<_, $crate::ffi::common::FfiError> {
+            $body
+        }))
+    };
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! ffi_boundary_void {
+    ($body:block) => {
+        $crate::ffi::common::catch_ffi_void(::std::panic::AssertUnwindSafe(|| -> Result<(), $crate::ffi::common::FfiError> {
+            $body
+        }))
+    };
+}
+
 // ── Opaque handles ────────────────────────────────────────────────────────────
 
 /// Opaque EPUB archive handle.

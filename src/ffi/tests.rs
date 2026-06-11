@@ -214,3 +214,100 @@ fn test_generator_validate_fails_when_empty() {
     );
     unsafe { epub_generator_free(handle) };
 }
+
+// ── FFI Error and Panic Safety Tests ──────────────────────────────────────────
+
+#[test]
+fn test_catch_ffi_result_normal_error() {
+    let default_val = 999;
+    let res = catch_ffi_result(default_val, || -> Result<i32, FfiError> {
+        Err(FfiError::Str("explicit error message"))
+    });
+    assert_eq!(res, default_val);
+    let last_err_ptr = epub_last_error();
+    assert!(!last_err_ptr.is_null());
+    let last_err = unsafe { std::ffi::CStr::from_ptr(last_err_ptr) }.to_string_lossy();
+    assert_eq!(last_err, "explicit error message");
+}
+
+#[test]
+fn test_catch_ffi_result_panic_safety() {
+    let default_val = 999;
+    let res = catch_ffi_result(default_val, || -> Result<i32, FfiError> {
+        panic!("something went wrong!");
+    });
+    assert_eq!(res, default_val);
+    let last_err_ptr = epub_last_error();
+    assert!(!last_err_ptr.is_null());
+    let last_err = unsafe { std::ffi::CStr::from_ptr(last_err_ptr) }.to_string_lossy();
+    assert!(
+        last_err.contains("Panic: something went wrong!"),
+        "expected panic message, got: {last_err}"
+    );
+}
+
+#[test]
+fn test_catch_ffi_void_normal_error() {
+    catch_ffi_void(|| -> Result<(), FfiError> {
+        Err(FfiError::Str("explicit void error"))
+    });
+    let last_err_ptr = epub_last_error();
+    assert!(!last_err_ptr.is_null());
+    let last_err = unsafe { std::ffi::CStr::from_ptr(last_err_ptr) }.to_string_lossy();
+    assert_eq!(last_err, "explicit void error");
+}
+
+#[test]
+fn test_catch_ffi_void_panic_safety() {
+    catch_ffi_void(|| -> Result<(), FfiError> {
+        panic!("void panic!");
+    });
+    let last_err_ptr = epub_last_error();
+    assert!(!last_err_ptr.is_null());
+    let last_err = unsafe { std::ffi::CStr::from_ptr(last_err_ptr) }.to_string_lossy();
+    assert!(
+        last_err.contains("Panic: void panic!"),
+        "expected panic message, got: {last_err}"
+    );
+}
+
+#[test]
+fn test_generator_consumed_errors() {
+    let handle = epub_generator_new();
+    assert!(!handle.is_null());
+
+    let title = std::ffi::CString::new("Valid Title").unwrap();
+    let lang = std::ffi::CString::new("en").unwrap();
+    let id = std::ffi::CString::new("urn:uuid:test").unwrap();
+    let href = std::ffi::CString::new("text/ch1.xhtml").unwrap();
+    let ch_id = std::ffi::CString::new("ch1").unwrap();
+    let body = std::ffi::CString::new("<html><body><p>Hello</p></body></html>").unwrap();
+
+    unsafe { epub_generator_set_title(handle, title.as_ptr()) };
+    unsafe { epub_generator_set_language(handle, lang.as_ptr()) };
+    unsafe { epub_generator_set_identifier(handle, id.as_ptr()) };
+    unsafe { epub_generator_add_chapter(handle, ch_id.as_ptr(), href.as_ptr(), body.as_ptr()) };
+
+    let mut out_len = 0;
+    let bytes_ptr = unsafe { epub_generator_build(handle, &mut out_len) };
+    assert!(!bytes_ptr.is_null());
+    assert!(out_len > 0);
+
+    // Now the generator has been consumed. Any subsequent call on `handle` should return an error gracefully.
+    let ok = unsafe { epub_generator_validate(handle) };
+    assert_eq!(ok, 0, "validate on consumed handle should return 0");
+    let err_ptr = epub_last_error();
+    assert!(!err_ptr.is_null());
+    let err_str = unsafe { std::ffi::CStr::from_ptr(err_ptr) }.to_string_lossy();
+    assert!(err_str.contains("generator already consumed"));
+
+    // Set title on consumed handle should also report error instead of panicking
+    unsafe { epub_generator_set_title(handle, title.as_ptr()) };
+    let err_ptr2 = epub_last_error();
+    assert!(!err_ptr2.is_null());
+    let err_str2 = unsafe { std::ffi::CStr::from_ptr(err_ptr2) }.to_string_lossy();
+    assert!(err_str2.contains("generator already consumed"));
+
+    unsafe { epub_free_bytes(bytes_ptr, out_len) };
+    unsafe { epub_generator_free(handle) };
+}
