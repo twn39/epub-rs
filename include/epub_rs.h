@@ -52,6 +52,50 @@ typedef struct EpubGeneratorHandle EpubGeneratorHandle;
 typedef struct epub_t epub_t;
 
 /**
+ * Free an EPUB handle.
+ *
+ * Safe to call with `NULL` (no-op). After this call the pointer is invalid.
+ *
+ * # Safety
+ * `handle` must either be `NULL` or a pointer previously returned by an
+ * `epub_open*` function that has not yet been freed.
+ */
+void epub_free(struct epub_t *handle);
+
+/**
+ * Return the error message from the most recent failed call on this thread.
+ *
+ * Returns `NULL` if the last call succeeded.
+ * The returned pointer is valid until the next FFI call on the same thread.
+ * Do **not** free this pointer — it is thread-local storage.
+ */
+const char *epub_last_error(void);
+
+/**
+ * Free a `char *` returned by any epub-rs function.
+ *
+ * Safe to call with `NULL` (no-op).
+ *
+ * # Safety
+ * `s` must either be `NULL` or a pointer previously returned by an epub-rs
+ * function that returns `char *`, and must not have been freed already.
+ */
+void epub_free_string(char *s);
+
+/**
+ * Free a byte buffer returned by any epub-rs function.
+ *
+ * `buf` must be the pointer and `len` must be the exact length originally
+ * written to the `out_len` parameter. Safe to call with a `NULL` `buf` (no-op).
+ *
+ * # Safety
+ * `buf` must either be `NULL` or a pointer previously returned by an epub-rs
+ * function that returns `uint8_t *`, paired with the matching `len`.
+ * Must not have been freed already.
+ */
+void epub_free_bytes(unsigned char *buf, size_t len);
+
+/**
  * Open an EPUB from a byte buffer.
  *
  * `data` must point to at least `len` bytes of a valid ZIP/EPUB file.
@@ -74,17 +118,6 @@ struct epub_t *epub_open(const unsigned char *data, size_t len);
  * `path` must be a valid null-terminated C string.
  */
 struct epub_t *epub_open_file(const char *path);
-
-/**
- * Free an EPUB handle.
- *
- * Safe to call with `NULL` (no-op). After this call the pointer is invalid.
- *
- * # Safety
- * `handle` must either be `NULL` or a pointer previously returned by an
- * `epub_open*` function that has not yet been freed.
- */
-void epub_free(struct epub_t *handle);
 
 /**
  * Parse the EPUB and return book metadata as a JSON string.
@@ -199,67 +232,6 @@ unsigned char *epub_get_cover_image(struct epub_t *handle, size_t *out_len, char
 unsigned char *epub_get_resource(struct epub_t *handle, const char *href, size_t *out_len);
 
 /**
- * Resolve a CFI string to a structured DOM location descriptor.
- *
- * This is a **stateless** function — it does not require a loaded EPUB handle.
- *
- * JSON shape:
- * ```json
- * {
- *   "start": {
- *     "spine_index": 1,
- *     "steps": [{"node_type": "element", "index": 2, "id": "section1"}, ...],
- *     "xpath": "//*[@id='section1']/...",
- *     "id_shortcut": "para5",
- *     "character_offset": 3,
- *     "is_text_node": true
- *   },
- *   "end": null
- * }
- * ```
- *
- * The caller must free the returned string with `epub_free_string()`.
- * Returns `NULL` on failure — call `epub_last_error()` for details.
- *
- * # Safety
- * `cfi_str` must be a valid null-terminated C string.
- */
-char *epub_resolve_cfi(const char *cfi_str);
-
-/**
- * Return the error message from the most recent failed call on this thread.
- *
- * Returns `NULL` if the last call succeeded.
- * The returned pointer is valid until the next FFI call on the same thread.
- * Do **not** free this pointer — it is thread-local storage.
- */
-const char *epub_last_error(void);
-
-/**
- * Free a `char *` returned by any epub-rs function.
- *
- * Safe to call with `NULL` (no-op).
- *
- * # Safety
- * `s` must either be `NULL` or a pointer previously returned by an epub-rs
- * function that returns `char *`, and must not have been freed already.
- */
-void epub_free_string(char *s);
-
-/**
- * Free a byte buffer returned by any epub-rs function.
- *
- * `buf` must be the pointer and `len` must be the exact length originally
- * written to the `out_len` parameter. Safe to call with a `NULL` `buf` (no-op).
- *
- * # Safety
- * `buf` must either be `NULL` or a pointer previously returned by an epub-rs
- * function that returns `uint8_t *`, paired with the matching `len`.
- * Must not have been freed already.
- */
-void epub_free_bytes(unsigned char *buf, size_t len);
-
-/**
  * Return the raw bytes of a manifest resource identified by its manifest **ID**.
  *
  * On success returns a pointer to `*out_len` bytes. Free with `epub_free_bytes(ptr, *out_len)`.
@@ -325,9 +297,6 @@ char *epub_generate_locations(struct epub_t *handle, size_t bytes_per_position);
  * `epub_generate_locations`. The returned array can be passed as `positions_json`
  * to `epub_location_from_cfi` and `epub_cfi_from_location`.
  *
- * The difference from `epub_generate_locations` is semantic: this function
- * is designed to be paired with the lookup functions below.
- *
  * `bytes_per_position`: pass `0` to use the Readium default of 1024 bytes.
  * The caller must free the returned string with `epub_free_string()`.
  *
@@ -348,9 +317,6 @@ char *epub_generate_location_index(struct epub_t *handle, size_t bytes_per_posit
  *
  * The caller must free the returned string with `epub_free_string()`.
  *
- * **Algorithm**: O(|cfi_str|) — parses the CFI once, then uses integer arithmetic
- * on pre-computed chapter offsets. No binary search.
- *
  * # Safety
  * - `handle` must be a valid non-null pointer obtained from `epub_open*`.
  * - `positions_json` and `cfi_str` must be valid null-terminated C strings.
@@ -368,58 +334,11 @@ char *epub_location_from_cfi(struct epub_t *handle,
  * Returns the CFI string (e.g. `"epubcfi(/6/4!/4/2)"`), or `NULL` if `idx`
  * is out of range. The caller must free with `epub_free_string()`.
  *
- * O(1) — direct array access.
- *
  * # Safety
  * - `handle` must be a valid non-null pointer obtained from `epub_open*`.
  * - `positions_json` must be a valid null-terminated C string.
  */
 char *epub_cfi_from_location(struct epub_t *handle, const char *positions_json, size_t idx);
-
-/**
- * Compare two CFI strings numerically per the EPUB CFI spec.
- *
- * Returns: `-1` if `cfi_a < cfi_b`, `0` if equal, `1` if `cfi_a > cfi_b`.
- * On parse error returns `INT32_MIN` and sets `epub_last_error()`.
- *
- * # Safety
- * Both `cfi_a` and `cfi_b` must be valid null-terminated C strings.
- */
-int32_t epub_compare_cfi(const char *cfi_a, const char *cfi_b);
-
-/**
- * Combine two Point CFIs into a spec-compliant range CFI string.
- *
- * Output format: `epubcfi(shared,start_local,end_local)`.
- * The caller must free the returned string with `epub_free_string()`.
- * Returns `NULL` on failure.
- *
- * # Safety
- * Both `start_cfi` and `end_cfi` must be valid null-terminated C strings.
- */
-char *epub_generate_cfi_range(const char *start_cfi, const char *end_cfi);
-
-/**
- * Decrypt an obfuscated font file (IDPF or Adobe algorithm).
- *
- * - `data` / `len`: encrypted font bytes.
- * - `epub_identifier`: the EPUB's unique identifier string (null-terminated).
- * - `is_idpf`: `1` for IDPF algorithm, `0` for Adobe.
- * - `out_len`: receives the number of decrypted bytes.
- *
- * Returns a pointer to decrypted bytes. Free with `epub_free_bytes(ptr, *out_len)`.
- * Returns `NULL` on failure.
- *
- * # Safety
- * - `data` must point to at least `len` readable bytes.
- * - `epub_identifier` and must be valid null-terminated C strings.
- * - `out_len` must be a valid non-null writable pointer.
- */
-unsigned char *epub_decrypt_font(const unsigned char *data,
-                                 size_t len,
-                                 const char *epub_identifier,
-                                 int32_t is_idpf,
-                                 size_t *out_len);
 
 /**
  * Create a new EPUB generator.
@@ -617,5 +536,79 @@ int32_t epub_generator_validate(struct EpubGeneratorHandle *handle);
  * `handle` must be a valid non-null pointer; `out_len` must be a valid non-null writable pointer.
  */
 unsigned char *epub_generator_build(struct EpubGeneratorHandle *handle, size_t *out_len);
+
+/**
+ * Resolve a CFI string to a structured DOM location descriptor.
+ *
+ * This is a **stateless** function — it does not require a loaded EPUB handle.
+ *
+ * JSON shape:
+ * ```json
+ * {
+ *   "start": {
+ *     "spine_index": 1,
+ *     "steps": [{"node_type": "element", "index": 2, "id": "section1"}, ...],
+ *     "xpath": "//*[@id='section1']/...",
+ *     "xpath_ns_agnostic": "//*[local-name()][position()=...]",
+ *     "id_shortcut": "para5",
+ *     "character_offset": 3,
+ *     "is_text_node": true
+ *   },
+ *   "end": null
+ * }
+ * ```
+ *
+ * The caller must free the returned string with `epub_free_string()`.
+ * Returns `NULL` on failure — call `epub_last_error()` for details.
+ *
+ * # Safety
+ * `cfi_str` must be a valid null-terminated C string.
+ */
+char *epub_resolve_cfi(const char *cfi_str);
+
+/**
+ * Compare two CFI strings numerically per the EPUB CFI spec.
+ *
+ * Returns: `-1` if `cfi_a < cfi_b`, `0` if equal, `1` if `cfi_a > cfi_b`.
+ * On parse error returns `INT32_MIN` and sets `epub_last_error()`.
+ *
+ * # Safety
+ * Both `cfi_a` and `cfi_b` must be valid null-terminated C strings.
+ */
+int32_t epub_compare_cfi(const char *cfi_a, const char *cfi_b);
+
+/**
+ * Combine two Point CFIs into a spec-compliant range CFI string.
+ *
+ * Output format: `epubcfi(shared,start_local,end_local)`.
+ * The caller must free the returned string with `epub_free_string()`.
+ * Returns `NULL` on failure.
+ *
+ * # Safety
+ * Both `start_cfi` and `end_cfi` must be valid null-terminated C strings.
+ */
+char *epub_generate_cfi_range(const char *start_cfi, const char *end_cfi);
+
+/**
+ * Decrypt an obfuscated font file (IDPF or Adobe algorithm).
+ *
+ * - `data` / `len`: encrypted font bytes.
+ * - `epub_identifier`: the EPUB's unique identifier string (null-terminated).
+ * - `is_idpf`: `1` for IDPF algorithm, `0` for Adobe.
+ * - `out_len`: receives the number of decrypted bytes.
+ *
+ * Returns a pointer to decrypted bytes. Free with `epub_free_bytes(ptr, *out_len)`.
+ * Returns `NULL` on failure.
+ *
+ * # Safety
+ * - `data` must point to at least `len` readable bytes.
+ * - `epub_identifier` and must be valid null-terminated C strings.
+ * - `out_len` must be a valid non-null writable pointer.
+ */
+unsigned char *epub_decrypt_font(const unsigned char *data,
+                                 size_t len,
+                                 const char *epub_identifier,
+                                 int32_t is_idpf,
+                                 size_t *out_len);
 
 #endif  /* EPUB_RS_H */
