@@ -15,6 +15,7 @@ use crate::model::EpubBook;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::provider::DirProvider;
 use crate::provider::{EpubProvider, ZipProvider};
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Seek};
 
 // Re-export public types that were previously in parser.rs top-level
@@ -28,13 +29,27 @@ pub use positions::{
 /// A struct that handles unpacking and parsing EPUB files.
 pub struct EpubArchive<P: EpubProvider> {
     pub provider: P,
+    /// Decrypted/decompressed resource cache.
+    cache: HashMap<String, Vec<u8>>,
+    /// Tracks insertion order/access order for eviction (LRU).
+    cache_order: VecDeque<String>,
+    /// Current total size of elements in the cache in bytes.
+    current_cache_size: usize,
+    /// Maximum size of cache in bytes.
+    max_cache_size_bytes: usize,
 }
 
 impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
     /// Create a new `EpubArchive` from a generic reader containing a ZIP file.
     pub fn new(reader: R) -> Result<Self, EpubError> {
         let provider = ZipProvider::new(reader)?;
-        Ok(Self { provider })
+        Ok(Self {
+            provider,
+            cache: HashMap::new(),
+            cache_order: VecDeque::new(),
+            current_cache_size: 0,
+            max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
+        })
     }
 }
 
@@ -43,13 +58,29 @@ impl EpubArchive<DirProvider> {
     /// Create a new `EpubArchive` from an unzipped local directory.
     pub fn from_dir<P: AsRef<std::path::Path>>(path: P) -> Self {
         let provider = DirProvider::new(path);
-        Self { provider }
+        Self {
+            provider,
+            cache: HashMap::new(),
+            cache_order: VecDeque::new(),
+            current_cache_size: 0,
+            max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
+        }
     }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 impl<P: EpubProvider> EpubArchive<P> {
+    /// Create a new `EpubArchive` from a custom provider (mainly for testing).
+    pub fn new_with_provider(provider: P) -> Self {
+        Self {
+            provider,
+            cache: HashMap::new(),
+            cache_order: VecDeque::new(),
+            current_cache_size: 0,
+            max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
+        }
+    }
     /// Returns all renditions declared in `META-INF/container.xml`.
     ///
     /// Per OCF §3.5.1 the **first** entry is the *default rendition* and must be processed
@@ -199,16 +230,76 @@ impl<P: EpubProvider> EpubArchive<P> {
             Self::normalize_path(&book.opf_dir, href)
         };
 
-        let file = self.provider.read_file(&zip_path)?;
+        // 1. Check if the resource is in the cache (Cache Hit)
+        if self.cache.contains_key(&zip_path) {
+            // Update LRU access order by moving this key to the back of the queue
+            if let Some(pos) = self.cache_order.iter().position(|k| k == &zip_path) {
+                self.cache_order.remove(pos);
+            }
+            self.cache_order.push_back(zip_path.clone());
 
-        // Wrap with deobfuscating reader if this file is encrypted
-        if let Some(enc) = book.encryptions.get(&zip_path) {
-            let identifier = book.metadata.identifier.as_deref().unwrap_or("");
-            let deobfuscated =
-                crate::crypto::DeobfuscatingReader::new(file, identifier, enc.algorithm);
-            Ok(Box::new(deobfuscated))
+            let cached = self.cache.get(&zip_path).unwrap();
+            return Ok(Box::new(std::io::Cursor::new(cached.as_slice())));
+        }
+
+        // 2. Cache Miss: Query the length and check if we should cache it
+        let length = self.provider.entry_length(&zip_path).unwrap_or(0) as usize;
+        let max_cache_size = 2 * 1024 * 1024; // 2MB file size limit for caching
+
+        if length <= max_cache_size {
+            // Read, decompress, and decrypt/deobfuscate the resource
+            let file = self.provider.read_file(&zip_path)?;
+            let mut bytes = Vec::new();
+            let mut buf_reader = file;
+            buf_reader.read_to_end(&mut bytes)?;
+
+            let decrypted = if let Some(enc) = book.encryptions.get(&zip_path) {
+                let identifier = book.metadata.identifier.as_deref().unwrap_or("");
+                let mut deobfuscated = crate::crypto::DeobfuscatingReader::new(
+                    Box::new(std::io::Cursor::new(bytes)),
+                    identifier,
+                    enc.algorithm,
+                );
+                let mut dec_bytes = Vec::new();
+                deobfuscated.read_to_end(&mut dec_bytes)?;
+                dec_bytes
+            } else {
+                bytes
+            };
+
+            let decrypted_len = decrypted.len();
+
+            // Perform LRU eviction if caching this item would exceed the total cache limit
+            while self.current_cache_size + decrypted_len > self.max_cache_size_bytes
+                && !self.cache_order.is_empty()
+            {
+                let oldest = self.cache_order.pop_front().unwrap();
+                if let Some(old_bytes) = self.cache.remove(&oldest) {
+                    self.current_cache_size -= old_bytes.len();
+                }
+            }
+
+            // Insert into the cache and update the LRU order
+            self.current_cache_size += decrypted_len;
+            self.cache.insert(zip_path.clone(), decrypted);
+            self.cache_order.push_back(zip_path.clone());
+
+            let cached = self.cache.get(&zip_path).unwrap();
+            Ok(Box::new(std::io::Cursor::new(cached.as_slice())))
         } else {
-            Ok(file)
+            // 3. Bypass cache for files exceeding the size limit
+            let file = self.provider.read_file(&zip_path)?;
+            if let Some(enc) = book.encryptions.get(&zip_path) {
+                let identifier = book.metadata.identifier.as_deref().unwrap_or("");
+                let deobfuscated = crate::crypto::DeobfuscatingReader::new(
+                    file,
+                    identifier,
+                    enc.algorithm,
+                );
+                Ok(Box::new(deobfuscated))
+            } else {
+                Ok(file)
+            }
         }
     }
 
@@ -475,8 +566,6 @@ impl<P: EpubProvider> EpubArchive<P> {
         }))
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
-
     /// Normalizes an EPUB path by resolving `.` and `..` relative segments.
     pub(crate) fn normalize_path(base: &str, href: &str) -> String {
         let mut parts = Vec::new();
@@ -493,5 +582,181 @@ impl<P: EpubProvider> EpubArchive<P> {
         }
 
         parts.join("/")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::EpubBook;
+    use crate::provider::EpubProvider;
+    use std::io::Read;
+
+    struct MockProvider {
+        files: HashMap<String, Vec<u8>>,
+    }
+
+    impl EpubProvider for MockProvider {
+        fn read_file<'a>(&'a mut self, path: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
+            match self.files.get(path) {
+                Some(bytes) => Ok(Box::new(std::io::Cursor::new(bytes.clone()))),
+                None => Err(EpubError::InvalidFormat(format!("File not found: {}", path))),
+            }
+        }
+
+        fn entry_length(&mut self, path: &str) -> Result<u64, EpubError> {
+            match self.files.get(path) {
+                Some(bytes) => Ok(bytes.len() as u64),
+                None => Ok(0),
+            }
+        }
+    }
+
+    fn make_test_book() -> EpubBook {
+        EpubBook {
+            metadata: crate::model::Metadata::default(),
+            manifest: HashMap::new(),
+            spine: Vec::new(),
+            opf_dir: String::new(),
+            toc_id: None,
+            encryptions: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_cache_hit_and_lru_order() {
+        let mut files = HashMap::new();
+        files.insert("a.xhtml".to_string(), vec![1; 10]);
+        files.insert("b.xhtml".to_string(), vec![2; 20]);
+
+        let provider = MockProvider { files };
+        let mut archive = EpubArchive::new_with_provider(provider);
+        archive.max_cache_size_bytes = 100;
+
+        let book = make_test_book();
+
+        // 1. Initial read of A (cache miss)
+        {
+            let mut r1 = archive.read_resource_by_href(&book, "a.xhtml").unwrap();
+            let mut content1 = Vec::new();
+            r1.read_to_end(&mut content1).unwrap();
+            assert_eq!(content1, vec![1; 10]);
+        }
+        assert_eq!(archive.current_cache_size, 10);
+        assert_eq!(archive.cache_order, vec!["a.xhtml".to_string()]);
+        assert!(archive.cache.contains_key("a.xhtml"));
+
+        // 2. Initial read of B (cache miss)
+        {
+            let mut r2 = archive.read_resource_by_href(&book, "b.xhtml").unwrap();
+            let mut content2 = Vec::new();
+            r2.read_to_end(&mut content2).unwrap();
+            assert_eq!(content2, vec![2; 20]);
+        }
+        assert_eq!(archive.current_cache_size, 30);
+        assert_eq!(
+            archive.cache_order,
+            vec!["a.xhtml".to_string(), "b.xhtml".to_string()]
+        );
+
+        // 3. Read A again (cache hit - should update LRU order to move A to the back)
+        {
+            let mut r3 = archive.read_resource_by_href(&book, "a.xhtml").unwrap();
+            let mut content3 = Vec::new();
+            r3.read_to_end(&mut content3).unwrap();
+            assert_eq!(content3, vec![1; 10]);
+        }
+        assert_eq!(archive.current_cache_size, 30);
+        assert_eq!(
+            archive.cache_order,
+            vec!["b.xhtml".to_string(), "a.xhtml".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_cache_lru_eviction() {
+        let mut files = HashMap::new();
+        files.insert("a.xhtml".to_string(), vec![1; 10]);
+        files.insert("b.xhtml".to_string(), vec![2; 20]);
+        files.insert("c.xhtml".to_string(), vec![3; 30]);
+
+        let provider = MockProvider { files };
+        let mut archive = EpubArchive::new_with_provider(provider);
+        // Set maximum cache size limit such that we can hold A and B (30 bytes),
+        // but adding C (30 bytes) will exceed it (total 60 bytes > 45 bytes).
+        archive.max_cache_size_bytes = 45;
+
+        let book = make_test_book();
+
+        // Cache A
+        {
+            let _ = archive.read_resource_by_href(&book, "a.xhtml").unwrap();
+        }
+        // Cache B
+        {
+            let _ = archive.read_resource_by_href(&book, "b.xhtml").unwrap();
+        }
+
+        assert_eq!(archive.current_cache_size, 30);
+        assert_eq!(
+            archive.cache_order,
+            vec!["a.xhtml".to_string(), "b.xhtml".to_string()]
+        );
+
+        // Read C: C has size 30.
+        // current_cache_size (30) + 30 = 60 > 45.
+        // Eviction happens:
+        // 1. Evicts oldest ("a.xhtml" - 10 bytes). Remaining size = 20.
+        // 2. 20 + 30 = 50 > 45. Evicts next oldest ("b.xhtml" - 20 bytes). Remaining size = 0.
+        // 3. 0 + 30 = 30 <= 45. Cache C.
+        {
+            let mut r = archive.read_resource_by_href(&book, "c.xhtml").unwrap();
+            let mut content = Vec::new();
+            r.read_to_end(&mut content).unwrap();
+            assert_eq!(content, vec![3; 30]);
+        }
+
+        assert_eq!(archive.current_cache_size, 30);
+        assert_eq!(archive.cache_order, vec!["c.xhtml".to_string()]);
+        assert!(!archive.cache.contains_key("a.xhtml"));
+        assert!(!archive.cache.contains_key("b.xhtml"));
+        assert!(archive.cache.contains_key("c.xhtml"));
+    }
+
+    #[test]
+    fn test_cache_bypass_large_file() {
+        let mut files = HashMap::new();
+        // 2.1 MB file (> 2MB limit)
+        let large_size = 2 * 1024 * 1024 + 100 * 1024;
+        files.insert("large.xhtml".to_string(), vec![9; large_size]);
+        files.insert("small.xhtml".to_string(), vec![1; 10]);
+
+        let provider = MockProvider { files };
+        let mut archive = EpubArchive::new_with_provider(provider);
+        archive.max_cache_size_bytes = 5 * 1024 * 1024; // 5MB limit
+
+        let book = make_test_book();
+
+        // 1. Read large file -> should bypass cache
+        {
+            let mut r1 = archive.read_resource_by_href(&book, "large.xhtml").unwrap();
+            let mut content1 = Vec::new();
+            r1.read_to_end(&mut content1).unwrap();
+            assert_eq!(content1.len(), large_size);
+        }
+        assert_eq!(archive.current_cache_size, 0);
+        assert!(archive.cache.is_empty());
+        assert!(archive.cache_order.is_empty());
+
+        // 2. Read small file -> should be cached
+        {
+            let mut r2 = archive.read_resource_by_href(&book, "small.xhtml").unwrap();
+            let mut content2 = Vec::new();
+            r2.read_to_end(&mut content2).unwrap();
+            assert_eq!(content2, vec![1; 10]);
+        }
+        assert_eq!(archive.current_cache_size, 10);
+        assert_eq!(archive.cache_order, vec!["small.xhtml".to_string()]);
+        assert!(archive.cache.contains_key("small.xhtml"));
     }
 }

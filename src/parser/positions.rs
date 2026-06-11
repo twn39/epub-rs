@@ -727,9 +727,7 @@ mod tests {
     fn positions_single_chapter_invariants() {
         let book = make_book(1, LayoutType::Reflowable);
         // 1 chapter, file size = 2048 bytes → 2 positions at 1024 bytes/pos
-        let mut archive = super::super::EpubArchive {
-            provider: FixedLengthProvider(2048),
-        };
+        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(2048));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let positions = archive
             .positions_by_reading_order(&book, &strategy)
@@ -744,9 +742,7 @@ mod tests {
     fn positions_multi_chapter_invariants() {
         let book = make_book(3, LayoutType::Reflowable);
         // 3 chapters, each 3072 bytes → 3 positions each → 9 total
-        let mut archive = super::super::EpubArchive {
-            provider: FixedLengthProvider(3072),
-        };
+        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(3072));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let positions = archive
             .positions_by_reading_order(&book, &strategy)
@@ -767,9 +763,7 @@ mod tests {
     fn positions_fixed_layout_always_one_per_chapter() {
         let book = make_book(4, LayoutType::PrePaginated);
         // Even with huge files, fixed-layout = 1 position per chapter
-        let mut archive = super::super::EpubArchive {
-            provider: FixedLengthProvider(1_000_000),
-        };
+        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(1_000_000));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let positions = archive
             .positions_by_reading_order(&book, &strategy)
@@ -792,9 +786,7 @@ mod tests {
         let mut book = make_book(3, LayoutType::Reflowable);
         book.spine[1].linear = false;
 
-        let mut archive = super::super::EpubArchive {
-            provider: FixedLengthProvider(1024),
-        };
+        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(1024));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let positions = archive
             .positions_by_reading_order(&book, &strategy)
@@ -808,9 +800,7 @@ mod tests {
     #[test]
     fn positions_cfi_format_first_position() {
         let book = make_book(1, LayoutType::Reflowable);
-        let mut archive = super::super::EpubArchive {
-            provider: FixedLengthProvider(2048),
-        };
+        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(2048));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let positions = archive
             .positions_by_reading_order(&book, &strategy)
@@ -839,9 +829,7 @@ mod tests {
         // Each chapter is `positions_per_chapter * 1024` bytes with 1024 bytes/position.
         let byte_len = (positions_per_chapter * 1024) as u64;
         let book = make_book(n_chapters, LayoutType::Reflowable);
-        let mut archive = super::super::EpubArchive {
-            provider: FixedLengthProvider(byte_len),
-        };
+        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(byte_len));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let by_chapter = archive
             .positions_by_reading_order(&book, &strategy)
@@ -947,9 +935,7 @@ mod tests {
         // spine_index=1 is non-linear and not included in the index.
         let mut book = make_book(3, LayoutType::Reflowable);
         book.spine[1].linear = false;
-        let mut archive = super::super::EpubArchive {
-            provider: FixedLengthProvider(1024),
-        };
+        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(1024));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let by_chapter = archive
             .positions_by_reading_order(&book, &strategy)
