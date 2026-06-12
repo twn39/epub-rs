@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::os::raw::{c_char, c_uchar};
 use std::ptr;
 
-use crate::ffi::common::{into_c_string, into_raw_bytes, to_json, EpubHandle};
+use crate::ffi::common::{EpubHandle, into_c_string, into_raw_bytes, to_json};
 use crate::ffi_boundary;
 use crate::parser::EpubArchive;
 
@@ -455,7 +455,9 @@ pub unsafe extern "C" fn epub_location_from_cfi(
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_location_from_cfi: null handle")?;
         if positions_json.is_null() || cfi_str.is_null() {
-            return Err("epub_location_from_cfi: positions_json and cfi_str must be non-null".into());
+            return Err(
+                "epub_location_from_cfi: positions_json and cfi_str must be non-null".into(),
+            );
         }
 
         h.ensure_parsed()?;
@@ -512,7 +514,8 @@ pub unsafe extern "C" fn epub_cfi_from_location(
             None => Err(format!(
                 "epub_cfi_from_location: index {idx} out of range (total={})",
                 index.len()
-            ).into()),
+            )
+            .into()),
         }
     })
 }

@@ -130,9 +130,12 @@ where
 #[doc(hidden)]
 macro_rules! ffi_boundary {
     ($default:expr, $body:block) => {
-        $crate::ffi::common::catch_ffi_result($default, ::std::panic::AssertUnwindSafe(|| -> Result<_, $crate::ffi::common::FfiError> {
-            $body
-        }))
+        $crate::ffi::common::catch_ffi_result(
+            $default,
+            ::std::panic::AssertUnwindSafe(|| -> Result<_, $crate::ffi::common::FfiError> {
+                $body
+            }),
+        )
     };
 }
 
@@ -140,9 +143,9 @@ macro_rules! ffi_boundary {
 #[doc(hidden)]
 macro_rules! ffi_boundary_void {
     ($body:block) => {
-        $crate::ffi::common::catch_ffi_void(::std::panic::AssertUnwindSafe(|| -> Result<(), $crate::ffi::common::FfiError> {
-            $body
-        }))
+        $crate::ffi::common::catch_ffi_void(::std::panic::AssertUnwindSafe(
+            || -> Result<(), $crate::ffi::common::FfiError> { $body },
+        ))
     };
 }
 

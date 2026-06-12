@@ -4,11 +4,11 @@
 //! C FFI bridge (Swift, Python/ctypes, Go/cgo, Kotlin/JNI, etc.) can use the
 //! library without Rust toolchain knowledge.
 
-pub mod common;
-pub mod parser;
-pub mod generator;
 pub mod cfi;
+pub mod common;
 pub mod crypto;
+pub mod generator;
+pub mod parser;
 
 #[cfg(test)]
 mod tests;

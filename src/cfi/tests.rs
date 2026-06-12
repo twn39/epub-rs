@@ -1,6 +1,5 @@
 use super::model::*;
 use super::parser::*;
-use crate::error::EpubError;
 use std::str::FromStr;
 
 #[test]

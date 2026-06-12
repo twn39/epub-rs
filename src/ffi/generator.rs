@@ -2,7 +2,7 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_uchar};
 use std::ptr;
 
-use crate::ffi::common::{into_raw_bytes, EpubGeneratorHandle};
+use crate::ffi::common::{EpubGeneratorHandle, into_raw_bytes};
 use crate::ffi_boundary;
 use crate::ffi_boundary_void;
 
@@ -46,7 +46,10 @@ pub unsafe extern "C" fn epub_generator_set_title(
             return Err("epub_generator_set_title: title pointer is null".into());
         }
         let s = unsafe { CStr::from_ptr(title) }.to_string_lossy();
-        let b = h.builder.as_mut().ok_or("epub_generator_set_title: generator already consumed")?;
+        let b = h
+            .builder
+            .as_mut()
+            .ok_or("epub_generator_set_title: generator already consumed")?;
         b.metadata.title = Some(s.into_owned());
         Ok(())
     })
@@ -67,7 +70,10 @@ pub unsafe extern "C" fn epub_generator_set_language(
             return Err("epub_generator_set_language: lang pointer is null".into());
         }
         let s = unsafe { CStr::from_ptr(lang) }.to_string_lossy();
-        let b = h.builder.as_mut().ok_or("epub_generator_set_language: generator already consumed")?;
+        let b = h
+            .builder
+            .as_mut()
+            .ok_or("epub_generator_set_language: generator already consumed")?;
         b.metadata.language = Some(s.into_owned());
         Ok(())
     })
@@ -88,7 +94,10 @@ pub unsafe extern "C" fn epub_generator_set_identifier(
             return Err("epub_generator_set_identifier: identifier pointer is null".into());
         }
         let s = unsafe { CStr::from_ptr(identifier) }.to_string_lossy();
-        let b = h.builder.as_mut().ok_or("epub_generator_set_identifier: generator already consumed")?;
+        let b = h
+            .builder
+            .as_mut()
+            .ok_or("epub_generator_set_identifier: generator already consumed")?;
         b.metadata.identifier = Some(s.into_owned());
         Ok(())
     })
@@ -120,7 +129,10 @@ pub unsafe extern "C" fn epub_generator_add_author(
                     .into_owned(),
             );
         }
-        let b = h.builder.as_mut().ok_or("epub_generator_add_author: generator already consumed")?;
+        let b = h
+            .builder
+            .as_mut()
+            .ok_or("epub_generator_add_author: generator already consumed")?;
         b.metadata.creators.push(creator);
         Ok(())
     })
@@ -149,8 +161,12 @@ pub unsafe extern "C" fn epub_generator_add_chapter(
         let id_s = unsafe { CStr::from_ptr(id) }.to_string_lossy();
         let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
         let html_s = unsafe { CStr::from_ptr(html) }.to_string_lossy();
-        let builder = h.builder.take().ok_or("epub_generator_add_chapter: generator already consumed")?;
-        h.builder = Some(builder.add_chapter(id_s.as_ref(), href_s.as_ref(), html_s.as_bytes().to_vec()));
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_add_chapter: generator already consumed")?;
+        h.builder =
+            Some(builder.add_chapter(id_s.as_ref(), href_s.as_ref(), html_s.as_bytes().to_vec()));
         Ok(())
     })
 }
@@ -168,7 +184,8 @@ pub unsafe extern "C" fn epub_generator_add_chapter_with_nav(
     html: *const c_char,
 ) {
     ffi_boundary_void!({
-        let h = unsafe { handle.as_mut() }.ok_or("epub_generator_add_chapter_with_nav: null handle")?;
+        let h =
+            unsafe { handle.as_mut() }.ok_or("epub_generator_add_chapter_with_nav: null handle")?;
         if id.is_null() || href.is_null() || title.is_null() || html.is_null() {
             return Err("epub_generator_add_chapter_with_nav: null pointer argument".into());
         }
@@ -176,7 +193,10 @@ pub unsafe extern "C" fn epub_generator_add_chapter_with_nav(
         let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
         let title_s = unsafe { CStr::from_ptr(title) }.to_string_lossy();
         let html_s = unsafe { CStr::from_ptr(html) }.to_string_lossy();
-        let builder = h.builder.take().ok_or("epub_generator_add_chapter_with_nav: generator already consumed")?;
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_add_chapter_with_nav: generator already consumed")?;
         h.builder = Some(builder.add_chapter_with_nav(
             id_s.as_ref(),
             href_s.as_ref(),
@@ -215,8 +235,12 @@ pub unsafe extern "C" fn epub_generator_add_resource(
         let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
         let mt_s = unsafe { CStr::from_ptr(media_type) }.to_string_lossy();
         let bytes = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
-        let builder = h.builder.take().ok_or("epub_generator_add_resource: generator already consumed")?;
-        h.builder = Some(builder.add_resource(id_s.as_ref(), href_s.as_ref(), mt_s.as_ref(), bytes));
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_add_resource: generator already consumed")?;
+        h.builder =
+            Some(builder.add_resource(id_s.as_ref(), href_s.as_ref(), mt_s.as_ref(), bytes));
         Ok(())
     })
 }
@@ -242,7 +266,10 @@ pub unsafe extern "C" fn epub_generator_set_cover(
         let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
         let mt_s = unsafe { CStr::from_ptr(media_type) }.to_string_lossy();
         let bytes = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
-        let builder = h.builder.take().ok_or("epub_generator_set_cover: generator already consumed")?;
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_set_cover: generator already consumed")?;
         h.builder = Some(builder.set_cover(href_s.as_ref(), mt_s.as_ref(), bytes));
         Ok(())
     })
@@ -269,7 +296,10 @@ pub unsafe extern "C" fn epub_generator_add_landmark(
         let et_s = unsafe { CStr::from_ptr(epub_type) }.to_string_lossy();
         let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
         let title_s = unsafe { CStr::from_ptr(title) }.to_string_lossy();
-        let builder = h.builder.take().ok_or("epub_generator_add_landmark: generator already consumed")?;
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_add_landmark: generator already consumed")?;
         h.builder = Some(builder.add_landmark(et_s.as_ref(), href_s.as_ref(), title_s.as_ref()));
         Ok(())
     })
@@ -292,7 +322,10 @@ pub unsafe extern "C" fn epub_generator_add_page(
         }
         let name_s = unsafe { CStr::from_ptr(name) }.to_string_lossy();
         let href_s = unsafe { CStr::from_ptr(href) }.to_string_lossy();
-        let builder = h.builder.take().ok_or("epub_generator_add_page: generator already consumed")?;
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_add_page: generator already consumed")?;
         h.builder = Some(builder.add_page(name_s.as_ref(), href_s.as_ref()));
         Ok(())
     })
@@ -325,7 +358,10 @@ pub unsafe extern "C" fn epub_generator_set_toc(
         }
         let json_str = unsafe { CStr::from_ptr(toc_json) }.to_string_lossy();
         let toc: Vec<crate::model::TocEntry> = serde_json::from_str(&json_str)?;
-        let builder = h.builder.take().ok_or("epub_generator_set_toc: generator already consumed")?;
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_set_toc: generator already consumed")?;
         h.builder = Some(builder.set_toc(toc));
         Ok(1)
     })
@@ -356,7 +392,10 @@ pub unsafe extern "C" fn epub_generator_set_metadata(
         }
         let json_str = unsafe { CStr::from_ptr(metadata_json) }.to_string_lossy();
         let metadata: crate::model::Metadata = serde_json::from_str(&json_str)?;
-        let builder = h.builder.take().ok_or("epub_generator_set_metadata: generator already consumed")?;
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_set_metadata: generator already consumed")?;
         h.builder = Some(builder.metadata(metadata));
         Ok(1)
     })
@@ -377,7 +416,10 @@ pub unsafe extern "C" fn epub_generator_set_metadata(
 pub unsafe extern "C" fn epub_generator_validate(handle: *mut EpubGeneratorHandle) -> i32 {
     ffi_boundary!(0, {
         let h = unsafe { handle.as_mut() }.ok_or("epub_generator_validate: null handle")?;
-        let builder = h.builder.as_ref().ok_or("epub_generator_validate: generator already consumed")?;
+        let builder = h
+            .builder
+            .as_ref()
+            .ok_or("epub_generator_validate: generator already consumed")?;
         builder.validate()?;
         Ok(1)
     })
@@ -402,7 +444,10 @@ pub unsafe extern "C" fn epub_generator_build(
         if out_len.is_null() {
             return Err("epub_generator_build: out_len is null".into());
         }
-        let builder = h.builder.take().ok_or("epub_generator_build: generator already consumed")?;
+        let builder = h
+            .builder
+            .take()
+            .ok_or("epub_generator_build: generator already consumed")?;
         let mut buf = std::io::Cursor::new(Vec::new());
         builder.generate(&mut buf)?;
         let bytes = buf.into_inner();

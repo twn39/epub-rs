@@ -1,7 +1,7 @@
-use super::common::*;
-use super::parser::*;
-use super::generator::*;
 use super::cfi::*;
+use super::common::*;
+use super::generator::*;
+use super::parser::*;
 use std::ptr;
 
 /// Minimal valid EPUB 2 fixture as a ZIP for smoke-testing the C API.
@@ -248,9 +248,7 @@ fn test_catch_ffi_result_panic_safety() {
 
 #[test]
 fn test_catch_ffi_void_normal_error() {
-    catch_ffi_void(|| -> Result<(), FfiError> {
-        Err(FfiError::Str("explicit void error"))
-    });
+    catch_ffi_void(|| -> Result<(), FfiError> { Err(FfiError::Str("explicit void error")) });
     let last_err_ptr = epub_last_error();
     assert!(!last_err_ptr.is_null());
     let last_err = unsafe { std::ffi::CStr::from_ptr(last_err_ptr) }.to_string_lossy();

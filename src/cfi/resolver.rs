@@ -1,8 +1,5 @@
-use crate::cfi::model::{
-    CfiPath, CfiResolution, CfiResolved, CfiStep, EpubCfi, ResolvedStep,
-};
+use crate::cfi::model::{CfiPath, CfiResolution, CfiResolved, CfiStep, EpubCfi, ResolvedStep};
 use crate::error::EpubError;
-
 
 impl CfiPath {
     /// Resolves the **local path** (steps after `!`) into a [`CfiResolved`] descriptor.
@@ -46,9 +43,8 @@ impl CfiPath {
                 if let Some(ref id) = step.assertion {
                     // epub.js: "*[position()=N and @id='id']"
                     xpath_parts.push(format!("*[position()={pos} and @id='{id}']"));
-                    xpath_ns_agnostic_parts.push(format!(
-                        "*[local-name()][position()={pos} and @id='{id}']"
-                    ));
+                    xpath_ns_agnostic_parts
+                        .push(format!("*[local-name()][position()={pos} and @id='{id}']"));
                     // Track the deepest id for the getElementById shortcut
                     id_shortcut = Some(id.clone());
                 } else {

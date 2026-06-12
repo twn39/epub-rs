@@ -763,7 +763,8 @@ mod tests {
     fn positions_fixed_layout_always_one_per_chapter() {
         let book = make_book(4, LayoutType::PrePaginated);
         // Even with huge files, fixed-layout = 1 position per chapter
-        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(1_000_000));
+        let mut archive =
+            super::super::EpubArchive::new_with_provider(FixedLengthProvider(1_000_000));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let positions = archive
             .positions_by_reading_order(&book, &strategy)
@@ -829,7 +830,8 @@ mod tests {
         // Each chapter is `positions_per_chapter * 1024` bytes with 1024 bytes/position.
         let byte_len = (positions_per_chapter * 1024) as u64;
         let book = make_book(n_chapters, LayoutType::Reflowable);
-        let mut archive = super::super::EpubArchive::new_with_provider(FixedLengthProvider(byte_len));
+        let mut archive =
+            super::super::EpubArchive::new_with_provider(FixedLengthProvider(byte_len));
         let strategy = ArchiveEntryLength { page_length: 1024 };
         let by_chapter = archive
             .positions_by_reading_order(&book, &strategy)

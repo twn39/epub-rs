@@ -1,6 +1,5 @@
 use std::fmt;
 
-
 /// Whether a CFI step targets an element node or a text node.
 ///
 /// From epub.js `parseStep`: even CFI indices = element, odd = text.
@@ -350,7 +349,12 @@ impl fmt::Display for CfiPath {
         }
         // Spatial offset: @x:y (CFI spec §3.1.6).
         if let Some(ref s) = self.spatial_offset {
-            write!(f, "@{}:{}", super::parser::format_cfi_number(s.x), super::parser::format_cfi_number(s.y))?;
+            write!(
+                f,
+                "@{}:{}",
+                super::parser::format_cfi_number(s.x),
+                super::parser::format_cfi_number(s.y)
+            )?;
         }
         // Emit :before / :after side-bias annotation when present.
         if let Some(ref side) = self.side {

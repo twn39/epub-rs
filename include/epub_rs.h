@@ -52,6 +52,58 @@ typedef struct EpubGeneratorHandle EpubGeneratorHandle;
 typedef struct epub_t epub_t;
 
 /**
+ * Resolve a CFI string to a structured DOM location descriptor.
+ *
+ * This is a **stateless** function — it does not require a loaded EPUB handle.
+ *
+ * JSON shape:
+ * ```json
+ * {
+ *   "start": {
+ *     "spine_index": 1,
+ *     "steps": [{"node_type": "element", "index": 2, "id": "section1"}, ...],
+ *     "xpath": "//*[@id='section1']/...",
+ *     "xpath_ns_agnostic": "//*[local-name()][position()=...]",
+ *     "id_shortcut": "para5",
+ *     "character_offset": 3,
+ *     "is_text_node": true
+ *   },
+ *   "end": null
+ * }
+ * ```
+ *
+ * The caller must free the returned string with `epub_free_string()`.
+ * Returns `NULL` on failure — call `epub_last_error()` for details.
+ *
+ * # Safety
+ * `cfi_str` must be a valid null-terminated C string.
+ */
+char *epub_resolve_cfi(const char *cfi_str);
+
+/**
+ * Compare two CFI strings numerically per the EPUB CFI spec.
+ *
+ * Returns: `-1` if `cfi_a < cfi_b`, `0` if equal, `1` if `cfi_a > cfi_b`.
+ * On parse error returns `INT32_MIN` and sets `epub_last_error()`.
+ *
+ * # Safety
+ * Both `cfi_a` and `cfi_b` must be valid null-terminated C strings.
+ */
+int32_t epub_compare_cfi(const char *cfi_a, const char *cfi_b);
+
+/**
+ * Combine two Point CFIs into a spec-compliant range CFI string.
+ *
+ * Output format: `epubcfi(shared,start_local,end_local)`.
+ * The caller must free the returned string with `epub_free_string()`.
+ * Returns `NULL` on failure.
+ *
+ * # Safety
+ * Both `start_cfi` and `end_cfi` must be valid null-terminated C strings.
+ */
+char *epub_generate_cfi_range(const char *start_cfi, const char *end_cfi);
+
+/**
  * Free an EPUB handle.
  *
  * Safe to call with `NULL` (no-op). After this call the pointer is invalid.
@@ -94,6 +146,225 @@ void epub_free_string(char *s);
  * Must not have been freed already.
  */
 void epub_free_bytes(unsigned char *buf, size_t len);
+
+/**
+ * Decrypt an obfuscated font file (IDPF or Adobe algorithm).
+ *
+ * - `data` / `len`: encrypted font bytes.
+ * - `epub_identifier`: the EPUB's unique identifier string (null-terminated).
+ * - `is_idpf`: `1` for IDPF algorithm, `0` for Adobe.
+ * - `out_len`: receives the number of decrypted bytes.
+ *
+ * Returns a pointer to decrypted bytes. Free with `epub_free_bytes(ptr, *out_len)`.
+ * Returns `NULL` on failure.
+ *
+ * # Safety
+ * - `data` must point to at least `len` readable bytes.
+ * - `epub_identifier` and must be valid null-terminated C strings.
+ * - `out_len` must be a valid non-null writable pointer.
+ */
+unsigned char *epub_decrypt_font(const unsigned char *data,
+                                 size_t len,
+                                 const char *epub_identifier,
+                                 int32_t is_idpf,
+                                 size_t *out_len);
+
+/**
+ * Create a new EPUB generator.
+ *
+ * Returns an opaque handle on success. Free with `epub_generator_free()`.
+ */
+struct EpubGeneratorHandle *epub_generator_new(void);
+
+/**
+ * Free an EPUB generator handle. Safe to call with `NULL`.
+ *
+ * # Safety
+ * `handle` must be `NULL` or a pointer from `epub_generator_new()` not yet freed.
+ */
+void epub_generator_free(struct EpubGeneratorHandle *handle);
+
+/**
+ * Set the EPUB title.
+ *
+ * # Safety
+ * `handle` and `title` must be valid non-null pointers.
+ */
+void epub_generator_set_title(struct EpubGeneratorHandle *handle, const char *title);
+
+/**
+ * Set the EPUB language (e.g. `"en"`, `"zh-CN"`).
+ *
+ * # Safety
+ * `handle` and `lang` must be valid non-null pointers.
+ */
+void epub_generator_set_language(struct EpubGeneratorHandle *handle, const char *lang);
+
+/**
+ * Set the EPUB unique identifier (e.g. UUID or ISBN).
+ *
+ * # Safety
+ * `handle` and `identifier` must be valid non-null pointers.
+ */
+void epub_generator_set_identifier(struct EpubGeneratorHandle *handle, const char *identifier);
+
+/**
+ * Add a creator/author to the EPUB metadata.
+ *
+ * `role` may be `NULL` (defaults to no role). Use standard MARC relator codes, e.g. `"aut"`.
+ *
+ * # Safety
+ * `handle` and `name` must be valid non-null pointers; `role` may be `NULL`.
+ */
+void epub_generator_add_author(struct EpubGeneratorHandle *handle,
+                               const char *name,
+                               const char *role);
+
+/**
+ * Add an HTML chapter to the EPUB manifest and spine.
+ *
+ * - `id`: unique manifest ID.
+ * - `href`: relative path within the EPUB (e.g. `"text/ch1.xhtml"`).
+ * - `html`: null-terminated UTF-8 HTML content.
+ *
+ * # Safety
+ * All pointers must be valid non-null null-terminated C strings.
+ */
+void epub_generator_add_chapter(struct EpubGeneratorHandle *handle,
+                                const char *id,
+                                const char *href,
+                                const char *html);
+
+/**
+ * Add an HTML chapter and simultaneously add it to the Table of Contents.
+ *
+ * # Safety
+ * All pointers must be valid non-null null-terminated C strings.
+ */
+void epub_generator_add_chapter_with_nav(struct EpubGeneratorHandle *handle,
+                                         const char *id,
+                                         const char *href,
+                                         const char *title,
+                                         const char *html);
+
+/**
+ * Add a binary resource (image, font, CSS, etc.) to the EPUB.
+ *
+ * - `id`: unique manifest ID.
+ * - `href`: relative path (e.g. `"images/cover.jpg"`).
+ * - `media_type`: MIME type (e.g. `"image/jpeg"`).
+ * - `data` / `len`: raw bytes.
+ *
+ * # Safety
+ * String pointers must be valid null-terminated C strings.
+ * `data` must point to at least `len` readable bytes.
+ */
+void epub_generator_add_resource(struct EpubGeneratorHandle *handle,
+                                 const char *id,
+                                 const char *href,
+                                 const char *media_type,
+                                 const unsigned char *data,
+                                 size_t len);
+
+/**
+ * Set the EPUB cover image.
+ *
+ * # Safety
+ * String pointers must be valid null-terminated C strings.
+ * `data` must point to at least `len` readable bytes.
+ */
+void epub_generator_set_cover(struct EpubGeneratorHandle *handle,
+                              const char *href,
+                              const char *media_type,
+                              const unsigned char *data,
+                              size_t len);
+
+/**
+ * Add a landmark (structural reference) to the EPUB navigation.
+ *
+ * `epub_type`: landmark type, e.g. `"cover"`, `"toc"`, `"bodymatter"`.
+ *
+ * # Safety
+ * All pointers must be valid non-null null-terminated C strings.
+ */
+void epub_generator_add_landmark(struct EpubGeneratorHandle *handle,
+                                 const char *epub_type,
+                                 const char *href,
+                                 const char *title);
+
+/**
+ * Add a page-list entry (print page mapping).
+ *
+ * # Safety
+ * `name` and `href` must be valid non-null null-terminated C strings.
+ */
+void epub_generator_add_page(struct EpubGeneratorHandle *handle,
+                             const char *name,
+                             const char *href);
+
+/**
+ * Set the complete Table of Contents from a JSON-encoded array of `TocEntry` objects.
+ *
+ * This replaces any TOC entries added by `epub_generator_add_chapter_with_nav()`.
+ * Accepts nested TOC trees (each `TocEntry` may have a `children` array).
+ *
+ * `toc_json` must be a valid null-terminated UTF-8 JSON string, e.g.:
+ * ```json
+ * [{"title":"Chapter 1","href":"text/ch1.xhtml","children":[]},
+ *  {"title":"Chapter 2","href":"text/ch2.xhtml","children":[
+ *    {"title":"Section 2.1","href":"text/ch2.xhtml#s1","children":[]}]}]
+ * ```
+ * Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
+ *
+ * # Safety
+ * `handle` and `toc_json` must be valid non-null pointers.
+ */
+int32_t epub_generator_set_toc(struct EpubGeneratorHandle *handle, const char *toc_json);
+
+/**
+ * Set all EPUB metadata at once from a JSON-encoded `Metadata` object.
+ *
+ * Replaces any individual metadata set by `epub_generator_set_title()`, etc.
+ * All fields are optional; missing fields in the JSON keep their default values.
+ *
+ * Example JSON:
+ * ```json
+ * {"title":"My Book","language":"en","creators":[{"name":"Alice","role":"aut"}]}
+ * ```
+ * Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
+ *
+ * # Safety
+ * `handle` and `metadata_json` must be valid non-null pointers.
+ */
+int32_t epub_generator_set_metadata(struct EpubGeneratorHandle *handle, const char *metadata_json);
+
+/**
+ * Validate the generator state without producing any output.
+ *
+ * Runs the same pre-flight checks as `epub_generator_build()` (required
+ * fields, non-empty spine, etc.) but does **not** consume the handle.
+ * The generator remains usable after this call.
+ *
+ * Returns `1` if the current state would produce a valid EPUB, `0` otherwise.
+ * On failure, `epub_last_error()` returns a human-readable description.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer.
+ */
+int32_t epub_generator_validate(struct EpubGeneratorHandle *handle);
+
+/**
+ * Build the EPUB archive and return it as a byte buffer.
+ *
+ * On success writes the EPUB byte count to `*out_len` and returns a pointer
+ * to the bytes. Free with `epub_free_bytes(ptr, *out_len)`.
+ * Returns `NULL` on failure. The generator handle is **consumed** by this call
+ * and must not be used again (it is freed internally).
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer; `out_len` must be a valid non-null writable pointer.
+ */
+unsigned char *epub_generator_build(struct EpubGeneratorHandle *handle, size_t *out_len);
 
 /**
  * Open an EPUB from a byte buffer.
@@ -339,276 +610,5 @@ char *epub_location_from_cfi(struct epub_t *handle,
  * - `positions_json` must be a valid null-terminated C string.
  */
 char *epub_cfi_from_location(struct epub_t *handle, const char *positions_json, size_t idx);
-
-/**
- * Create a new EPUB generator.
- *
- * Returns an opaque handle on success. Free with `epub_generator_free()`.
- */
-struct EpubGeneratorHandle *epub_generator_new(void);
-
-/**
- * Free an EPUB generator handle. Safe to call with `NULL`.
- *
- * # Safety
- * `handle` must be `NULL` or a pointer from `epub_generator_new()` not yet freed.
- */
-void epub_generator_free(struct EpubGeneratorHandle *handle);
-
-/**
- * Set the EPUB title.
- *
- * # Safety
- * `handle` and `title` must be valid non-null pointers.
- */
-void epub_generator_set_title(struct EpubGeneratorHandle *handle, const char *title);
-
-/**
- * Set the EPUB language (e.g. `"en"`, `"zh-CN"`).
- *
- * # Safety
- * `handle` and `lang` must be valid non-null pointers.
- */
-void epub_generator_set_language(struct EpubGeneratorHandle *handle, const char *lang);
-
-/**
- * Set the EPUB unique identifier (e.g. UUID or ISBN).
- *
- * # Safety
- * `handle` and `identifier` must be valid non-null pointers.
- */
-void epub_generator_set_identifier(struct EpubGeneratorHandle *handle, const char *identifier);
-
-/**
- * Add a creator/author to the EPUB metadata.
- *
- * `role` may be `NULL` (defaults to no role). Use standard MARC relator codes, e.g. `"aut"`.
- *
- * # Safety
- * `handle` and `name` must be valid non-null pointers; `role` may be `NULL`.
- */
-void epub_generator_add_author(struct EpubGeneratorHandle *handle,
-                               const char *name,
-                               const char *role);
-
-/**
- * Add an HTML chapter to the EPUB manifest and spine.
- *
- * - `id`: unique manifest ID.
- * - `href`: relative path within the EPUB (e.g. `"text/ch1.xhtml"`).
- * - `html`: null-terminated UTF-8 HTML content.
- *
- * # Safety
- * All pointers must be valid non-null null-terminated C strings.
- */
-void epub_generator_add_chapter(struct EpubGeneratorHandle *handle,
-                                const char *id,
-                                const char *href,
-                                const char *html);
-
-/**
- * Add an HTML chapter and simultaneously add it to the Table of Contents.
- *
- * # Safety
- * All pointers must be valid non-null null-terminated C strings.
- */
-void epub_generator_add_chapter_with_nav(struct EpubGeneratorHandle *handle,
-                                         const char *id,
-                                         const char *href,
-                                         const char *title,
-                                         const char *html);
-
-/**
- * Add a binary resource (image, font, CSS, etc.) to the EPUB.
- *
- * - `id`: unique manifest ID.
- * - `href`: relative path (e.g. `"images/cover.jpg"`).
- * - `media_type`: MIME type (e.g. `"image/jpeg"`).
- * - `data` / `len`: raw bytes.
- *
- * # Safety
- * String pointers must be valid null-terminated C strings.
- * `data` must point to at least `len` readable bytes.
- */
-void epub_generator_add_resource(struct EpubGeneratorHandle *handle,
-                                 const char *id,
-                                 const char *href,
-                                 const char *media_type,
-                                 const unsigned char *data,
-                                 size_t len);
-
-/**
- * Set the EPUB cover image.
- *
- * # Safety
- * String pointers must be valid null-terminated C strings.
- * `data` must point to at least `len` readable bytes.
- */
-void epub_generator_set_cover(struct EpubGeneratorHandle *handle,
-                              const char *href,
-                              const char *media_type,
-                              const unsigned char *data,
-                              size_t len);
-
-/**
- * Add a landmark (structural reference) to the EPUB navigation.
- *
- * `epub_type`: landmark type, e.g. `"cover"`, `"toc"`, `"bodymatter"`.
- *
- * # Safety
- * All pointers must be valid non-null null-terminated C strings.
- */
-void epub_generator_add_landmark(struct EpubGeneratorHandle *handle,
-                                 const char *epub_type,
-                                 const char *href,
-                                 const char *title);
-
-/**
- * Add a page-list entry (print page mapping).
- *
- * # Safety
- * `name` and `href` must be valid non-null null-terminated C strings.
- */
-void epub_generator_add_page(struct EpubGeneratorHandle *handle,
-                             const char *name,
-                             const char *href);
-
-/**
- * Set the complete Table of Contents from a JSON-encoded array of `TocEntry` objects.
- *
- * This replaces any TOC entries added by `epub_generator_add_chapter_with_nav()`.
- * Accepts nested TOC trees (each `TocEntry` may have a `children` array).
- *
- * `toc_json` must be a valid null-terminated UTF-8 JSON string, e.g.:
- * ```json
- * [{"title":"Chapter 1","href":"text/ch1.xhtml","children":[]},
- *  {"title":"Chapter 2","href":"text/ch2.xhtml","children":[
- *    {"title":"Section 2.1","href":"text/ch2.xhtml#s1","children":[]}]}]
- * ```
- * Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
- *
- * # Safety
- * `handle` and `toc_json` must be valid non-null pointers.
- */
-int32_t epub_generator_set_toc(struct EpubGeneratorHandle *handle, const char *toc_json);
-
-/**
- * Set all EPUB metadata at once from a JSON-encoded `Metadata` object.
- *
- * Replaces any individual metadata set by `epub_generator_set_title()`, etc.
- * All fields are optional; missing fields in the JSON keep their default values.
- *
- * Example JSON:
- * ```json
- * {"title":"My Book","language":"en","creators":[{"name":"Alice","role":"aut"}]}
- * ```
- * Returns `1` on success, `0` on failure (call `epub_last_error()` for details).
- *
- * # Safety
- * `handle` and `metadata_json` must be valid non-null pointers.
- */
-int32_t epub_generator_set_metadata(struct EpubGeneratorHandle *handle, const char *metadata_json);
-
-/**
- * Validate the generator state without producing any output.
- *
- * Runs the same pre-flight checks as `epub_generator_build()` (required
- * fields, non-empty spine, etc.) but does **not** consume the handle.
- * The generator remains usable after this call.
- *
- * Returns `1` if the current state would produce a valid EPUB, `0` otherwise.
- * On failure, `epub_last_error()` returns a human-readable description.
- *
- * # Safety
- * `handle` must be a valid non-null pointer.
- */
-int32_t epub_generator_validate(struct EpubGeneratorHandle *handle);
-
-/**
- * Build the EPUB archive and return it as a byte buffer.
- *
- * On success writes the EPUB byte count to `*out_len` and returns a pointer
- * to the bytes. Free with `epub_free_bytes(ptr, *out_len)`.
- * Returns `NULL` on failure. The generator handle is **consumed** by this call
- * and must not be used again (it is freed internally).
- *
- * # Safety
- * `handle` must be a valid non-null pointer; `out_len` must be a valid non-null writable pointer.
- */
-unsigned char *epub_generator_build(struct EpubGeneratorHandle *handle, size_t *out_len);
-
-/**
- * Resolve a CFI string to a structured DOM location descriptor.
- *
- * This is a **stateless** function — it does not require a loaded EPUB handle.
- *
- * JSON shape:
- * ```json
- * {
- *   "start": {
- *     "spine_index": 1,
- *     "steps": [{"node_type": "element", "index": 2, "id": "section1"}, ...],
- *     "xpath": "//*[@id='section1']/...",
- *     "xpath_ns_agnostic": "//*[local-name()][position()=...]",
- *     "id_shortcut": "para5",
- *     "character_offset": 3,
- *     "is_text_node": true
- *   },
- *   "end": null
- * }
- * ```
- *
- * The caller must free the returned string with `epub_free_string()`.
- * Returns `NULL` on failure — call `epub_last_error()` for details.
- *
- * # Safety
- * `cfi_str` must be a valid null-terminated C string.
- */
-char *epub_resolve_cfi(const char *cfi_str);
-
-/**
- * Compare two CFI strings numerically per the EPUB CFI spec.
- *
- * Returns: `-1` if `cfi_a < cfi_b`, `0` if equal, `1` if `cfi_a > cfi_b`.
- * On parse error returns `INT32_MIN` and sets `epub_last_error()`.
- *
- * # Safety
- * Both `cfi_a` and `cfi_b` must be valid null-terminated C strings.
- */
-int32_t epub_compare_cfi(const char *cfi_a, const char *cfi_b);
-
-/**
- * Combine two Point CFIs into a spec-compliant range CFI string.
- *
- * Output format: `epubcfi(shared,start_local,end_local)`.
- * The caller must free the returned string with `epub_free_string()`.
- * Returns `NULL` on failure.
- *
- * # Safety
- * Both `start_cfi` and `end_cfi` must be valid null-terminated C strings.
- */
-char *epub_generate_cfi_range(const char *start_cfi, const char *end_cfi);
-
-/**
- * Decrypt an obfuscated font file (IDPF or Adobe algorithm).
- *
- * - `data` / `len`: encrypted font bytes.
- * - `epub_identifier`: the EPUB's unique identifier string (null-terminated).
- * - `is_idpf`: `1` for IDPF algorithm, `0` for Adobe.
- * - `out_len`: receives the number of decrypted bytes.
- *
- * Returns a pointer to decrypted bytes. Free with `epub_free_bytes(ptr, *out_len)`.
- * Returns `NULL` on failure.
- *
- * # Safety
- * - `data` must point to at least `len` readable bytes.
- * - `epub_identifier` and must be valid null-terminated C strings.
- * - `out_len` must be a valid non-null writable pointer.
- */
-unsigned char *epub_decrypt_font(const unsigned char *data,
-                                 size_t len,
-                                 const char *epub_identifier,
-                                 int32_t is_idpf,
-                                 size_t *out_len);
 
 #endif  /* EPUB_RS_H */

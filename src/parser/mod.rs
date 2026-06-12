@@ -291,11 +291,8 @@ impl<P: EpubProvider> EpubArchive<P> {
             let file = self.provider.read_file(&zip_path)?;
             if let Some(enc) = book.encryptions.get(&zip_path) {
                 let identifier = book.metadata.identifier.as_deref().unwrap_or("");
-                let deobfuscated = crate::crypto::DeobfuscatingReader::new(
-                    file,
-                    identifier,
-                    enc.algorithm,
-                );
+                let deobfuscated =
+                    crate::crypto::DeobfuscatingReader::new(file, identifier, enc.algorithm);
                 Ok(Box::new(deobfuscated))
             } else {
                 Ok(file)
@@ -600,7 +597,10 @@ mod tests {
         fn read_file<'a>(&'a mut self, path: &str) -> Result<Box<dyn Read + 'a>, EpubError> {
             match self.files.get(path) {
                 Some(bytes) => Ok(Box::new(std::io::Cursor::new(bytes.clone()))),
-                None => Err(EpubError::InvalidFormat(format!("File not found: {}", path))),
+                None => Err(EpubError::InvalidFormat(format!(
+                    "File not found: {}",
+                    path
+                ))),
             }
         }
 
