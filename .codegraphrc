@@ -1,0 +1,17 @@
+{
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "target",
+    "third_party",
+    "node_modules",
+    "pkg",
+    "ebooks"
+  ],
+  "output": ".codegraph",
+  "languages": [
+    "rust"
+  ],
+  "cache": true
+}
