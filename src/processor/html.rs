@@ -368,6 +368,159 @@ fn scan_css_url_spans(css: &str) -> Vec<CssUrlSpan> {
     spans
 }
 
+/// Abstract trait representing a mutable HTML element.
+///
+/// Decouples the element mutation interface from concrete SAX/DOM parser libraries.
+pub trait HtmlElementMut {
+    /// Returns the element's tag name.
+    fn tag_name(&self) -> String;
+    /// Retrieves the value of an attribute.
+    fn get_attribute(&self, name: &str) -> Option<String>;
+    /// Sets the value of an attribute.
+    fn set_attribute(&mut self, name: &str, value: &str) -> Result<(), String>;
+}
+
+/// Thin adapter implementing `HtmlElementMut` on top of `lol_html::html_content::Element`.
+struct LolHtmlElement<'a, 'b, 'c> {
+    inner: &'a mut lol_html::html_content::Element<'b, 'c>,
+}
+
+impl<'a, 'b, 'c> HtmlElementMut for LolHtmlElement<'a, 'b, 'c> {
+    fn tag_name(&self) -> String {
+        self.inner.tag_name()
+    }
+
+    fn get_attribute(&self, name: &str) -> Option<String> {
+        self.inner.get_attribute(name)
+    }
+
+    fn set_attribute(&mut self, name: &str, value: &str) -> Result<(), String> {
+        self.inner
+            .set_attribute(name, value)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Parser-agnostic processor that encapsulates all URL-mapping and rewriting logic.
+pub struct UrlRewritingProcessor<F> {
+    base_dir: String,
+    resolver: F,
+}
+
+impl<F> UrlRewritingProcessor<F>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    pub fn process_element(&mut self, el: &mut dyn HtmlElementMut) -> Result<(), String> {
+        let tag = el.tag_name().to_lowercase();
+        match tag.as_str() {
+            "img" | "video" | "audio" | "source" | "track" => {
+                if let Some(src) = el.get_attribute("src")
+                    && !is_external_url(&src)
+                    && !src.starts_with('#')
+                {
+                    let abs_path = normalize_path(&self.base_dir, &src);
+                    if let Some(new_url) = (self.resolver)(&abs_path) {
+                        el.set_attribute("src", &new_url)?;
+                    }
+                }
+                if let Some(poster) = el.get_attribute("poster")
+                    && !is_external_url(&poster)
+                    && !poster.starts_with('#')
+                {
+                    let abs_path = normalize_path(&self.base_dir, &poster);
+                    if let Some(new_url) = (self.resolver)(&abs_path) {
+                        el.set_attribute("poster", &new_url)?;
+                    }
+                }
+                if let Some(srcset) = el.get_attribute("srcset")
+                    && !srcset.trim().is_empty()
+                {
+                    let new_srcset = rewrite_srcset(&srcset, &self.base_dir, &mut self.resolver);
+                    if new_srcset != srcset {
+                        el.set_attribute("srcset", &new_srcset)?;
+                    }
+                }
+            }
+            "object" => {
+                if let Some(data) = el.get_attribute("data")
+                    && !is_external_url(&data)
+                    && !data.starts_with('#')
+                {
+                    let abs_path = normalize_path(&self.base_dir, &data);
+                    if let Some(new_url) = (self.resolver)(&abs_path) {
+                        el.set_attribute("data", &new_url)?;
+                    }
+                }
+            }
+            "image" => {
+                for attr in &["href", "xlink:href"] {
+                    if let Some(href) = el.get_attribute(attr)
+                        && !is_external_url(&href)
+                        && !href.starts_with('#')
+                    {
+                        let abs_path = normalize_path(&self.base_dir, &href);
+                        if let Some(new_url) = (self.resolver)(&abs_path) {
+                            el.set_attribute(attr, &new_url)?;
+                        }
+                    }
+                }
+            }
+            "use" => {
+                for attr in &["href", "xlink:href"] {
+                    if let Some(href) = el.get_attribute(attr)
+                        && !is_external_url(&href)
+                        && !href.starts_with('#')
+                    {
+                        let (path_part, frag_part) = match href.find('#') {
+                            Some(idx) => (&href[..idx], &href[idx..]),
+                            None => (href.as_str(), ""),
+                        };
+                        if !path_part.is_empty() {
+                            let abs_path = normalize_path(&self.base_dir, path_part);
+                            if let Some(mut new_url) = (self.resolver)(&abs_path) {
+                                new_url.push_str(frag_part);
+                                el.set_attribute(attr, &new_url)?;
+                            }
+                        }
+                    }
+                }
+            }
+            "link" | "a" | "area" => {
+                if let Some(href) = el.get_attribute("href")
+                    && !is_external_url(&href)
+                    && !href.starts_with('#')
+                {
+                    let (path_part, anchor_part) = match href.find('#') {
+                        Some(idx) => (&href[..idx], &href[idx..]),
+                        None => (href.as_str(), ""),
+                    };
+                    if !path_part.is_empty() {
+                        let abs_path = normalize_path(&self.base_dir, path_part);
+                        if let Some(mut new_url) = (self.resolver)(&abs_path) {
+                            new_url.push_str(anchor_part);
+                            el.set_attribute("href", &new_url)?;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Generic style attribute check for all elements
+        if let Some(style) = el.get_attribute("style")
+            && style.contains("url(")
+        {
+            let rewritten = rewrite_css_impl(&style, &self.base_dir, &mut self.resolver);
+            if rewritten != style {
+                el.set_attribute("style", &rewritten)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Rewrite resources (images, css, links) in an HTML document using a provided resolver callback.
 pub fn rewrite_resources<F>(
     html: &str,
@@ -382,169 +535,25 @@ where
         None => String::new(),
     };
     let mut output = Vec::new();
-    let resolver_arc = Arc::new(Mutex::new(resolver));
+    let processor_arc = Arc::new(Mutex::new(UrlRewritingProcessor { base_dir, resolver }));
 
     let mut rewriter = HtmlRewriter::new(
         Settings {
-            element_content_handlers: vec![
-                element!("img, video, audio, source, track", {
-                    let resolver = Arc::clone(&resolver_arc);
-                    let base_dir = base_dir.clone();
-                    move |el| {
-                        if let Some(src) = el.get_attribute("src")
-                            && !is_external_url(&src)
-                            && !src.starts_with('#')
-                        {
-                            let abs_path = normalize_path(&base_dir, &src);
-                            if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
-                                el.set_attribute("src", &new_url).unwrap();
-                            }
-                        }
-                        if let Some(poster) = el.get_attribute("poster")
-                            && !is_external_url(&poster)
-                            && !poster.starts_with('#')
-                        {
-                            let abs_path = normalize_path(&base_dir, &poster);
-                            if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
-                                el.set_attribute("poster", &new_url).unwrap();
-                            }
-                        }
-                        // ── srcset: responsive image candidates ──────────────
-                        // Covers <img srcset="…"> and <source srcset="…"> inside
-                        // both <picture> and <video> elements.  The candidate
-                        // list is comma-separated with optional width/density
-                        // descriptors ("400w", "2x") that must be preserved.
-                        if let Some(srcset) = el.get_attribute("srcset")
-                            && !srcset.trim().is_empty()
-                        {
-                            let mut guard = resolver.lock().unwrap();
-                            let new_srcset = rewrite_srcset(&srcset, &base_dir, &mut *guard);
-                            drop(guard);
-                            if new_srcset != srcset {
-                                el.set_attribute("srcset", &new_srcset).unwrap();
-                            }
-                        }
-                        Ok(())
-                    }
-                }),
-                element!("object", {
-                    let resolver = Arc::clone(&resolver_arc);
-                    let base_dir = base_dir.clone();
-                    move |el| {
-                        if let Some(data) = el.get_attribute("data")
-                            && !is_external_url(&data)
-                            && !data.starts_with('#')
-                        {
-                            let abs_path = normalize_path(&base_dir, &data);
-                            if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
-                                el.set_attribute("data", &new_url).unwrap();
-                            }
-                        }
-                        Ok(())
-                    }
-                }),
-                element!("image", {
-                    let resolver = Arc::clone(&resolver_arc);
-                    let base_dir = base_dir.clone();
-                    move |el| {
-                        for attr in &["href", "xlink:href"] {
-                            if let Some(href) = el.get_attribute(attr)
-                                && !is_external_url(&href)
-                                && !href.starts_with('#')
-                            {
-                                let abs_path = normalize_path(&base_dir, &href);
-                                if let Some(new_url) = (resolver.lock().unwrap())(&abs_path) {
-                                    el.set_attribute(attr, &new_url).unwrap();
-                                }
-                            }
-                        }
-                        Ok(())
-                    }
-                }),
-                // ── SVG <use href="path.svg#fragment"> ───────────────────────
-                // <use> references an external SVG file with an optional
-                // fragment identifying the symbol to render.  Only the path
-                // portion is resolved; the fragment ("#arrow") is preserved.
-                // Pure internal references ("#local-id") are skipped entirely.
-                // "svg use" scopes the selector to SVG foreign content only,
-                // preventing accidental matches on hypothetical custom HTML
-                // elements named <use>.
-                element!("svg use", {
-                    let resolver = Arc::clone(&resolver_arc);
-                    let base_dir = base_dir.clone();
-                    move |el| {
-                        for attr in &["href", "xlink:href"] {
-                            if let Some(href) = el.get_attribute(attr)
-                                && !is_external_url(&href)
-                                && !href.starts_with('#')
-                            // pure local ref → skip
-                            {
-                                let (path_part, frag_part) = match href.find('#') {
-                                    Some(idx) => (&href[..idx], &href[idx..]),
-                                    None => (href.as_str(), ""),
-                                };
-                                if !path_part.is_empty() {
-                                    let abs_path = normalize_path(&base_dir, path_part);
-                                    if let Some(mut new_url) = (resolver.lock().unwrap())(&abs_path)
-                                    {
-                                        new_url.push_str(frag_part);
-                                        el.set_attribute(attr, &new_url).unwrap();
-                                    }
-                                }
-                            }
-                        }
-                        Ok(())
-                    }
-                }),
-                element!("link, a, area", {
-                    let resolver = Arc::clone(&resolver_arc);
-                    let base_dir = base_dir.clone();
-                    move |el| {
-                        if let Some(href) = el.get_attribute("href")
-                            && !is_external_url(&href)
-                            && !href.starts_with('#')
-                        {
-                            let (path_part, anchor_part) = match href.find('#') {
-                                Some(idx) => (&href[..idx], &href[idx..]),
-                                None => (href.as_str(), ""),
-                            };
-                            if !path_part.is_empty() {
-                                let abs_path = normalize_path(&base_dir, path_part);
-                                if let Some(mut new_url) = (resolver.lock().unwrap())(&abs_path) {
-                                    new_url.push_str(anchor_part);
-                                    el.set_attribute("href", &new_url).unwrap();
-                                }
-                            }
-                        }
-                        Ok(())
-                    }
-                }),
-                // ── style="" attribute ─────────────────────────────────────────
-                // Any element can carry a `style` attribute with url() references
-                // (e.g. `style="background: url('../images/bg.png')"`).  Rewrite
-                // them using the same CSS engine so @font-face and backgrounds work.
-                element!("*", {
-                    let resolver = Arc::clone(&resolver_arc);
-                    let base_dir = base_dir.clone();
-                    move |el| {
-                        if let Some(style) = el.get_attribute("style")
-                            && style.contains("url(")
-                        {
-                            // Use a virtual path so normalize_path resolves
-                            // relative refs against the correct directory.
-                            let virtual_path = format!("{base_dir}/_");
-                            let mut guard = resolver.lock().unwrap();
-                            let rewritten = rewrite_css_impl(&style, &base_dir, &mut *guard);
-                            drop(guard);
-                            if rewritten != style {
-                                let _ = virtual_path; // suppress unused warning
-                                el.set_attribute("style", &rewritten).unwrap();
-                            }
-                        }
-                        Ok(())
-                    }
-                }),
-            ],
+            element_content_handlers: vec![element!("*", {
+                let processor = Arc::clone(&processor_arc);
+                move |el| {
+                    let mut adapter = LolHtmlElement { inner: el };
+                    processor
+                        .lock()
+                        .unwrap()
+                        .process_element(&mut adapter)
+                        .map_err(|e| {
+                            Box::new(std::io::Error::other(e))
+                                as Box<dyn std::error::Error + Send + Sync>
+                        })?;
+                    Ok(())
+                }
+            })],
             ..Settings::default()
         },
         |c: &[u8]| output.extend_from_slice(c),
@@ -561,13 +570,10 @@ where
         .map_err(|e| EpubError::HtmlParse(format!("Invalid UTF-8: {e}")))?;
 
     // ── Second pass: rewrite url() inside <style> blocks ─────────────────────
-    // lol_html does not support streaming text replacement concurrently with
-    // element handlers.  We apply a lightweight string-level scan only when
-    // the document actually contains a <style> block with url() references —
-    // a fast pre-check avoids any allocation in the common case.
     if html_out.contains("<style") && html_out.contains("url(") {
-        let mut guard = resolver_arc.lock().unwrap();
-        let result = rewrite_style_blocks(&html_out, &base_dir, &mut *guard);
+        let mut guard = processor_arc.lock().unwrap();
+        let base_dir = guard.base_dir.clone();
+        let result = rewrite_style_blocks(&html_out, &base_dir, &mut guard.resolver);
         drop(guard);
         return Ok(result);
     }

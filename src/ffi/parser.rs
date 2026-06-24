@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString};
 use std::io::Cursor;
-use std::os::raw::{c_char, c_uchar};
+use std::os::raw::{c_char, c_int, c_uchar};
 use std::ptr;
 
 use crate::ffi::common::{EpubHandle, into_c_string, into_raw_bytes, to_json};
@@ -33,6 +33,7 @@ pub unsafe extern "C" fn epub_open(data: *const c_uchar, len: usize) -> *mut Epu
         Ok(Box::into_raw(Box::new(EpubHandle {
             archive,
             book: None,
+            position_index: None,
         })))
     })
 }
@@ -60,6 +61,7 @@ pub unsafe extern "C" fn epub_open_file(path: *const c_char) -> *mut EpubHandle 
         Ok(Box::into_raw(Box::new(EpubHandle {
             archive,
             book: None,
+            position_index: None,
         })))
     })
 }
@@ -385,15 +387,12 @@ pub unsafe extern "C" fn epub_generate_locations(
 ) -> *mut c_char {
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_generate_locations: null handle")?;
-        h.ensure_parsed()?;
-        let bpp = if bytes_per_position == 0 {
-            crate::parser::BYTES_PER_POSITION
-        } else {
-            bytes_per_position
-        };
-        let book = h.book.as_ref().unwrap();
-        let positions = h.archive.generate_locations(book, bpp)?;
-        Ok(to_json(&positions))
+        h.ensure_index_built(bytes_per_position)?;
+        let index = h.position_index.as_ref().unwrap();
+        let flat: Vec<&crate::model::Position> = (0..index.len())
+            .filter_map(|i| index.position_at(i))
+            .collect();
+        Ok(to_json(&flat))
     })
 }
 
@@ -415,16 +414,8 @@ pub unsafe extern "C" fn epub_generate_location_index(
 ) -> *mut c_char {
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_generate_location_index: null handle")?;
-        h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
-        let bpp = if bytes_per_position == 0 {
-            crate::parser::BYTES_PER_POSITION
-        } else {
-            bytes_per_position
-        };
-        let strategy = crate::parser::ArchiveEntryLength { page_length: bpp };
-        let by_chapter = h.archive.positions_by_reading_order(book, &strategy)?;
-        let index = crate::parser::PositionIndex::build(by_chapter);
+        h.ensure_index_built(bytes_per_position)?;
+        let index = h.position_index.as_ref().unwrap();
         let flat: Vec<&crate::model::Position> = (0..index.len())
             .filter_map(|i| index.position_at(i))
             .collect();
@@ -460,16 +451,10 @@ pub unsafe extern "C" fn epub_location_from_cfi(
             );
         }
 
-        h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
+        h.ensure_index_built(0)?;
         let cfi_s = unsafe { CStr::from_ptr(cfi_str) }.to_string_lossy();
 
-        let strategy = crate::parser::ArchiveEntryLength {
-            page_length: crate::parser::BYTES_PER_POSITION,
-        };
-        let by_chapter = h.archive.positions_by_reading_order(book, &strategy)?;
-        let index = crate::parser::PositionIndex::build(by_chapter);
-
+        let index = h.position_index.as_ref().unwrap();
         let res = match index.location_from_cfi(cfi_s.as_ref()) {
             Some(idx) => idx.to_string(),
             None => "-1".to_string(),
@@ -501,13 +486,8 @@ pub unsafe extern "C" fn epub_cfi_from_location(
             return Err("epub_cfi_from_location: positions_json must be non-null".into());
         }
 
-        h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
-        let strategy = crate::parser::ArchiveEntryLength {
-            page_length: crate::parser::BYTES_PER_POSITION,
-        };
-        let by_chapter = h.archive.positions_by_reading_order(book, &strategy)?;
-        let index = crate::parser::PositionIndex::build(by_chapter);
+        h.ensure_index_built(0)?;
+        let index = h.position_index.as_ref().unwrap();
 
         match index.cfi_from_location(idx) {
             Some(cfi) => Ok(into_c_string(cfi.to_string())),
@@ -516,6 +496,115 @@ pub unsafe extern "C" fn epub_cfi_from_location(
                 index.len()
             )
             .into()),
+        }
+    })
+}
+
+/// Find the 0-based position index that contains a given CFI (fast path).
+///
+/// Bypasses JSON serialization/deserialization and allocation for the return value.
+/// Returns the 0-based index directly, or `-1` if the CFI could not be resolved.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+/// - `cfi_str` must be a valid null-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_location_from_cfi_fast(
+    handle: *mut EpubHandle,
+    cfi_str: *const c_char,
+) -> isize {
+    ffi_boundary!(-1, {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_location_from_cfi_fast: null handle")?;
+        if cfi_str.is_null() {
+            return Err("epub_location_from_cfi_fast: cfi_str must be non-null".into());
+        }
+
+        h.ensure_index_built(0)?;
+        let cfi_s = unsafe { CStr::from_ptr(cfi_str) }.to_string_lossy();
+        let index = h.position_index.as_ref().unwrap();
+
+        let res = match index.location_from_cfi(cfi_s.as_ref()) {
+            Some(idx) => idx as isize,
+            None => -1,
+        };
+        Ok(res)
+    })
+}
+
+/// Return the CFI string for a given 0-based position index (fast path).
+///
+/// Bypasses the redundant `positions_json` parameter. The caller must free
+/// the returned C-string with `epub_free_string()`.
+///
+/// Returns `NULL` if `idx` is out of range.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer obtained from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_cfi_from_location_fast(
+    handle: *mut EpubHandle,
+    idx: usize,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_cfi_from_location_fast: null handle")?;
+        h.ensure_index_built(0)?;
+        let index = h.position_index.as_ref().unwrap();
+
+        match index.cfi_from_location(idx) {
+            Some(cfi) => Ok(into_c_string(cfi.to_string())),
+            None => Err(format!(
+                "epub_cfi_from_location_fast: index {idx} out of range (total={})",
+                index.len()
+            )
+            .into()),
+        }
+    })
+}
+
+/// Query the metrics of a virtual position at a given 0-based index.
+///
+/// Direct primitive getters avoiding JSON serialization. Writes the inner values
+/// of `Position` (spine_index, chapter_progression, total_progression) into the
+/// provided output pointers.
+///
+/// Returns `1` on success, `0` on failure (e.g. index out of range or null pointers).
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+/// - `out_spine_index`, `out_chapter_progression`, and `out_total_progression`
+///   must be valid, non-null writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_get_position_info(
+    handle: *mut EpubHandle,
+    idx: usize,
+    out_spine_index: *mut usize,
+    out_chapter_progression: *mut f32,
+    out_total_progression: *mut f32,
+) -> c_int {
+    ffi_boundary!(0, {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_get_position_info: null handle")?;
+        if out_spine_index.is_null()
+            || out_chapter_progression.is_null()
+            || out_total_progression.is_null()
+        {
+            return Err("epub_get_position_info: output pointers must be non-null".into());
+        }
+
+        h.ensure_index_built(0)?;
+        let index = h.position_index.as_ref().unwrap();
+        if let Some(pos) = index.position_at(idx) {
+            unsafe {
+                *out_spine_index = pos.spine_index;
+                *out_chapter_progression = pos.chapter_progression;
+                *out_total_progression = pos.total_progression;
+            }
+            Ok(1)
+        } else {
+            Err(format!(
+                "epub_get_position_info: index {idx} out of range (total={})",
+                index.len()
+            )
+            .into())
         }
     })
 }

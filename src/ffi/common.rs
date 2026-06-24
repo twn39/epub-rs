@@ -159,6 +159,8 @@ pub struct EpubHandle {
     pub(crate) archive: EpubArchive<ZipProvider<Cursor<Vec<u8>>>>,
     /// Lazily parsed on the first call to any API that needs book metadata.
     pub(crate) book: Option<EpubBook>,
+    /// Lazily constructed index for fast CFI and location queries.
+    pub(crate) position_index: Option<crate::parser::PositionIndex>,
 }
 
 impl EpubHandle {
@@ -166,6 +168,25 @@ impl EpubHandle {
     pub(crate) fn ensure_parsed(&mut self) -> Result<(), String> {
         if self.book.is_none() {
             self.book = Some(self.archive.parse().map_err(|e| e.to_string())?);
+        }
+        Ok(())
+    }
+
+    /// Lazily construct the reading position index on first call.
+    pub(crate) fn ensure_index_built(&mut self, bytes_per_position: usize) -> Result<(), String> {
+        self.ensure_parsed()?;
+        if self.position_index.is_none() {
+            let book = self.book.as_ref().unwrap();
+            let bpp = if bytes_per_position == 0 {
+                crate::parser::BYTES_PER_POSITION
+            } else {
+                bytes_per_position
+            };
+            let index = self
+                .archive
+                .generate_location_index(book, bpp)
+                .map_err(|e| e.to_string())?;
+            self.position_index = Some(index);
         }
         Ok(())
     }

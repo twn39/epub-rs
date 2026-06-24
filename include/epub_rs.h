@@ -611,4 +611,49 @@ char *epub_location_from_cfi(struct epub_t *handle,
  */
 char *epub_cfi_from_location(struct epub_t *handle, const char *positions_json, size_t idx);
 
+/**
+ * Find the 0-based position index that contains a given CFI (fast path).
+ *
+ * Bypasses JSON serialization/deserialization and allocation for the return value.
+ * Returns the 0-based index directly, or `-1` if the CFI could not be resolved.
+ *
+ * # Safety
+ * - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ * - `cfi_str` must be a valid null-terminated C string.
+ */
+ptrdiff_t epub_location_from_cfi_fast(struct epub_t *handle, const char *cfi_str);
+
+/**
+ * Return the CFI string for a given 0-based position index (fast path).
+ *
+ * Bypasses the redundant `positions_json` parameter. The caller must free
+ * the returned C-string with `epub_free_string()`.
+ *
+ * Returns `NULL` if `idx` is out of range.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ */
+char *epub_cfi_from_location_fast(struct epub_t *handle, size_t idx);
+
+/**
+ * Query the metrics of a virtual position at a given 0-based index.
+ *
+ * Direct primitive getters avoiding JSON serialization. Writes the inner values
+ * of `Position` (spine_index, chapter_progression, total_progression) into the
+ * provided output pointers.
+ *
+ * Returns `1` on success, `0` on failure (e.g. index out of range or null pointers).
+ *
+ * # Safety
+ * - `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ * - `out_spine_index`, `out_chapter_progression`, and `out_total_progression`
+ *   must be valid, non-null writable pointers.
+ */
+int epub_get_position_info(struct epub_t *handle,
+                           size_t idx,
+                           size_t *out_spine_index,
+                           float *out_chapter_progression,
+                           float *out_total_progression);
+
 #endif  /* EPUB_RS_H */
