@@ -1,4 +1,4 @@
-use crate::cfi::model::{CfiPath, CfiStep, CfiSide, EpubCfi, NodeType};
+use crate::cfi::model::{CfiPath, CfiSide, CfiStep, EpubCfi, NodeType};
 use std::str::FromStr;
 
 #[test]

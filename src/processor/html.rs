@@ -145,8 +145,6 @@ pub fn normalize_path(base_dir: &str, rel_path: &str) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-
-
 /// Abstract trait representing a mutable HTML element.
 ///
 /// Decouples the element mutation interface from concrete SAX/DOM parser libraries.

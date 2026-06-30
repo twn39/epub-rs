@@ -1,4 +1,6 @@
-use crate::ffi::common::{catch_ffi_result, catch_ffi_void, epub_free_bytes, epub_free_string, epub_last_error, FfiError};
+use crate::ffi::common::{
+    FfiError, catch_ffi_result, catch_ffi_void, epub_free_bytes, epub_free_string, epub_last_error,
+};
 use crate::ffi::generator::{
     epub_generator_add_chapter, epub_generator_build, epub_generator_free, epub_generator_new,
     epub_generator_set_identifier, epub_generator_set_language, epub_generator_set_title,

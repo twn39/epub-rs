@@ -1,9 +1,9 @@
+use super::common::make_epub_bytes;
 use crate::ffi::common::{epub_free, epub_free_string, epub_last_error};
 use crate::ffi::parser::{
-    epub_cfi_from_location_fast, epub_generate_location_index,
-    epub_get_position_info, epub_get_toc, epub_location_from_cfi_fast, epub_open, epub_parse,
+    epub_cfi_from_location_fast, epub_generate_location_index, epub_get_position_info,
+    epub_get_toc, epub_location_from_cfi_fast, epub_open, epub_parse,
 };
-use super::common::make_epub_bytes;
 use std::ptr;
 
 #[test]

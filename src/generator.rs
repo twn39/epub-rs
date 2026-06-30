@@ -633,54 +633,9 @@ impl EpubBuilder {
     /// Build the EPUB and write it to the provided writer (e.g., `std::fs::File` or `Vec<u8>`).
     pub fn generate<W: Write + Seek>(mut self, writer: W) -> Result<(), EpubError> {
         self.validate()?;
+        self.preprocess_resources()?;
 
         let mut zip = ZipWriter::new(writer);
-
-        let mut theme_href = None;
-        if self.theme == Theme::Modern {
-            theme_href = Some("styles/epub-rs-modern.css");
-            self.resources.push(Resource {
-                id: "epub-rs-theme-modern".to_string(),
-                href: theme_href.unwrap().to_string(),
-                media_type: "text/css".to_string(),
-                content: ResourceContent::Bytes(MODERN_THEME_CSS.as_bytes().to_vec()),
-                properties: Vec::new(),
-            });
-        }
-
-        // Auto-generate Navigation documents if we have TOC entries
-        let has_toc = !self.toc.is_empty();
-        let mut has_ncx = false;
-
-        if has_toc {
-            // EPUB 3 requires nav.xhtml
-            if self.version == EpubVersion::V30 {
-                let nav_html = self.generate_nav_xhtml()?;
-                self.resources.push(Resource {
-                    id: "nav".to_string(),
-                    href: "nav.xhtml".to_string(),
-                    media_type: "application/xhtml+xml".to_string(),
-                    content: ResourceContent::Bytes(nav_html.into_bytes()),
-                    properties: vec!["nav".to_string()],
-                });
-
-                // Fallback NCX for backwards compatibility
-                has_ncx = true;
-            } else if self.version == EpubVersion::V20 {
-                has_ncx = true;
-            }
-
-            if has_ncx {
-                let ncx_xml = self.generate_ncx()?;
-                self.resources.push(Resource {
-                    id: "ncx".to_string(),
-                    href: "toc.ncx".to_string(),
-                    media_type: "application/x-dtbncx+xml".to_string(),
-                    content: ResourceContent::Bytes(ncx_xml.into_bytes()),
-                    properties: Vec::new(),
-                });
-            }
-        }
 
         // 1. Write `mimetype` (MUST be first, MUST be uncompressed)
         let options_stored =
@@ -702,53 +657,19 @@ impl EpubBuilder {
 </container>"#;
         zip.write_all(container_xml.as_bytes())?;
 
-        // Generate OPF content BEFORE consuming self.resources
-        let opf_content = self.generate_opf(has_ncx)?;
+        // Generate OPF content
+        let opf_content = self.generate_opf(!self.toc.is_empty())?;
 
         // 3. Write resources
-        for mut res in self.resources {
+        for res in self.resources {
             let zip_path = format!("OEBPS/{}", res.href);
             zip.start_file(&zip_path, options_deflated)?;
             match res.content {
-                ResourceContent::Bytes(mut bytes) => {
-                    // Inject a <link rel="stylesheet"> into every HTML chapter when a
-                    // built-in theme is active.  We skip the nav document itself (it
-                    // carries `properties="nav"`) because nav.xhtml is a structural
-                    // document that reader applications handle separately.
-                    let is_nav = res.properties.iter().any(|p| p == "nav");
-                    if res.media_type == "application/xhtml+xml"
-                        && !is_nav
-                        && let Some(css_href) = theme_href
-                    {
-                        // Compute the precise relative path from this HTML file's
-                        // location to the CSS file.  epub_relative_path() uses the
-                        // canonical common-ancestor algorithm — identical in spirit to
-                        // Go's filepath.Rel and Python's os.path.relpath — so it is
-                        // correct for any combination of source / target depths.
-                        let relative_css_path = epub_relative_path(&res.href, css_href);
-
-                        let link_tag = format!(
-                            "<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\" />\n",
-                            relative_css_path
-                        );
-                        let mut new_html = Vec::new();
-                        if crate::processor::inject_head_content(
-                            &bytes[..],
-                            &mut new_html,
-                            &link_tag,
-                        )
-                        .is_ok()
-                            && !new_html.is_empty()
-                        {
-                            bytes = new_html;
-                        }
-                    }
+                ResourceContent::Bytes(bytes) => {
                     zip.write_all(&bytes)?;
                 }
-                ResourceContent::Stream(ref mut stream) => {
-                    // Note: We don't auto-inject themes into streamed HTML to save memory.
-                    // If a user streams HTML, they are responsible for their own themes.
-                    std::io::copy(stream, &mut zip)?;
+                ResourceContent::Stream(mut stream) => {
+                    std::io::copy(&mut stream, &mut zip)?;
                 }
             }
         }
@@ -758,6 +679,92 @@ impl EpubBuilder {
         zip.write_all(&opf_content)?;
 
         zip.finish()?;
+        Ok(())
+    }
+
+    /// Preprocess resources: sets up dynamic stylesheet, generates navigation,
+    /// and injects theme link tags into HTML files.
+    fn preprocess_resources(&mut self) -> Result<(), EpubError> {
+        let theme_href = self.inject_theme_stylesheet();
+        self.generate_navigation_resources()?;
+        if let Some(href) = theme_href {
+            self.inject_html_theme_links(&href)?;
+        }
+        Ok(())
+    }
+
+    /// Step 1: Inject theme stylesheet resource if a theme is active.
+    fn inject_theme_stylesheet(&mut self) -> Option<String> {
+        if self.theme == Theme::Modern {
+            let href = "styles/epub-rs-modern.css".to_string();
+            self.resources.push(Resource {
+                id: "epub-rs-theme-modern".to_string(),
+                href: href.clone(),
+                media_type: "text/css".to_string(),
+                content: ResourceContent::Bytes(MODERN_THEME_CSS.as_bytes().to_vec()),
+                properties: Vec::new(),
+            });
+            Some(href)
+        } else {
+            None
+        }
+    }
+
+    /// Step 2: Auto-generate Navigation documents (nav.xhtml, toc.ncx) and push them to resources.
+    fn generate_navigation_resources(&mut self) -> Result<(), EpubError> {
+        if self.toc.is_empty() {
+            return Ok(());
+        }
+
+        // EPUB 3 requires nav.xhtml
+        if self.version == EpubVersion::V30 {
+            let nav_html = self.generate_nav_xhtml()?;
+            self.resources.push(Resource {
+                id: "nav".to_string(),
+                href: "nav.xhtml".to_string(),
+                media_type: "application/xhtml+xml".to_string(),
+                content: ResourceContent::Bytes(nav_html.into_bytes()),
+                properties: vec!["nav".to_string()],
+            });
+        }
+
+        // Fallback NCX for EPUB 2 or backwards compatibility in EPUB 3
+        let has_ncx = self.version == EpubVersion::V20 || self.version == EpubVersion::V30;
+        if has_ncx {
+            let ncx_xml = self.generate_ncx()?;
+            self.resources.push(Resource {
+                id: "ncx".to_string(),
+                href: "toc.ncx".to_string(),
+                media_type: "application/x-dtbncx+xml".to_string(),
+                content: ResourceContent::Bytes(ncx_xml.into_bytes()),
+                properties: Vec::new(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Step 3: Inject link tags into HTML files referencing the theme CSS.
+    fn inject_html_theme_links(&mut self, css_href: &str) -> Result<(), EpubError> {
+        for res in &mut self.resources {
+            if res.media_type == "application/xhtml+xml" {
+                let is_nav = res.properties.iter().any(|p| p == "nav");
+                if !is_nav && let ResourceContent::Bytes(ref mut bytes) = res.content {
+                    let relative_css_path = epub_relative_path(&res.href, css_href);
+                    let link_tag = format!(
+                        "<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\" />\n",
+                        relative_css_path
+                    );
+                    let mut new_html = Vec::new();
+                    if crate::processor::inject_head_content(&bytes[..], &mut new_html, &link_tag)
+                        .is_ok()
+                        && !new_html.is_empty()
+                    {
+                        *bytes = new_html;
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
