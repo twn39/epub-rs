@@ -12,6 +12,9 @@
 //! Path joining / `normalize_path` live in [`crate::path`] so HTML/CSS rewrite
 //! share one policy with navigation and the generator.
 //!
+//! CSS URL scanning lives in [`rewrite`] — both [`html`] and [`css`] depend on
+//! it (no mutual HTML↔CSS ownership).
+//!
 //! All public items are re-exported at this level so every existing caller of
 //! `crate::processor::foo()` continues to work without any changes.
 
@@ -19,6 +22,7 @@ mod cfi;
 mod css;
 mod html;
 mod positions;
+mod rewrite;
 mod semantic;
 
 // ── Shared DOM traversal helpers ──────────────────────────────────────────────

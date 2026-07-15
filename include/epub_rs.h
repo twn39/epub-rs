@@ -394,7 +394,8 @@ struct epub_t *epub_open_file(const char *path);
  * Parse the EPUB and return book metadata as a JSON string.
  *
  * After the first call the result is cached; subsequent calls are cheap.
- * The caller must free the returned string with `epub_free_string()`.
+ * Uses the **default** rendition (first `rootfile`). The caller must free the
+ * returned string with `epub_free_string()`.
  * Returns `NULL` on failure — call `epub_last_error()` for details.
  *
  * JSON shape: `EpubBook` — see `src/model.rs` for field documentation.
@@ -403,6 +404,62 @@ struct epub_t *epub_open_file(const char *path);
  * `handle` must be a valid non-null pointer obtained from `epub_open*`.
  */
 char *epub_parse(struct epub_t *handle);
+
+/**
+ * Return all renditions from `META-INF/container.xml` as a JSON array.
+ *
+ * Index 0 is always the default rendition. Each element is a `RenditionInfo`
+ * (`opf_path`, optional `layout`, `language`, `label`, …).
+ *
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ */
+char *epub_get_renditions(struct epub_t *handle);
+
+/**
+ * Parse a specific rendition by 0-based index and return `EpubBook` JSON.
+ *
+ * Replaces any previously cached OPF and position index on the handle.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ */
+char *epub_parse_by_index(struct epub_t *handle, size_t index);
+
+/**
+ * Parse the best-matching rendition for layout / language preferences.
+ *
+ * `layout` / `language` may be `NULL` or empty to ignore that criterion.
+ * Layout match outweighs language (same scoring as the native API).
+ * Replaces any previously cached OPF and position index.
+ *
+ * # Safety
+ * - `handle` must be a valid non-null pointer from `epub_open*`.
+ * - `layout` and `language` must be null or valid C strings.
+ */
+char *epub_parse_best_for(struct epub_t *handle, const char *layout, const char *language);
+
+/**
+ * Returns `1` if any manifest item has a media overlay, else `0`.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer obtained from `epub_open*`.
+ */
+int epub_has_media_overlays(struct epub_t *handle);
+
+/**
+ * Return SMIL media overlay JSON for a content document href, or `"null"`.
+ *
+ * `content_href` is the manifest href (EPUB-root-relative path as in the book model).
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * # Safety
+ * - `handle` must be a valid non-null pointer from `epub_open*`.
+ * - `content_href` must be a valid null-terminated C string.
+ */
+char *epub_get_media_overlay(struct epub_t *handle, const char *content_href);
 
 /**
  * Return all navigation data (TOC + page-list + landmarks) as a JSON string.

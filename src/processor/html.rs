@@ -35,7 +35,7 @@ where
     Box::new(f)
 }
 
-use super::css::rewrite_css_impl;
+use super::rewrite::rewrite_css_urls;
 
 /// Rewrites every image URL inside a `srcset` attribute value.
 ///
@@ -249,7 +249,7 @@ where
         if let Some(style) = el.get_attribute("style")
             && style.contains("url(")
         {
-            let rewritten = rewrite_css_impl(&style, &self.base_dir, &mut self.resolver);
+            let rewritten = rewrite_css_urls(&style, &self.base_dir, &mut self.resolver);
             if rewritten != style {
                 el.set_attribute("style", &rewritten)?;
             }
@@ -344,7 +344,7 @@ where
         let after = &rest[close_pos..];
 
         if style_content.contains("url(") {
-            out.push_str(&rewrite_css_impl(style_content, base_dir, resolver));
+            out.push_str(&rewrite_css_urls(style_content, base_dir, resolver));
         } else {
             out.push_str(style_content);
         }

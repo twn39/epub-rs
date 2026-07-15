@@ -194,6 +194,13 @@ impl EpubHandle {
         }
         Ok(())
     }
+
+    /// Replace OPF cache (multi-rendition switch) and drop the position index.
+    pub(crate) fn store_parsed_book(&mut self, result: Result<crate::model::EpubBook, String>) {
+        self.book.reset();
+        self.position_index = None;
+        self.book.store(result);
+    }
 }
 
 /// Opaque EPUB generator handle.

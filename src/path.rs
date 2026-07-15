@@ -316,6 +316,8 @@ mod tests {
             ("OEBPS/Text", "../Images/cover.jpg"),
             ("OEBPS/nav", "../text/ch1.xhtml"),
             ("OEBPS", "css/style.css"),
+            ("a/b/c", "../../d/e.xhtml"),
+            ("Text", "./ch1.xhtml"),
         ];
         for (base, rel) in cases {
             assert_eq!(
@@ -324,5 +326,97 @@ mod tests {
                 "join vs resolve for ({base}, {rel})"
             );
         }
+    }
+
+    /// Table: fragment handling differs by API contract.
+    #[test]
+    fn fragment_policy_table() {
+        let cases = [
+            // (base, input, normalize → strip, resolve → keep)
+            ("OEBPS", "ch.xhtml#s1", "OEBPS/ch.xhtml", "OEBPS/ch.xhtml#s1"),
+            (
+                "OEBPS/nav",
+                "../text/ch2.xhtml#s2",
+                "OEBPS/text/ch2.xhtml",
+                "OEBPS/text/ch2.xhtml#s2",
+            ),
+            ("OEBPS", "#only", "OEBPS", "#only"),
+            ("", "a.xhtml#x", "a.xhtml", "a.xhtml#x"),
+        ];
+        for (base, input, want_norm, want_resolve) in cases {
+            assert_eq!(
+                normalize_path(base, input),
+                want_norm,
+                "normalize({base}, {input})"
+            );
+            assert_eq!(
+                resolve_href(base, input),
+                want_resolve,
+                "resolve({base}, {input})"
+            );
+        }
+    }
+
+    /// Table: query strings only affect normalize_path (stripped before join).
+    #[test]
+    fn query_and_encoding_table() {
+        assert_eq!(
+            normalize_path("OEBPS", "css/a.css?v=1#h"),
+            "OEBPS/css/a.css"
+        );
+        assert_eq!(
+            normalize_path("OEBPS/Text", "../Images/my%20cover.jpg"),
+            "OEBPS/Images/my cover.jpg"
+        );
+        // join does not percent-decode
+        assert_eq!(
+            join_epub_path("OEBPS", "my%20file.xhtml"),
+            "OEBPS/my%20file.xhtml"
+        );
+        // resolve does not percent-decode path segments
+        assert_eq!(
+            resolve_href("OEBPS", "my%20file.xhtml#id"),
+            "OEBPS/my%20file.xhtml#id"
+        );
+    }
+
+    #[test]
+    fn external_and_special_schemes_table() {
+        let externals = [
+            "https://example.com/a",
+            "http://example.com/a",
+            "data:image/png;base64,xx",
+            "mailto:a@b.c",
+            "ftp://h/f",
+            "blob:https://x/y",
+            "//cdn.example/z",
+        ];
+        for url in externals {
+            assert!(is_external_url(url), "{url}");
+            assert_eq!(resolve_href("OEBPS", url), url);
+        }
+    }
+
+    #[test]
+    fn parent_traversal_and_dot_segments() {
+        assert_eq!(
+            join_epub_path("a/b/c", "../../x/y"),
+            "a/x/y"
+        );
+        assert_eq!(
+            join_epub_path("a/b", "././c/./d"),
+            "a/b/c/d"
+        );
+        // Excess .. is popped until empty (no escape above package root)
+        assert_eq!(join_epub_path("a", "../../x"), "x");
+        assert_eq!(join_epub_path("", "../x"), "x");
+    }
+
+    #[test]
+    fn empty_base_and_empty_href_contracts() {
+        assert_eq!(resolve_href("", "text/ch1.xhtml"), "text/ch1.xhtml");
+        assert_eq!(resolve_href("OEBPS", ""), "");
+        assert_eq!(normalize_path("", "images/a.jpg"), "images/a.jpg");
+        assert_eq!(normalize_path("OEBPS", ""), "OEBPS");
     }
 }

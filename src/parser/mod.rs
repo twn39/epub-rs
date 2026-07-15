@@ -5,12 +5,15 @@
 //! - [`positions`]  — Package-level progression (byte-length strategies); not DOM CFI walk
 //! - [`navigation`] — TOC, page-list, and landmarks from `nav.xhtml` or `.ncx`
 
+// Adapter-only OPF cache (WASM / C FFI). Compiled in tests for unit coverage.
+#[cfg(any(target_arch = "wasm32", feature = "ffi", test))]
 mod lazy_book;
 mod navigation;
 mod opf;
 pub mod positions;
 mod smil;
 
+#[cfg(any(target_arch = "wasm32", feature = "ffi"))]
 pub(crate) use lazy_book::LazyBook;
 
 use crate::error::EpubError;

@@ -69,7 +69,8 @@ pub unsafe extern "C" fn epub_open_file(path: *const c_char) -> *mut EpubHandle 
 /// Parse the EPUB and return book metadata as a JSON string.
 ///
 /// After the first call the result is cached; subsequent calls are cheap.
-/// The caller must free the returned string with `epub_free_string()`.
+/// Uses the **default** rendition (first `rootfile`). The caller must free the
+/// returned string with `epub_free_string()`.
 /// Returns `NULL` on failure — call `epub_last_error()` for details.
 ///
 /// JSON shape: `EpubBook` — see `src/model.rs` for field documentation.
@@ -82,6 +83,135 @@ pub unsafe extern "C" fn epub_parse(handle: *mut EpubHandle) -> *mut c_char {
         let h = unsafe { handle.as_mut() }.ok_or("epub_parse: null handle")?;
         h.ensure_parsed()?;
         Ok(to_json(h.book.as_book().expect("book ready after ensure_parsed")))
+    })
+}
+
+/// Return all renditions from `META-INF/container.xml` as a JSON array.
+///
+/// Index 0 is always the default rendition. Each element is a `RenditionInfo`
+/// (`opf_path`, optional `layout`, `language`, `label`, …).
+///
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer obtained from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_get_renditions(handle: *mut EpubHandle) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_get_renditions: null handle")?;
+        let renditions = h.archive.get_renditions()?;
+        Ok(to_json(&renditions))
+    })
+}
+
+/// Parse a specific rendition by 0-based index and return `EpubBook` JSON.
+///
+/// Replaces any previously cached OPF and position index on the handle.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer obtained from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_parse_by_index(
+    handle: *mut EpubHandle,
+    index: usize,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_parse_by_index: null handle")?;
+        let result = h.archive.parse_by_index(index).map_err(|e| e.to_string());
+        h.store_parsed_book(result);
+        h.ensure_parsed()?;
+        Ok(to_json(h.book.as_book().expect("book ready after ensure_parsed")))
+    })
+}
+
+/// Parse the best-matching rendition for layout / language preferences.
+///
+/// `layout` / `language` may be `NULL` or empty to ignore that criterion.
+/// Layout match outweighs language (same scoring as the native API).
+/// Replaces any previously cached OPF and position index.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer from `epub_open*`.
+/// - `layout` and `language` must be null or valid C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_parse_best_for(
+    handle: *mut EpubHandle,
+    layout: *const c_char,
+    language: *const c_char,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_parse_best_for: null handle")?;
+        let layout = if layout.is_null() {
+            None
+        } else {
+            let s = unsafe { CStr::from_ptr(layout) }.to_string_lossy();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.into_owned())
+            }
+        };
+        let language = if language.is_null() {
+            None
+        } else {
+            let s = unsafe { CStr::from_ptr(language) }.to_string_lossy();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.into_owned())
+            }
+        };
+        let result = h
+            .archive
+            .parse_best_for(layout.as_deref(), language.as_deref())
+            .map_err(|e| e.to_string());
+        h.store_parsed_book(result);
+        h.ensure_parsed()?;
+        Ok(to_json(h.book.as_book().expect("book ready after ensure_parsed")))
+    })
+}
+
+/// Returns `1` if any manifest item has a media overlay, else `0`.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer obtained from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_has_media_overlays(handle: *mut EpubHandle) -> c_int {
+    ffi_boundary!(0, {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_has_media_overlays: null handle")?;
+        h.ensure_parsed()?;
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
+        Ok(if h.archive.has_media_overlays(book) {
+            1
+        } else {
+            0
+        })
+    })
+}
+
+/// Return SMIL media overlay JSON for a content document href, or `"null"`.
+///
+/// `content_href` is the manifest href (EPUB-root-relative path as in the book model).
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer from `epub_open*`.
+/// - `content_href` must be a valid null-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_get_media_overlay(
+    handle: *mut EpubHandle,
+    content_href: *const c_char,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_get_media_overlay: null handle")?;
+        if content_href.is_null() {
+            return Err("epub_get_media_overlay: content_href is null".into());
+        }
+        h.ensure_parsed()?;
+        let href = unsafe { CStr::from_ptr(content_href) }.to_string_lossy();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
+        let doc = h.archive.get_media_overlay(book, href.as_ref())?;
+        Ok(to_json(&doc))
     })
 }
 

@@ -1,6 +1,6 @@
 use crate::generator::{EpubBuilder, Theme};
 use crate::model::{Creator, EpubBook};
-use crate::parser::{EpubArchive, LazyBook};
+use crate::parser::{EpubArchive, LazyBook, PositionIndex};
 use crate::processor;
 use crate::provider::{EpubProvider, ZipProvider};
 use std::io::{Cursor, Read};
@@ -17,6 +17,8 @@ pub struct EpubParser {
     archive: EpubArchive<ZipProvider<Cursor<Vec<u8>>>>,
     // Lazy OPF cache: Ready / Failed are sticky (no re-parse of permanent errors).
     book: LazyBook,
+    /// Cached package-level position index (built once per parsed rendition).
+    position_index: Option<PositionIndex>,
 }
 
 // Private methods — NOT exported to WASM (no #[wasm_bindgen] on this impl block).
@@ -53,11 +55,50 @@ impl EpubParser {
         JsValue,
     > {
         self.ensure_parsed()?;
-        let Self { archive, book } = self;
+        let Self {
+            archive,
+            book,
+            position_index: _,
+        } = self;
         let book = book
             .as_book()
             .expect("book ready after successful ensure_parsed");
         Ok((archive, book))
+    }
+
+    /// Build the reading-position index once (mirrors FFI `ensure_index_built`).
+    ///
+    /// First successful call wins for `bytes_per_position`; later lookups reuse
+    /// the same index without re-scanning spine entry lengths.
+    fn ensure_index_built(&mut self, bytes_per_position: usize) -> Result<(), JsValue> {
+        self.ensure_parsed()?;
+        if self.position_index.is_none() {
+            let bpp = if bytes_per_position == 0 {
+                crate::parser::BYTES_PER_POSITION
+            } else {
+                bytes_per_position
+            };
+            let Self {
+                archive,
+                book,
+                position_index,
+            } = self;
+            let book = book
+                .as_book()
+                .expect("book ready after successful ensure_parsed");
+            let index = archive
+                .generate_location_index(book, bpp)
+                .map_err(|e| e.to_string())?;
+            *position_index = Some(index);
+        }
+        Ok(())
+    }
+
+    /// Replace OPF cache after multi-rendition selection; drop derived index.
+    fn store_parsed_book(&mut self, result: Result<EpubBook, String>) {
+        self.book.reset();
+        self.position_index = None;
+        self.book.store(result);
     }
 }
 
@@ -72,16 +113,82 @@ impl EpubParser {
         Ok(Self {
             archive,
             book: LazyBook::default(),
+            position_index: None,
         })
     }
 
     /// Parse the entire EPUB metadata, manifest, and spine into a JSON object.
     /// This returns a JavaScript object representing the `EpubBook` model.
+    ///
+    /// Uses the **default** rendition (first `rootfile` in `container.xml`).
     #[wasm_bindgen]
     pub fn parse(&mut self) -> Result<JsValue, JsValue> {
         self.ensure_parsed()?;
         let book = self.book();
         serde_wasm_bindgen::to_value(book).map_err(|e| e.to_string().into())
+    }
+
+    /// List all renditions declared in `META-INF/container.xml` (document order).
+    ///
+    /// Index `0` is always the default rendition (OCF §3.5.1).
+    #[wasm_bindgen]
+    pub fn get_renditions(&mut self) -> Result<JsValue, JsValue> {
+        let renditions = self
+            .archive
+            .get_renditions()
+            .map_err(|e| e.to_string())?;
+        serde_wasm_bindgen::to_value(&renditions).map_err(|e| e.to_string().into())
+    }
+
+    /// Parse a specific rendition by 0-based index in `container.xml`.
+    ///
+    /// Replaces any previously cached OPF / position index.
+    #[wasm_bindgen]
+    pub fn parse_by_index(&mut self, index: usize) -> Result<JsValue, JsValue> {
+        let result = self.archive.parse_by_index(index).map_err(|e| e.to_string());
+        self.store_parsed_book(result);
+        self.ensure_parsed()?;
+        serde_wasm_bindgen::to_value(self.book()).map_err(|e| e.to_string().into())
+    }
+
+    /// Parse the best-matching rendition for optional layout / language prefs.
+    ///
+    /// Pass empty strings for unused criteria. Layout match outweighs language.
+    /// Replaces any previously cached OPF / position index.
+    #[wasm_bindgen]
+    pub fn parse_best_for(
+        &mut self,
+        layout: Option<String>,
+        language: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let layout = layout.as_deref().filter(|s| !s.is_empty());
+        let language = language.as_deref().filter(|s| !s.is_empty());
+        let result = self
+            .archive
+            .parse_best_for(layout, language)
+            .map_err(|e| e.to_string());
+        self.store_parsed_book(result);
+        self.ensure_parsed()?;
+        serde_wasm_bindgen::to_value(self.book()).map_err(|e| e.to_string().into())
+    }
+
+    /// Returns `true` if any manifest item declares a SMIL media overlay.
+    #[wasm_bindgen]
+    pub fn has_media_overlays(&mut self) -> Result<bool, JsValue> {
+        self.ensure_parsed()?;
+        Ok(self.archive.has_media_overlays(self.book()))
+    }
+
+    /// Parse the SMIL media overlay for a content document (`content_href`).
+    ///
+    /// Returns `null` when the document has no overlay.
+    #[wasm_bindgen]
+    pub fn get_media_overlay(&mut self, content_href: &str) -> Result<JsValue, JsValue> {
+        let (archive, book) = self.archive_and_book()?;
+        let doc = archive
+            .get_media_overlay(book, content_href)
+            .map_err(|e| e.to_string())?;
+        serde_wasm_bindgen::to_value(&doc).map_err(|e| e.to_string().into())
     }
 
     /// Retrieve the raw byte contents of a specific file inside the EPUB.
@@ -247,20 +354,19 @@ impl EpubParser {
     /// Generate positions and build a bidirectional lookup index in one call.
     ///
     /// Returns a JavaScript array of `Position` objects (same as `generate_locations()`).
-    /// Use with `location_from_cfi()` / `cfi_from_location()` for index ↔ CFI lookups.
+    /// The index is **cached on this parser** — subsequent `location_from_cfi` /
+    /// `cfi_from_location` calls do not re-scan the package.
     ///
     /// `bytes_per_position`: pass `0` to use the Readium/Adobe default of 1024 bytes.
+    /// When encryption declares `OriginalLength`, that plaintext size is used for
+    /// position counts (LCP/AES) automatically.
     #[wasm_bindgen]
     pub fn generate_location_index(
         &mut self,
         bytes_per_position: usize,
     ) -> Result<JsValue, JsValue> {
-        let (archive, book) = self.archive_and_book()?;
-        let index = archive
-            .generate_location_index(book, bytes_per_position)
-            .map_err(|e| e.to_string())?;
-        // Expose the flat positions array and total count.
-        // The JS caller stores this and passes it back for lookup calls.
+        self.ensure_index_built(bytes_per_position)?;
+        let index = self.position_index.as_ref().expect("index after ensure");
         let positions: Vec<&crate::model::Position> = (0..index.len())
             .filter_map(|i| index.position_at(i))
             .collect();
@@ -269,8 +375,7 @@ impl EpubParser {
 
     /// Find the 0-based position index that contains a given CFI.
     ///
-    /// `cfi_str`: any valid EPUB CFI string — position CFI, character-level bookmark,
-    /// or annotation range CFI.
+    /// Builds the package index on first use (default 1024 bytes/page) and reuses it.
     ///
     /// Returns the 0-based index as a JavaScript number, or `-1` if the CFI's
     /// spine item is not a linear reading-order chapter or the CFI is malformed.
@@ -278,10 +383,8 @@ impl EpubParser {
     /// **Algorithm**: O(|cfi_str|) — direct mathematical computation, no binary search.
     #[wasm_bindgen]
     pub fn location_from_cfi(&mut self, cfi_str: &str) -> Result<i64, JsValue> {
-        let (archive, book) = self.archive_and_book()?;
-        let index = archive
-            .generate_location_index(book, 0)
-            .map_err(|e| e.to_string())?;
+        self.ensure_index_built(0)?;
+        let index = self.position_index.as_ref().expect("index after ensure");
         Ok(index
             .location_from_cfi(cfi_str)
             .map(|i| i as i64)
@@ -290,14 +393,13 @@ impl EpubParser {
 
     /// Return the CFI string for a given 0-based position index.
     ///
+    /// Uses the cached package index (built on first location API call).
     /// Returns `null` if `idx` is out of range.
     /// O(1) — direct array access.
     #[wasm_bindgen]
     pub fn cfi_from_location(&mut self, idx: usize) -> Result<Option<String>, JsValue> {
-        let (archive, book) = self.archive_and_book()?;
-        let index = archive
-            .generate_location_index(book, 0)
-            .map_err(|e| e.to_string())?;
+        self.ensure_index_built(0)?;
+        let index = self.position_index.as_ref().expect("index after ensure");
         Ok(index.cfi_from_location(idx).map(str::to_owned))
     }
 }

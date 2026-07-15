@@ -61,6 +61,14 @@ impl LazyBook {
         }
     }
 
+    /// Clear the cache so a new OPF parse can run (e.g. multi-rendition switch).
+    ///
+    /// Callers must also drop any derived state keyed to the previous book
+    /// (position index, etc.). After reset, [`store`] is valid again.
+    pub(crate) fn reset(&mut self) {
+        *self = Self::Unparsed;
+    }
+
     /// Whether a successful parse is already cached.
     #[cfg(test)]
     pub(crate) fn is_ready(&self) -> bool {
@@ -158,5 +166,24 @@ mod tests {
         let mut lazy = LazyBook::Unparsed;
         ensure(&mut lazy, || Ok(sample_book())).unwrap();
         assert!(lazy.as_book().is_some());
+    }
+
+    #[test]
+    fn reset_allows_reparse() {
+        let calls = AtomicUsize::new(0);
+        let mut lazy = LazyBook::Unparsed;
+        ensure(&mut lazy, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(sample_book())
+        })
+        .unwrap();
+        lazy.reset();
+        assert!(lazy.is_unparsed());
+        ensure(&mut lazy, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(sample_book())
+        })
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }
