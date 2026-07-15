@@ -4,8 +4,7 @@ use std::io::Cursor;
 use std::os::raw::{c_char, c_uchar};
 use std::ptr;
 
-use crate::model::EpubBook;
-use crate::parser::EpubArchive;
+use crate::parser::{EpubArchive, LazyBook};
 use crate::provider::ZipProvider;
 
 // ── Thread-local error storage ────────────────────────────────────────────────
@@ -157,31 +156,36 @@ macro_rules! ffi_boundary_void {
 /// C code must never attempt to inspect or copy the pointed-to memory.
 pub struct EpubHandle {
     pub(crate) archive: EpubArchive<ZipProvider<Cursor<Vec<u8>>>>,
-    /// Lazily parsed on the first call to any API that needs book metadata.
-    pub(crate) book: Option<EpubBook>,
+    /// Lazily parsed OPF; sticky failure avoids re-running a broken parse.
+    pub(crate) book: LazyBook,
     /// Lazily constructed index for fast CFI and location queries.
     pub(crate) position_index: Option<crate::parser::PositionIndex>,
 }
 
 impl EpubHandle {
-    /// Lazily parse the OPF on first call; subsequent calls return the cached result.
+    /// Lazily parse the OPF once; success and failure are both cached.
     pub(crate) fn ensure_parsed(&mut self) -> Result<(), String> {
-        if self.book.is_none() {
-            self.book = Some(self.archive.parse().map_err(|e| e.to_string())?);
+        if self.book.is_unparsed() {
+            let result = self.archive.parse().map_err(|e| e.to_string());
+            self.book.store(result);
         }
-        Ok(())
+        self.book.get().map(|_| ()).map_err(str::to_owned)
     }
 
     /// Lazily construct the reading position index on first call.
     pub(crate) fn ensure_index_built(&mut self, bytes_per_position: usize) -> Result<(), String> {
         self.ensure_parsed()?;
         if self.position_index.is_none() {
-            let book = self.book.as_ref().unwrap();
             let bpp = if bytes_per_position == 0 {
                 crate::parser::BYTES_PER_POSITION
             } else {
                 bytes_per_position
             };
+            // Field-level borrow: `book` (shared) + `archive` (mut).
+            let book = self
+                .book
+                .as_book()
+                .expect("book ready after ensure_parsed");
             let index = self
                 .archive
                 .generate_location_index(book, bpp)

@@ -1,5 +1,11 @@
 /// A synthetic reading position (virtual page).
 ///
+/// Shared **data shape** for both position tracks:
+/// - Package progression: [`crate::parser::positions`] / `EpubArchive::generate_locations`
+/// - In-chapter DOM markers: [`crate::processor`] internal `positions` walk
+///
+/// Algorithms stay in those modules; this type only carries serde/FFI fields.
+///
 /// Mirrors the `Locator` type from the Readium go-toolkit, structured to carry the same
 /// fields: `href`, `global_position` (≡ `Locations.Position`),
 /// `chapter_progression` (≡ `Locations.Progression`),

@@ -1,6 +1,17 @@
-//! Position computation strategy and reading-order position generation.
+//! Package-level reading progression (virtual pages).
 //!
-//! Mirrors go-toolkit's `positions_service.go`.
+//! # Dual-track positions (do not merge with processor)
+//!
+//! | Track | Module | What it measures | Public entry |
+//! |-------|--------|------------------|--------------|
+//! | **Package progression** (this file) | `parser::positions` | Spine-order “pages” from entry **byte length** ÷ strategy (Adobe/Readium, default 1024) | [`EpubArchive::positions_by_reading_order`], [`EpubArchive::generate_locations`], [`PositionIndex`] |
+//! | **In-chapter CFI markers** | [`crate::processor::positions`] | DOM text walk → character-offset CFIs inside one XHTML | Internal only; not a substitute for package progression |
+//!
+//! Shared output shape is [`crate::model::Position`]. Package track fills progression
+//! fields from archive/encryption lengths; processor track is for precise in-document
+//! anchors when a full HTML DOM is already available.
+//!
+//! Mirrors go-toolkit's `positions_service.go` for the package track.
 
 use crate::error::EpubError;
 use crate::model::EpubBook;

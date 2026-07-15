@@ -2,13 +2,16 @@
 //!
 //! Split into focused submodules:
 //! - [`opf`]        — `META-INF/container.xml`, `encryption.xml`, and OPF package parsing
-//! - [`positions`]  — Position computation strategy and reading-order locations
+//! - [`positions`]  — Package-level progression (byte-length strategies); not DOM CFI walk
 //! - [`navigation`] — TOC, page-list, and landmarks from `nav.xhtml` or `.ncx`
 
+mod lazy_book;
 mod navigation;
 mod opf;
 pub mod positions;
 mod smil;
+
+pub(crate) use lazy_book::LazyBook;
 
 use crate::error::EpubError;
 use crate::model::EpubBook;
@@ -564,21 +567,11 @@ impl<P: EpubProvider> EpubArchive<P> {
     }
 
     /// Normalizes an EPUB path by resolving `.` and `..` relative segments.
+    ///
+    /// Delegates to [`crate::path::join_epub_path`] so OPF/manifest resolution
+    /// matches navigation and SMIL path joining.
     pub(crate) fn normalize_path(base: &str, href: &str) -> String {
-        let mut parts = Vec::new();
-
-        for comp in base.split('/').chain(href.split('/')) {
-            if comp.is_empty() || comp == "." {
-                continue;
-            }
-            if comp == ".." {
-                parts.pop(); // Go up one directory
-            } else {
-                parts.push(comp);
-            }
-        }
-
-        parts.join("/")
+        crate::path::join_epub_path(base, href)
     }
 }
 

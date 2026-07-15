@@ -1,8 +1,20 @@
-//! Character-offset to CFI position computation.
+//! In-chapter character-offset → CFI position markers (DOM walk).
 //!
-//! Walks a parsed HTML DOM accumulating text character counts and emits
-//! [`Position`] entries at every `chars_per_position` boundary — matching
-//! the Adobe RMSDK / Readium standard (default: 1024 bytes/chars per position).
+//! # Dual-track positions (do not merge with parser)
+//!
+//! This module is the **in-document** track: walk one chapter’s HTML DOM, count
+//! characters, emit [`Position`] rows with deep CFIs at `chars_per_position`
+//! boundaries.
+//!
+//! For **package-level** reading progression (spine order, global page index,
+//! Readium-style locations from ZIP entry length), use
+//! [`crate::parser::positions`] / [`EpubArchive::generate_locations`] instead.
+//! Those APIs do not require parsing every chapter into a DOM and are the
+//! supported surface for reading systems.
+//!
+//! Both tracks share [`Position`] for serde/FFI shape only; algorithms and
+//! call sites stay separate so contributors do not collapse byte-length
+//! progression into DOM walks (or vice versa).
 
 use crate::model::Position;
 use kuchikiki::NodeRef;

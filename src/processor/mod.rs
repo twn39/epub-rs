@@ -6,8 +6,11 @@
 //! |-----------|----------|
 //! | [`html`]  | lol_html-based streaming HTML rewriting and `<head>` injection |
 //! | [`cfi`]   | CFI `data-` attribute injection and regex search with CFI ranges |
-//! | [`positions`] | Internal: DOM character-offset traversal (not part of public API; use `EpubArchive::generate_locations`) |
+//! | [`positions`] | Internal: in-chapter DOM CFI markers only — package progression is `parser::positions` / `generate_locations` |
 //! | [`semantic`]  | Semantic block extraction for TTS and accessibility |
+//!
+//! Path joining / `normalize_path` live in [`crate::path`] so HTML/CSS rewrite
+//! share one policy with navigation and the generator.
 //!
 //! All public items are re-exported at this level so every existing caller of
 //! `crate::processor::foo()` continues to work without any changes.
@@ -47,10 +50,11 @@ fn cfi_child_path(parent: &str, index: usize, assertion: &str) -> String {
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
+pub use crate::path::normalize_path;
 pub use css::rewrite_css;
 pub use html::{
-    extract_text, extract_text_stream, inject_head_content, normalize_path, rewrite_links,
-    rewrite_links_stream, rewrite_resources,
+    extract_text, extract_text_stream, inject_head_content, rewrite_links, rewrite_links_stream,
+    rewrite_resources,
 };
 
 pub use cfi::{SearchResult, inject_cfi_dom, search_chapter};

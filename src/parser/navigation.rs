@@ -7,51 +7,13 @@
 
 use crate::error::EpubError;
 use crate::model::{EpubBook, NavigationDocument, TocEntry};
+use crate::path::resolve_href;
 use crate::provider::EpubProvider;
 use kuchikiki::traits::*;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use super::EpubArchive;
-
-// ── Private helpers ───────────────────────────────────────────────────────────
-
-/// Resolves `rel_href` relative to `nav_dir` (the EPUB-root-relative directory
-/// that contains the nav document), per RFC 3986 §5.2.
-///
-/// Preserves any `#fragment` suffix.  External URLs and fragment-only refs are
-/// returned unchanged so the caller doesn't need to pre-filter them.
-fn nav_resolve_href(nav_dir: &str, rel_href: &str) -> String {
-    if rel_href.starts_with('#')
-        || rel_href.starts_with("http://")
-        || rel_href.starts_with("https://")
-        || rel_href.is_empty()
-        || nav_dir.is_empty()
-    {
-        return rel_href.to_string();
-    }
-
-    // The fragment must be appended verbatim after path resolution; normalising it
-    // as part of the path would corrupt any IDs that contain special characters.
-    let (path_part, fragment) = match rel_href.find('#') {
-        Some(i) => (&rel_href[..i], &rel_href[i..]),
-        None => (rel_href, ""),
-    };
-
-    let mut parts: Vec<&str> = Vec::new();
-    for seg in nav_dir.split('/').chain(path_part.split('/')) {
-        if seg.is_empty() || seg == "." {
-            continue;
-        }
-        if seg == ".." {
-            parts.pop();
-        } else {
-            parts.push(seg);
-        }
-    }
-
-    format!("{}{fragment}", parts.join("/"))
-}
 
 impl<P: EpubProvider> EpubArchive<P> {
     /// Parses **all** navigation data from the EPUB in a **single I/O + single parse** operation.
@@ -227,23 +189,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                     .decode_utf8_lossy()
                     .into_owned();
 
-                let href = if decoded.starts_with('#')
-                    || decoded.starts_with("http://")
-                    || decoded.starts_with("https://")
-                    || decoded.is_empty()
-                    || nav_dir.is_empty()
-                {
-                    decoded
-                } else {
-                    // Fragment must survive resolution unchanged; split it out before
-                    // passing the bare path to nav_resolve_href.
-                    let (path_part, fragment) = match decoded.find('#') {
-                        Some(i) => (&decoded[..i], &decoded[i..]),
-                        None => (decoded.as_str(), ""),
-                    };
-                    let resolved = nav_resolve_href(nav_dir, path_part);
-                    format!("{resolved}{fragment}")
-                };
+                // Shared path policy: root-relative join, fragment preserved, externals as-is.
+                let href = resolve_href(nav_dir, &decoded);
 
                 let title = a_node.text_contents().trim().to_string();
 
@@ -724,46 +671,5 @@ mod tests {
         );
     }
 
-    // ── nav_resolve_href unit tests ───────────────────────────────────────────
-
-    #[test]
-    fn test_nav_resolve_href_parent_traversal() {
-        assert_eq!(
-            super::nav_resolve_href("OEBPS/nav", "../text/ch1.xhtml"),
-            "OEBPS/text/ch1.xhtml"
-        );
-    }
-
-    #[test]
-    fn test_nav_resolve_href_same_dir() {
-        assert_eq!(
-            super::nav_resolve_href("OEBPS", "text/ch1.xhtml"),
-            "OEBPS/text/ch1.xhtml"
-        );
-    }
-
-    #[test]
-    fn test_nav_resolve_href_fragment_preserved() {
-        assert_eq!(
-            super::nav_resolve_href("OEBPS/nav", "../text/ch2.xhtml#s2"),
-            "OEBPS/text/ch2.xhtml#s2"
-        );
-    }
-
-    #[test]
-    fn test_nav_resolve_href_absolute_url_passthrough() {
-        assert_eq!(
-            super::nav_resolve_href("OEBPS", "https://example.com/page"),
-            "https://example.com/page"
-        );
-    }
-
-    #[test]
-    fn test_nav_resolve_href_empty_nav_dir() {
-        // nav_dir="" means nav is at root; href is returned as-is.
-        assert_eq!(
-            super::nav_resolve_href("", "text/ch1.xhtml"),
-            "text/ch1.xhtml"
-        );
-    }
+    // resolve_href unit coverage lives in `crate::path` (shared policy module).
 }

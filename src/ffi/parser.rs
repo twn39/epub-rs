@@ -32,7 +32,7 @@ pub unsafe extern "C" fn epub_open(data: *const c_uchar, len: usize) -> *mut Epu
         let archive = EpubArchive::new(cursor)?;
         Ok(Box::into_raw(Box::new(EpubHandle {
             archive,
-            book: None,
+            book: Default::default(),
             position_index: None,
         })))
     })
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn epub_open_file(path: *const c_char) -> *mut EpubHandle 
         let archive = EpubArchive::new(cursor)?;
         Ok(Box::into_raw(Box::new(EpubHandle {
             archive,
-            book: None,
+            book: Default::default(),
             position_index: None,
         })))
     })
@@ -81,7 +81,7 @@ pub unsafe extern "C" fn epub_parse(handle: *mut EpubHandle) -> *mut c_char {
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_parse: null handle")?;
         h.ensure_parsed()?;
-        Ok(to_json(h.book.as_ref().unwrap()))
+        Ok(to_json(h.book.as_book().expect("book ready after ensure_parsed")))
     })
 }
 
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn epub_get_navigation(handle: *mut EpubHandle) -> *mut c_
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_get_navigation: null handle")?;
         h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let nav = h.archive.get_navigation(book)?;
         Ok(to_json(&nav))
     })
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn epub_get_toc(handle: *mut EpubHandle) -> *mut c_char {
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_get_toc: null handle")?;
         h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let toc = h.archive.get_toc(book)?;
         Ok(to_json(&toc))
     })
@@ -151,7 +151,7 @@ pub unsafe extern "C" fn epub_get_page_list(handle: *mut EpubHandle) -> *mut c_c
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_get_page_list: null handle")?;
         h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let pages = h.archive.get_page_list(book)?;
         Ok(to_json(&pages))
     })
@@ -175,7 +175,7 @@ pub unsafe extern "C" fn epub_positions_by_reading_order(
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_positions_by_reading_order: null handle")?;
         h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let page_len = if bytes_per_position == 0 {
             crate::parser::BYTES_PER_POSITION
         } else {
@@ -214,7 +214,7 @@ pub unsafe extern "C" fn epub_get_cover_image(
             return Err("epub_get_cover_image: out_len and out_media_type must be non-null".into());
         }
         h.ensure_parsed()?;
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let (bytes, media_type) = h.archive.get_cover_image(book)?;
         let media_type_ptr = CString::new(media_type)
             .map_err(|_| "Internal: media_type contained a null byte")?
@@ -253,7 +253,7 @@ pub unsafe extern "C" fn epub_get_resource(
         }
         h.ensure_parsed()?;
         let href_str = unsafe { CStr::from_ptr(href) }.to_string_lossy();
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let bytes = h.archive.get_resource_by_href(book, href_str.as_ref())?;
         unsafe {
             *out_len = bytes.len();
@@ -283,7 +283,7 @@ pub unsafe extern "C" fn epub_get_resource_by_id(
         }
         h.ensure_parsed()?;
         let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let bytes = h.archive.get_resource_by_id(book, id_str.as_ref())?;
         unsafe {
             *out_len = bytes.len();
@@ -312,7 +312,7 @@ pub unsafe extern "C" fn epub_get_chapter_with_cfi(
         }
         h.ensure_parsed()?;
         let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let html = h.archive.get_chapter_with_cfi(book, id_str.as_ref())?;
         Ok(into_c_string(html))
     })
@@ -342,7 +342,7 @@ pub unsafe extern "C" fn epub_search_chapter(
         let query_str = unsafe { CStr::from_ptr(query) }.to_string_lossy();
         let pattern = regex::Regex::new(&regex::escape(query_str.as_ref()))
             .map_err(|e| format!("epub_search_chapter: invalid query: {e}"))?;
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let results = h.archive.search_chapter(book, id_str.as_ref(), &pattern)?;
         Ok(to_json(&results))
     })
@@ -367,7 +367,7 @@ pub unsafe extern "C" fn epub_get_semantic_content(
         }
         h.ensure_parsed()?;
         let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
-        let book = h.book.as_ref().unwrap();
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
         let content = h.archive.get_semantic_content(book, id_str.as_ref())?;
         Ok(to_json(&content))
     })

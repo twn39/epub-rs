@@ -331,25 +331,7 @@ fn resolve_src(src: Option<&str>, smil_dir: &str) -> Option<String> {
     if src.starts_with('#') {
         return Some(src.to_string());
     }
-    Some(normalize_epub_path(smil_dir, src))
-}
-
-/// Resolves a relative href against a base directory to an EPUB-root-relative path.
-///
-/// Mirrors [`super::EpubArchive::normalize_path`] without requiring a provider type parameter.
-fn normalize_epub_path(base_dir: &str, href: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for comp in base_dir.split('/').chain(href.split('/')) {
-        if comp.is_empty() || comp == "." {
-            continue;
-        }
-        if comp == ".." {
-            parts.pop();
-        } else {
-            parts.push(comp);
-        }
-    }
-    parts.join("/")
+    Some(crate::path::join_epub_path(smil_dir, src))
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

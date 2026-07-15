@@ -1,298 +1,1497 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>epub-rs Wasm Demo</title>
+    <title>epub-rs · WASM Demo</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            background-color: #f4f4f5;
+        :root {
+            --bg: #0f1219;
+            --bg-elevated: #171b26;
+            --bg-panel: #1c2130;
+            --bg-soft: #242a3a;
+            --border: rgba(255, 255, 255, 0.08);
+            --border-strong: rgba(255, 255, 255, 0.14);
+            --text: #e8ecf4;
+            --text-muted: #9aa3b5;
+            --text-dim: #6b7385;
+            --accent: #6c9eff;
+            --accent-soft: rgba(108, 158, 255, 0.15);
+            --accent-strong: #8bb4ff;
+            --success: #5dcea0;
+            --warn: #e6b35c;
+            --danger: #f07178;
+            --reader-bg: #f7f4ee;
+            --reader-text: #1a1a1a;
+            --radius: 12px;
+            --radius-sm: 8px;
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+            --font: "Segoe UI", system-ui, -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+            --mono: "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
         }
 
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            height: 100%;
+            font-family: var(--font);
+            color: var(--text);
+            background:
+                radial-gradient(1200px 600px at 10% -10%, rgba(108, 158, 255, 0.12), transparent 50%),
+                radial-gradient(900px 500px at 100% 0%, rgba(93, 206, 160, 0.08), transparent 45%),
+                var(--bg);
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        /* ── Header ─────────────────────────────────────────── */
         header {
-            background-color: #fff;
-            padding: 10px 20px;
-            border-bottom: 1px solid #ddd;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            gap: 16px;
+            padding: 12px 20px;
+            background: rgba(23, 27, 38, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 20;
         }
 
-        h1 {
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .brand-mark {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #6c9eff, #5dcea0);
+            display: grid;
+            place-items: center;
+            font-weight: 700;
+            font-size: 14px;
+            color: #0b1020;
+            flex-shrink: 0;
+            box-shadow: 0 4px 16px rgba(108, 158, 255, 0.35);
+        }
+
+        .brand h1 {
             margin: 0;
-            font-size: 18px;
-            color: #333;
+            font-size: 16px;
+            font-weight: 650;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }
+
+        .brand .sub {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 2px;
         }
 
         .controls {
             display: flex;
-            gap: 10px;
+            flex-wrap: wrap;
+            gap: 8px;
             align-items: center;
+            justify-content: flex-end;
         }
 
-        button {
-            padding: 6px 12px;
-            border: 1px solid #ccc;
-            background-color: #fff;
-            border-radius: 4px;
+        .file-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 14px;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+            border: 1px solid rgba(108, 158, 255, 0.35);
             cursor: pointer;
-            font-size: 14px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: background 0.15s, transform 0.1s;
         }
 
-        button:hover:not(:disabled) {
-            background-color: #f0f0f0;
+        .file-label:hover {
+            background: rgba(108, 158, 255, 0.25);
+            transform: translateY(-1px);
         }
+
+        #file-input { display: none; }
+
+        button, .btn {
+            appearance: none;
+            border: 1px solid var(--border-strong);
+            background: var(--bg-soft);
+            color: var(--text);
+            border-radius: 999px;
+            padding: 7px 14px;
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s, opacity 0.15s, transform 0.1s;
+        }
+
+        button:hover:not(:disabled), .btn:hover:not(:disabled) {
+            background: #2d3448;
+            border-color: rgba(255, 255, 255, 0.22);
+        }
+
+        button:active:not(:disabled) { transform: translateY(1px); }
 
         button:disabled {
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
         }
 
-        #file-input {
-            font-size: 14px;
+        button.primary {
+            background: linear-gradient(135deg, #5b8ff0, #6c9eff);
+            border-color: transparent;
+            color: #0b1020;
+            font-weight: 600;
+        }
+
+        button.primary:hover:not(:disabled) {
+            background: linear-gradient(135deg, #6c9eff, #8bb4ff);
+        }
+
+        button.ghost {
+            background: transparent;
         }
 
         #page-info {
-            font-size: 14px;
-            color: #666;
-            min-width: 120px;
+            font-size: 12px;
+            color: var(--text-muted);
+            min-width: 110px;
             text-align: center;
+            font-variant-numeric: tabular-nums;
+            padding: 0 4px;
         }
 
+        /* ── Layout ─────────────────────────────────────────── */
         main {
-            flex-grow: 1;
-            display: flex;
-            justify-content: center;
-            padding: 20px;
+            flex: 1;
+            display: grid;
+            grid-template-columns: 300px minmax(0, 1fr) 320px;
+            gap: 16px;
+            padding: 16px;
+            min-height: 0;
             overflow: hidden;
-            gap: 20px;
         }
 
-        #sidebar {
-            width: 250px;
-            background: #fff;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            border-radius: 8px;
-            overflow-y: auto;
-            padding: 15px;
-            flex-shrink: 0;
+        main.no-book {
+            grid-template-columns: 1fr;
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
             display: flex;
             flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
         }
 
-        #sidebar h2 {
-            font-size: 16px;
-            margin-top: 0;
-            margin-bottom: 10px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 5px;
-            color: #333;
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
         }
 
-        .toc-list {
+        .panel-header h2 {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .panel-body {
+            flex: 1;
+            overflow: auto;
+            padding: 12px 14px;
+            min-height: 0;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+            padding: 8px 10px 0;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .tab {
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            border-radius: 8px 8px 0 0;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+
+        .tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+        .tab.active {
+            color: var(--accent-strong);
+            border-bottom-color: var(--accent);
+            background: rgba(108, 158, 255, 0.06);
+        }
+
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* ── Cover & meta ───────────────────────────────────── */
+        #cover-wrap {
+            text-align: center;
+            margin-bottom: 14px;
+        }
+
+        #cover-img {
+            width: 100%;
+            max-width: 180px;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            object-fit: cover;
+            background: var(--bg-soft);
+        }
+
+        .meta-block {
+            font-size: 12px;
+            line-height: 1.55;
+            color: var(--text-muted);
+        }
+
+        .meta-block .title {
+            font-size: 15px;
+            font-weight: 650;
+            color: var(--text);
+            margin-bottom: 4px;
+            line-height: 1.35;
+        }
+
+        .meta-row {
+            display: flex;
+            gap: 6px;
+            margin: 3px 0;
+        }
+
+        .meta-row .k {
+            color: var(--text-dim);
+            min-width: 56px;
+            flex-shrink: 0;
+        }
+
+        .chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 10px;
+        }
+
+        .chip {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            background: var(--bg-soft);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .chip.accent {
+            background: var(--accent-soft);
+            border-color: rgba(108, 158, 255, 0.3);
+            color: var(--accent-strong);
+        }
+
+        /* ── TOC / lists ────────────────────────────────────── */
+        .toc-list, .nav-list {
             list-style: none;
             padding: 0;
             margin: 0;
+            font-size: 13px;
+        }
+
+        .toc-list .toc-list { padding-left: 12px; margin-top: 2px; }
+
+        .toc-list li, .nav-list li { margin: 0; }
+
+        .toc-list a, .nav-list a {
+            display: block;
+            padding: 6px 8px;
+            border-radius: 6px;
+            color: var(--text-muted);
+            text-decoration: none;
+            cursor: pointer;
+            line-height: 1.35;
+            transition: background 0.12s, color 0.12s;
+        }
+
+        .toc-list a:hover, .nav-list a:hover {
+            background: rgba(108, 158, 255, 0.1);
+            color: var(--text);
+        }
+
+        .toc-list a.active {
+            background: var(--accent-soft);
+            color: var(--accent-strong);
+            font-weight: 560;
+        }
+
+        .empty-hint {
+            color: var(--text-dim);
+            font-size: 12px;
+            padding: 12px 4px;
+            text-align: center;
+        }
+
+        /* ── Viewer ─────────────────────────────────────────── */
+        #viewer-panel {
+            position: relative;
+            background: var(--bg-elevated);
+        }
+
+        #viewer-panel .panel-body {
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            background: var(--reader-bg);
+        }
+
+        .viewer-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 12px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .viewer-toolbar .left,
+        .viewer-toolbar .right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .progress-wrap {
+            flex: 1;
+            min-width: 80px;
+            max-width: 220px;
+        }
+
+        .progress-bar {
+            height: 4px;
+            border-radius: 999px;
+            background: var(--bg-soft);
+            overflow: hidden;
+        }
+
+        .progress-bar > i {
+            display: block;
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #5b8ff0, #5dcea0);
+            border-radius: 999px;
+            transition: width 0.25s ease;
+        }
+
+        .progress-label {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 4px;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+
+        #viewer {
+            flex: 1;
+            width: 100%;
+            border: none;
+            background: var(--reader-bg);
+            min-height: 0;
+        }
+
+        .welcome {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 40px 24px;
+            text-align: center;
+            color: var(--text-muted);
+            background:
+                radial-gradient(circle at 50% 30%, rgba(108, 158, 255, 0.08), transparent 55%),
+                var(--bg-panel);
+        }
+
+        .welcome h2 {
+            margin: 0;
+            font-size: 22px;
+            color: var(--text);
+            font-weight: 650;
+        }
+
+        .welcome p {
+            margin: 0;
+            max-width: 420px;
+            line-height: 1.6;
             font-size: 14px;
         }
 
-        .toc-list .toc-list {
-            padding-left: 15px;
-        }
-
-        .toc-list li {
-            margin-bottom: 6px;
-        }
-
-        .toc-list li a {
-            text-decoration: none;
-            color: #007BFF;
-            cursor: pointer;
-            display: block;
-        }
-
-        .toc-list li a:hover {
-            text-decoration: underline;
-        }
-
-        #viewer-container {
-            width: 100%;
-            max-width: 800px;
-            background: #fff;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            border-radius: 8px;
-            overflow: hidden;
+        .welcome-actions {
             display: flex;
-            flex-direction: column;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 8px;
         }
 
-        iframe {
-            flex-grow: 1;
-            border: none;
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
             width: 100%;
-            height: 100%;
+            max-width: 520px;
+            margin-top: 12px;
         }
 
-        .hidden {
-            display: none !important;
+        .feature-card {
+            background: var(--bg-soft);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px;
+            text-align: left;
+            font-size: 12px;
+            color: var(--text-muted);
         }
 
+        .feature-card strong {
+            display: block;
+            color: var(--text);
+            margin-bottom: 4px;
+            font-size: 13px;
+        }
+
+        /* ── Tools panel ────────────────────────────────────── */
+        .tool-section {
+            margin-bottom: 16px;
+        }
+
+        .tool-section h3 {
+            margin: 0 0 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .tool-row {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .tool-row input[type="text"],
+        .tool-row input[type="search"],
+        .tool-row input[type="number"] {
+            flex: 1;
+            min-width: 0;
+            background: var(--bg);
+            border: 1px solid var(--border-strong);
+            border-radius: 8px;
+            color: var(--text);
+            padding: 7px 10px;
+            font-size: 12px;
+            font-family: inherit;
+            outline: none;
+        }
+
+        .tool-row input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+
+        .tool-row button { flex-shrink: 0; padding: 7px 12px; }
+
+        .result-box {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 10px;
+            font-family: var(--mono);
+            font-size: 11px;
+            line-height: 1.5;
+            color: var(--text-muted);
+            max-height: 180px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .result-box.ok { border-color: rgba(93, 206, 160, 0.35); }
+        .result-box.err { border-color: rgba(240, 113, 120, 0.4); color: #f5a5aa; }
+
+        .search-hit {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .search-hit:hover {
+            border-color: rgba(108, 158, 255, 0.4);
+            background: var(--accent-soft);
+            color: var(--text);
+        }
+
+        .search-hit .snippet {
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+
+        .search-hit .cfi {
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--text-dim);
+            word-break: break-all;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .metric {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        .metric .val {
+            font-size: 16px;
+            font-weight: 650;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .metric .lbl {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .toggle-row input { accent-color: var(--accent); }
+
+        /* ── Loading overlay ────────────────────────────────── */
         #loading {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 18px;
-            color: #666;
-            background: rgba(255, 255, 255, 0.9);
-            padding: 10px 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 18, 25, 0.55);
+            backdrop-filter: blur(4px);
             z-index: 10;
+            color: var(--text);
+            font-size: 14px;
+            gap: 10px;
+        }
+
+        #loading.hidden { display: none !important; }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255,255,255,0.2);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .hidden { display: none !important; }
+
+        /* ── Responsive ─────────────────────────────────────── */
+        @media (max-width: 1100px) {
+            main {
+                grid-template-columns: 260px minmax(0, 1fr);
+            }
+            #tools-panel { display: none; }
+            main.tools-open {
+                grid-template-columns: minmax(0, 1fr) 300px;
+            }
+            main.tools-open #sidebar { display: none; }
+            main.tools-open #tools-panel { display: flex; }
+        }
+
+        @media (max-width: 720px) {
+            main {
+                grid-template-columns: 1fr;
+                padding: 10px;
+            }
+            #sidebar, #tools-panel { display: none; }
+            main.sidebar-open #sidebar { display: flex; max-height: 40vh; }
+            main.tools-open #tools-panel { display: flex; max-height: 40vh; }
+            header { flex-wrap: wrap; }
         }
     </style>
 </head>
 <body>
     <header>
-        <h1>epub-rs Reader Demo</h1>
+        <div class="brand">
+            <div class="brand-mark">eR</div>
+            <div>
+                <h1>epub-rs Reader</h1>
+                <div class="sub">WASM · parse · navigate · CFI · generate</div>
+            </div>
+        </div>
         <div class="controls">
-            <input type="file" id="file-input" accept=".epub" />
-            <button id="prev-btn" class="hidden" disabled>Previous</button>
-            <span id="page-info" class="hidden"></span>
-            <button id="next-btn" class="hidden" disabled>Next</button>
+            <label class="file-label" for="file-input">
+                <span>打开 EPUB</span>
+            </label>
+            <input type="file" id="file-input" accept=".epub,application/epub+zip" />
+            <button type="button" id="sample-btn" class="ghost" title="用 EpubGenerator 生成示例书并打开">生成示例</button>
+            <button type="button" id="prev-btn" disabled>上一章</button>
+            <span id="page-info">—</span>
+            <button type="button" id="next-btn" disabled>下一章</button>
+            <button type="button" id="tools-toggle" class="ghost" title="工具面板">工具</button>
         </div>
     </header>
-    
-    <main>
-        <aside id="sidebar" class="hidden">
-            <div id="cover-container" class="hidden">
-                <img id="cover-img" src="" alt="Book Cover" style="width: 100%; border-radius: 4px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);" />
+
+    <main id="layout" class="no-book">
+        <aside id="sidebar" class="panel hidden">
+            <div class="tabs" role="tablist">
+                <button type="button" class="tab active" data-tab="tab-toc">目录</button>
+                <button type="button" class="tab" data-tab="tab-landmarks">地标</button>
+                <button type="button" class="tab" data-tab="tab-pages">页码</button>
+                <button type="button" class="tab" data-tab="tab-meta">元数据</button>
             </div>
-            <h2>Table of Contents</h2>
-            <div id="toc-container"></div>
+            <div class="panel-body">
+                <div id="tab-toc" class="tab-panel active">
+                    <div id="cover-wrap" class="hidden">
+                        <img id="cover-img" src="" alt="封面" />
+                    </div>
+                    <div id="toc-container"><div class="empty-hint">加载后显示目录</div></div>
+                </div>
+                <div id="tab-landmarks" class="tab-panel">
+                    <div id="landmarks-container"><div class="empty-hint">无 landmarks</div></div>
+                </div>
+                <div id="tab-pages" class="tab-panel">
+                    <div id="pagelist-container"><div class="empty-hint">无 page-list</div></div>
+                </div>
+                <div id="tab-meta" class="tab-panel">
+                    <div id="meta-container" class="meta-block"></div>
+                </div>
+            </div>
         </aside>
-        <div id="viewer-container">
-            <div id="loading" class="hidden">Loading...</div>
-            <iframe id="viewer" sandbox="allow-same-origin allow-scripts"></iframe>
-        </div>
+
+        <section id="viewer-panel" class="panel">
+            <div class="viewer-toolbar">
+                <div class="left">
+                    <button type="button" id="sidebar-toggle" class="ghost hidden">目录</button>
+                    <span id="chapter-title" style="font-size:12px;color:var(--text-muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+                </div>
+                <div class="progress-wrap">
+                    <div class="progress-bar"><i id="progress-fill"></i></div>
+                    <div class="progress-label" id="progress-label">进度 —</div>
+                </div>
+                <div class="right">
+                    <label class="toggle-row" style="margin:0" title="注入 CFI 标记到章节 DOM">
+                        <input type="checkbox" id="cfi-markers-toggle" />
+                        CFI 标记
+                    </label>
+                </div>
+            </div>
+            <div class="panel-body" id="viewer-body">
+                <div id="welcome" class="welcome">
+                    <div class="brand-mark" style="width:52px;height:52px;font-size:18px;border-radius:14px;">eR</div>
+                    <h2>epub-rs WASM Demo</h2>
+                    <p>在浏览器中解析 EPUB 2/3：统一导航、Readium 式位置、CFI 工具、章节内搜索，以及内存中生成示例书。</p>
+                    <div class="welcome-actions">
+                        <label class="file-label" for="file-input">选择 .epub 文件</label>
+                        <button type="button" id="sample-btn-welcome" class="primary">生成并打开示例书</button>
+                    </div>
+                    <div class="feature-grid">
+                        <div class="feature-card"><strong>get_navigation</strong>TOC · page-list · landmarks 一次解析</div>
+                        <div class="feature-card"><strong>positions</strong>1024B 虚拟页 · 阅读进度</div>
+                        <div class="feature-card"><strong>CFI 工具</strong>resolve · range · location 互转</div>
+                        <div class="feature-card"><strong>search / TTS</strong>章节搜索 · 语义抽取</div>
+                    </div>
+                </div>
+                <iframe id="viewer" class="hidden" sandbox="allow-same-origin allow-scripts" title="EPUB chapter viewer"></iframe>
+                <div id="loading" class="hidden"><div class="spinner"></div><span>加载中…</span></div>
+            </div>
+        </section>
+
+        <aside id="tools-panel" class="panel hidden">
+            <div class="panel-header">
+                <h2>工具箱</h2>
+            </div>
+            <div class="panel-body">
+                <div class="tool-section">
+                    <h3>性能指标</h3>
+                    <div class="metrics" id="metrics">
+                        <div class="metric"><div class="val" id="m-parse">—</div><div class="lbl">OPF 解析</div></div>
+                        <div class="metric"><div class="val" id="m-nav">—</div><div class="lbl">导航</div></div>
+                        <div class="metric"><div class="val" id="m-pos">—</div><div class="lbl">位置生成</div></div>
+                        <div class="metric"><div class="val" id="m-locs">—</div><div class="lbl">虚拟页数</div></div>
+                    </div>
+                </div>
+
+                <div class="tool-section">
+                    <h3>章节搜索</h3>
+                    <div class="tool-row">
+                        <input type="search" id="search-input" placeholder="在当前章搜索…" />
+                        <button type="button" id="search-btn">搜索</button>
+                    </div>
+                    <div id="search-results"></div>
+                </div>
+
+                <div class="tool-section">
+                    <h3>CFI → Location</h3>
+                    <div class="tool-row">
+                        <input type="text" id="cfi-input" placeholder="epubcfi(...)" />
+                        <button type="button" id="cfi-to-loc-btn">定位</button>
+                    </div>
+                    <div class="result-box" id="cfi-loc-result">输入 CFI，查虚拟页索引</div>
+                </div>
+
+                <div class="tool-section">
+                    <h3>Location → CFI</h3>
+                    <div class="tool-row">
+                        <input type="number" id="loc-input" min="0" placeholder="0-based index" />
+                        <button type="button" id="loc-to-cfi-btn">查询</button>
+                    </div>
+                    <div class="result-box" id="loc-cfi-result">输入位置索引</div>
+                </div>
+
+                <div class="tool-section">
+                    <h3>resolve_cfi</h3>
+                    <div class="tool-row">
+                        <input type="text" id="resolve-cfi-input" placeholder="epubcfi(/6/4!/4/2/1:0)" />
+                        <button type="button" id="resolve-cfi-btn">解析</button>
+                    </div>
+                    <div class="result-box" id="resolve-cfi-result">无状态 CFI 解析 → XPath / id</div>
+                </div>
+
+                <div class="tool-section">
+                    <h3>CFI Range</h3>
+                    <div class="tool-row">
+                        <input type="text" id="cfi-a" placeholder="起点 CFI" />
+                    </div>
+                    <div class="tool-row">
+                        <input type="text" id="cfi-b" placeholder="终点 CFI" />
+                        <button type="button" id="cfi-range-btn">合并</button>
+                    </div>
+                    <div class="result-box" id="cfi-range-result">generate_cfi_range + compare_cfi</div>
+                </div>
+
+                <div class="tool-section">
+                    <h3>语义抽取 (TTS / A11y)</h3>
+                    <div class="tool-row">
+                        <button type="button" id="semantic-btn">抽取当前章</button>
+                    </div>
+                    <div class="result-box" id="semantic-result">extract_semantic_content</div>
+                </div>
+            </div>
+        </aside>
     </main>
 
     <script type="module">
-        import init, { EpubParser } from './pkg/epub_rs.js';
+        import init, {
+            EpubParser,
+            EpubGenerator,
+            resolve_cfi,
+            generate_cfi_range,
+            compare_cfi,
+            search_text_in_chapter,
+            extract_semantic_content,
+            inject_cfi_markers,
+        } from './pkg/epub_rs.js';
 
+        /** @type {EpubParser | null} */
         let parser = null;
+        /** @type {EpubParser | null} */
         let assetParser = null;
+        /** @type {any} */
         let book = null;
+        /** @type {any[]} */
+        let locations = [];
+        /** @type {Map<number, any[]>} spine index → positions in chapter */
+        let positionsBySpine = new Map();
         let currentSpineIndex = 0;
+        /** @type {string[]} */
         let blobUrls = [];
+        let currentChapterHtml = '';
+        let currentBaseCfi = '';
+        let wasmReady = false;
 
-        const fileInput = document.getElementById('file-input');
-        const prevBtn = document.getElementById('prev-btn');
-        const nextBtn = document.getElementById('next-btn');
-        const pageInfo = document.getElementById('page-info');
-        const viewer = document.getElementById('viewer');
-        const loading = document.getElementById('loading');
+        const $ = (id) => document.getElementById(id);
+        const layout = $('layout');
+        const fileInput = $('file-input');
+        const prevBtn = $('prev-btn');
+        const nextBtn = $('next-btn');
+        const pageInfo = $('page-info');
+        const viewer = $('viewer');
+        const loading = $('loading');
+        const welcome = $('welcome');
 
-        // Initialize Wasm
-        async function run() {
+        // ── Init ─────────────────────────────────────────────
+        async function boot() {
             try {
                 await init();
-                console.log("WASM initialized successfully.");
-                document.getElementById('loading').classList.add('hidden');
+                wasmReady = true;
+                console.log('epub-rs WASM ready');
             } catch (e) {
-                console.error("Failed to initialize WASM:", e);
-                alert("Failed to initialize WebAssembly. See console for details.");
+                console.error(e);
+                alert('WASM 初始化失败：' + e);
             }
         }
-        run();
+        boot();
 
+        // ── Tabs ─────────────────────────────────────────────
+        document.querySelectorAll('.tab').forEach((tab) => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+                tab.classList.add('active');
+                const panel = $(tab.dataset.tab);
+                if (panel) panel.classList.add('active');
+            });
+        });
+
+        $('tools-toggle').addEventListener('click', () => {
+            layout.classList.toggle('tools-open');
+            const tools = $('tools-panel');
+            if (!tools.classList.contains('hidden')) {
+                // keep visible when book loaded
+            }
+        });
+
+        $('sidebar-toggle').addEventListener('click', () => {
+            layout.classList.toggle('sidebar-open');
+        });
+
+        // ── File open ────────────────────────────────────────
         fileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
+            const file = e.target.files?.[0];
             if (!file) return;
+            if (!wasmReady) {
+                alert('WASM 尚未就绪，请稍候再试');
+                return;
+            }
+            await openEpubBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+        });
 
+        $('sample-btn').addEventListener('click', generateSample);
+        $('sample-btn-welcome').addEventListener('click', generateSample);
+
+        async function generateSample() {
+            if (!wasmReady) {
+                alert('WASM 尚未就绪');
+                return;
+            }
             showLoading();
-
             try {
-                const t0 = performance.now();
-                const arrayBuffer = await file.arrayBuffer();
-                const bytes = new Uint8Array(arrayBuffer);
+                const gen = new EpubGenerator();
+                gen.set_title('epub-rs Demo Book');
+                gen.set_language('zh-CN');
+                gen.set_identifier('urn:uuid:epub-rs-demo-sample');
+                gen.add_author('epub-rs', 'aut');
+                gen.set_theme(true);
 
-                // Cleanup previous state
-                cleanupBlobUrls();
-                
-                // Create new parser and parse the EPUB
-                const t1 = performance.now();
-                parser = new EpubParser(bytes);
-                assetParser = new EpubParser(bytes); // Separate instance for callbacks to avoid Rust mutable aliasing
-                const t2 = performance.now();
-                book = parser.parse();
-                const t3 = performance.now();
-                console.log("Parsed book object:", book);
-                
-                // Set window title if available
-                if (book.metadata && book.metadata.title) {
-                    document.title = book.metadata.title + " - epub-rs Reader Demo";
-                }
-                
-                try {
-                    const cover_arr = parser.get_cover_image();
-                    if (cover_arr && cover_arr.length === 2) {
-                        const blob = new Blob([cover_arr[0]], { type: cover_arr[1] });
-                        const url = URL.createObjectURL(blob);
-                        blobUrls.push(url);
-                        document.getElementById('cover-img').src = url;
-                        document.getElementById('cover-container').classList.remove('hidden');
-                    }
-                } catch (e) {
-                    console.warn("No cover image found or failed to load:", e);
-                    document.getElementById('cover-container').classList.add('hidden');
-                }
+                const css = `
+                    body { font-family: Georgia, "Noto Serif SC", serif; line-height: 1.7; max-width: 40em; margin: 0 auto; padding: 1.5em; color: #222; }
+                    h1 { color: #1a3a6b; border-bottom: 2px solid #6c9eff; padding-bottom: 0.3em; }
+                    h2 { color: #2a5080; }
+                    .lead { font-size: 1.1em; color: #444; }
+                    code { background: #f0f3f8; padding: 0.1em 0.35em; border-radius: 4px; }
+                    .card { background: #f7f9fc; border-left: 4px solid #6c9eff; padding: 1em; margin: 1em 0; }
+                `;
+                gen.add_stylesheet('style', 'styles/main.css', css);
 
-                let toc = [];
-                try {
-                    toc = parser.get_toc();
-                    console.log("Parsed TOC:", toc);
-                    renderToc(toc);
-                } catch (e) {
-                    console.warn("Failed to get TOC or no TOC available:", e);
-                    document.getElementById('sidebar').classList.add('hidden');
-                }
-                const t4 = performance.now();
-                
-                const t5 = performance.now();
-                const locations = parser.generate_locations(1000);
-                const t6 = performance.now();
-                console.log(`Generated ${locations.length} CFIs.`);
-                
-                // Print Performance
-                console.log(`--- EPUB Performance Metrics ---`);
-                console.log(`Read ZIP: ${(t2-t1).toFixed(2)}ms`);
-                console.log(`Parse OPF: ${(t3-t2).toFixed(2)}ms`);
-                console.log(`Extract TOC: ${(t4-t3).toFixed(2)}ms`);
-                console.log(`Generate CFIs: ${(t6-t5).toFixed(2)}ms`);
-                console.log(`Total Parse Time: ${(t6-t1).toFixed(2)}ms`);
-                
-                // Set page info placeholder text with metrics
-                document.getElementById('page-info').textContent = `Metrics in Console`;
-                
-                currentSpineIndex = 0;
-                
-                await loadChapter(currentSpineIndex);
-                updateUI();
+                gen.add_chapter_with_nav(
+                    'ch1',
+                    'text/intro.xhtml',
+                    '欢迎',
+                    xhtmlChapter(
+                        '欢迎使用 epub-rs',
+                        `<p class="lead">这是一本由 <code>EpubGenerator</code> 在浏览器内存中生成的示例 EPUB 3。</p>
+                         <div class="card">支持解析、导航、Readium 风格位置、CFI、章节搜索与资源重写。</div>
+                         <p>使用侧栏目录切换章节，或在右侧工具箱试用 CFI / 搜索 API。</p>`
+                    )
+                );
+                gen.add_chapter_with_nav(
+                    'ch2',
+                    'text/features.xhtml',
+                    '功能一览',
+                    xhtmlChapter(
+                        '功能一览',
+                        `<h2>导航</h2>
+                         <p><code>get_navigation()</code> 一次读出 TOC、page-list 与 landmarks。</p>
+                         <h2>位置</h2>
+                         <p>默认每 1024 字节一个虚拟页（Adobe RMSDK / Readium 惯例）。</p>
+                         <h2>CFI</h2>
+                         <p>支持 resolve、range 合并、location ↔ CFI 双向查询。</p>
+                         <p id="anchor-demo">这里是一个带 id 的锚点段落，便于 TOC 片段跳转测试。</p>`
+                    )
+                );
+                gen.add_chapter_with_nav(
+                    'ch3',
+                    'text/search.xhtml',
+                    '搜索与语义',
+                    xhtmlChapter(
+                        '搜索与语义',
+                        `<p>在工具箱输入关键词「语义」或「CFI」，可对当前章调用 <code>search_text_in_chapter</code>。</p>
+                         <p>「抽取当前章」会运行 <code>extract_semantic_content</code>，适合 TTS / 无障碍管线。</p>
+                         <blockquote>语义抽取会保留标签名、文本与 CFI 范围。</blockquote>`
+                    )
+                );
+
+                gen.add_landmark('bodymatter', 'text/intro.xhtml', '正文开始');
+                gen.add_landmark('toc', 'text/intro.xhtml', '目录入口');
+                gen.add_page('1', 'text/intro.xhtml');
+                gen.add_page('2', 'text/features.xhtml');
+                gen.add_page('3', 'text/search.xhtml#anchor-demo');
+
+                gen.validate();
+                const bytes = gen.generate();
+                gen.free();
+                await openEpubBytes(bytes, 'epub-rs-demo-sample.epub');
             } catch (err) {
-                console.error("Failed to parse EPUB:", err);
-                alert("Failed to parse EPUB: " + err);
+                console.error(err);
+                alert('生成示例失败：' + err);
             } finally {
                 hideLoading();
             }
-        });
+        }
+
+        function xhtmlChapter(title, bodyInner) {
+            return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <title>${escapeHtml(title)}</title>
+  <link rel="stylesheet" type="text/css" href="../styles/main.css"/>
+</head>
+<body>
+  <h1>${escapeHtml(title)}</h1>
+  ${bodyInner}
+</body>
+</html>`;
+        }
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        // ── Core open pipeline ───────────────────────────────
+        async function openEpubBytes(bytes, label = 'book.epub') {
+            showLoading();
+            try {
+                cleanupBlobUrls();
+                freeParser(parser);
+                freeParser(assetParser);
+                parser = new EpubParser(bytes);
+                assetParser = new EpubParser(bytes);
+
+                const tOpen = performance.now();
+                book = parser.parse();
+                const tParse = performance.now();
+
+                // Cover
+                try {
+                    const cover = parser.get_cover_image();
+                    if (cover && cover.length === 2) {
+                        const url = URL.createObjectURL(new Blob([cover[0]], { type: cover[1] }));
+                        blobUrls.push(url);
+                        $('cover-img').src = url;
+                        $('cover-wrap').classList.remove('hidden');
+                    } else {
+                        $('cover-wrap').classList.add('hidden');
+                    }
+                } catch {
+                    $('cover-wrap').classList.add('hidden');
+                }
+
+                // Unified navigation (preferred over get_toc alone)
+                const tNav0 = performance.now();
+                let navigation = { toc: [], page_list: [], landmarks: [] };
+                try {
+                    navigation = parser.get_navigation();
+                } catch (e) {
+                    console.warn('get_navigation failed, fallback get_toc', e);
+                    try {
+                        navigation.toc = parser.get_toc();
+                    } catch (_) { /* empty */ }
+                }
+                const tNav1 = performance.now();
+
+                renderToc(navigation.toc || []);
+                renderNavList('landmarks-container', navigation.landmarks || [], '无 landmarks');
+                renderNavList('pagelist-container', navigation.page_list || [], '无 page-list');
+                renderMetadata(book);
+
+                // Positions (Readium default 1024 when pass 0)
+                const tPos0 = performance.now();
+                locations = [];
+                positionsBySpine = new Map();
+                try {
+                    locations = parser.generate_locations(0) || [];
+                    const byChapter = parser.positions_by_reading_order(0) || [];
+                    // Map linear chapter groups back roughly by spine order of positions
+                    for (const pos of locations) {
+                        if (!positionsBySpine.has(pos.spine_index)) {
+                            positionsBySpine.set(pos.spine_index, []);
+                        }
+                        positionsBySpine.get(pos.spine_index).push(pos);
+                    }
+                    console.log('positions_by_reading_order chapters:', byChapter.length);
+                } catch (e) {
+                    console.warn('position generation failed', e);
+                }
+                const tPos1 = performance.now();
+
+                const title = metaTitle(book) || label;
+                document.title = `${title} · epub-rs`;
+                $('m-parse').textContent = `${(tParse - tOpen).toFixed(1)} ms`;
+                $('m-nav').textContent = `${(tNav1 - tNav0).toFixed(1)} ms`;
+                $('m-pos').textContent = `${(tPos1 - tPos0).toFixed(1)} ms`;
+                $('m-locs').textContent = String(locations.length);
+
+                console.log('--- EPUB Performance ---');
+                console.log(`Parse OPF: ${(tParse - tOpen).toFixed(2)}ms`);
+                console.log(`Navigation: ${(tNav1 - tNav0).toFixed(2)}ms`);
+                console.log(`Locations (${locations.length}): ${(tPos1 - tPos0).toFixed(2)}ms`);
+                console.log('Book:', book);
+
+                layout.classList.remove('no-book');
+                $('sidebar').classList.remove('hidden');
+                $('tools-panel').classList.remove('hidden');
+                $('sidebar-toggle').classList.remove('hidden');
+                welcome.classList.add('hidden');
+                viewer.classList.remove('hidden');
+
+                currentSpineIndex = firstLinearSpineIndex();
+                await loadChapter(currentSpineIndex);
+                updateUI();
+            } catch (err) {
+                console.error(err);
+                alert('打开 EPUB 失败：' + err);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function freeParser(p) {
+            try {
+                if (p && typeof p.free === 'function') p.free();
+            } catch (_) { /* ignore */ }
+        }
+
+        function metaTitle(b) {
+            const m = b?.metadata;
+            if (!m) return '';
+            if (typeof m.title === 'string' && m.title) return m.title;
+            if (Array.isArray(m.titles) && m.titles[0]?.value) return m.titles[0].value;
+            return '';
+        }
+
+        function firstLinearSpineIndex() {
+            if (!book?.spine?.length) return 0;
+            for (let i = 0; i < book.spine.length; i++) {
+                if (book.spine[i].linear !== false) return i;
+            }
+            return 0;
+        }
+
+        // ── Manifest helpers ─────────────────────────────────
+        function manifestGet(id) {
+            if (!book?.manifest) return null;
+            const m = book.manifest;
+            if (typeof m.get === 'function') return m.get(id) ?? null;
+            return m[id] ?? null;
+        }
+
+        function spineHref(index) {
+            const item = book?.spine?.[index];
+            if (!item) return null;
+            const man = manifestGet(item.idref);
+            return man?.href ?? null;
+        }
+
+        function resolveToRootPath(href) {
+            if (!href) return '';
+            const pathOnly = href.split('#')[0].split('?')[0];
+            if (!pathOnly) return '';
+            // Already root-relative from navigation, or spine href may be OPF-relative
+            if (!book.opf_dir) return pathOnly;
+            // If path already starts with opf_dir, keep it
+            if (pathOnly === book.opf_dir || pathOnly.startsWith(book.opf_dir + '/')) {
+                return pathOnly;
+            }
+            // Heuristic: if it matches a manifest href as-is under opf_dir
+            return joinPath(book.opf_dir, pathOnly);
+        }
+
+        function joinPath(dir, rel) {
+            if (!dir) return rel;
+            const d = dir.replace(/\/+$/, '');
+            const r = rel.replace(/^\/+/, '');
+            // Normalize .. segments lightly
+            const parts = (d + '/' + r).split('/');
+            const out = [];
+            for (const p of parts) {
+                if (!p || p === '.') continue;
+                if (p === '..') out.pop();
+                else out.push(p);
+            }
+            return out.join('/');
+        }
+
+        function findSpineIndexForHref(href) {
+            if (!book) return -1;
+            const pathOnly = href.split('#')[0].split('?')[0];
+            const candidates = new Set([pathOnly, resolveToRootPath(pathOnly)]);
+            // Also try stripping opf_dir
+            if (book.opf_dir && pathOnly.startsWith(book.opf_dir + '/')) {
+                candidates.add(pathOnly.slice(book.opf_dir.length + 1));
+            }
+
+            for (let i = 0; i < book.spine.length; i++) {
+                const man = manifestGet(book.spine[i].idref);
+                if (!man) continue;
+                const h = man.href;
+                const full = resolveToRootPath(h);
+                if (candidates.has(h) || candidates.has(full)) return i;
+            }
+            // Suffix match fallback
+            for (let i = 0; i < book.spine.length; i++) {
+                const man = manifestGet(book.spine[i].idref);
+                if (!man) continue;
+                const h = man.href;
+                for (const c of candidates) {
+                    if (c.endsWith(h) || h.endsWith(c)) return i;
+                }
+            }
+            return -1;
+        }
+
+        // ── Navigation rendering ─────────────────────────────
+        function renderToc(entries) {
+            const container = $('toc-container');
+            container.innerHTML = '';
+            if (!entries?.length) {
+                container.innerHTML = '<div class="empty-hint">无目录</div>';
+                return;
+            }
+            container.appendChild(buildTocList(entries));
+        }
+
+        function buildTocList(entries) {
+            const ul = document.createElement('ul');
+            ul.className = 'toc-list';
+            for (const entry of entries) {
+                const li = document.createElement('li');
+                const a = document.createElement('a');
+                a.textContent = entry.title || '(无标题)';
+                a.href = '#';
+                a.dataset.href = entry.href || '';
+                a.addEventListener('click', (ev) => {
+                    ev.preventDefault();
+                    navigateToHref(entry.href);
+                });
+                li.appendChild(a);
+                if (entry.children?.length) li.appendChild(buildTocList(entry.children));
+                ul.appendChild(li);
+            }
+            return ul;
+        }
+
+        function renderNavList(containerId, entries, emptyText) {
+            const container = $(containerId);
+            container.innerHTML = '';
+            if (!entries?.length) {
+                container.innerHTML = `<div class="empty-hint">${emptyText}</div>`;
+                return;
+            }
+            const ul = document.createElement('ul');
+            ul.className = 'nav-list';
+            for (const entry of entries) {
+                const li = document.createElement('li');
+                const a = document.createElement('a');
+                a.textContent = entry.title || entry.href || '(entry)';
+                a.href = '#';
+                a.addEventListener('click', (ev) => {
+                    ev.preventDefault();
+                    navigateToHref(entry.href);
+                });
+                li.appendChild(a);
+                ul.appendChild(li);
+            }
+            container.appendChild(ul);
+        }
+
+        function renderMetadata(b) {
+            const el = $('meta-container');
+            const m = b?.metadata || {};
+            const creators = (m.creators || []).map((c) => c.name || c).filter(Boolean);
+            const subjects = m.subjects || [];
+            el.innerHTML = `
+                <div class="title">${escapeHtml(metaTitle(b) || '（无标题）')}</div>
+                ${m.subtitle ? `<div style="margin-bottom:8px;color:var(--text-muted)">${escapeHtml(m.subtitle)}</div>` : ''}
+                <div class="meta-row"><span class="k">作者</span><span>${escapeHtml(creators.join('、') || '—')}</span></div>
+                <div class="meta-row"><span class="k">语言</span><span>${escapeHtml(m.language || '—')}</span></div>
+                <div class="meta-row"><span class="k">标识</span><span style="word-break:break-all">${escapeHtml(m.identifier || '—')}</span></div>
+                <div class="meta-row"><span class="k">出版社</span><span>${escapeHtml(m.publisher || '—')}</span></div>
+                <div class="meta-row"><span class="k">布局</span><span>${escapeHtml(m.layout || '—')}</span></div>
+                <div class="meta-row"><span class="k">Spine</span><span>${b.spine?.length ?? 0} 项</span></div>
+                <div class="meta-row"><span class="k">Manifest</span><span>${manifestSize(b)} 资源</span></div>
+                <div class="meta-row"><span class="k">加密</span><span>${encryptionCount(b)} 项</span></div>
+                <div class="chip-row">
+                    ${(subjects || []).slice(0, 8).map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join('')}
+                    <span class="chip accent">OPF: ${escapeHtml(b.opf_dir || '/')}</span>
+                </div>
+            `;
+        }
+
+        function manifestSize(b) {
+            if (!b?.manifest) return 0;
+            if (typeof b.manifest.size === 'number') return b.manifest.size;
+            return Object.keys(b.manifest).length;
+        }
+
+        function encryptionCount(b) {
+            if (!b?.encryptions) return 0;
+            if (typeof b.encryptions.size === 'number') return b.encryptions.size;
+            return Object.keys(b.encryptions).length;
+        }
+
+        // ── Chapter loading ──────────────────────────────────
+        async function navigateToHref(href) {
+            if (!book || !href) return;
+            const parts = href.split('#');
+            const hash = parts.length > 1 ? parts[1] : null;
+            let found = findSpineIndexForHref(href);
+            if (found < 0) {
+                console.warn('spine not found for', href);
+                return;
+            }
+            currentSpineIndex = found;
+            showLoading();
+            await loadChapter(currentSpineIndex);
+            updateUI();
+            hideLoading();
+            if (hash) {
+                setTimeout(() => {
+                    try {
+                        const doc = viewer.contentDocument;
+                        const target =
+                            doc.getElementById(hash) ||
+                            doc.querySelector(`[name="${CSS.escape(hash)}"]`);
+                        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    } catch (e) {
+                        console.warn('scroll hash failed', e);
+                    }
+                }, 80);
+            }
+        }
+
+        async function loadChapter(index) {
+            if (!book || !parser) return;
+            const spineItem = book.spine[index];
+            if (!spineItem) return;
+            const man = manifestGet(spineItem.idref);
+            if (!man) {
+                viewer.srcdoc = errorHtml(`Manifest 中找不到 idref: ${spineItem.idref}`);
+                return;
+            }
+
+            const fullPath = resolveToRootPath(man.href);
+            try {
+                let html = parser.get_chapter_with_rewritten_assets(fullPath, (absPath) =>
+                    resolveAsset(absPath)
+                );
+
+                // Base CFI for this spine item: epubcfi(/6/{2*(index+1)}!)
+                currentBaseCfi = `epubcfi(/6/${(index + 1) * 2}!)`;
+                currentChapterHtml = html;
+
+                if ($('cfi-markers-toggle').checked) {
+                    try {
+                        html = inject_cfi_markers(html, currentBaseCfi);
+                    } catch (e) {
+                        console.warn('inject_cfi_markers failed', e);
+                    }
+                }
+
+                const injectStyle = `
+<style>
+  html { scroll-behavior: smooth; }
+  body {
+    max-width: 42rem;
+    margin: 0 auto;
+    padding: 1.5rem 1.25rem 3rem;
+    box-sizing: border-box;
+    font-family: Georgia, "Noto Serif SC", "Songti SC", serif;
+    line-height: 1.75;
+    color: #1c1c1c;
+    background: #f7f4ee;
+  }
+  img, svg, video { max-width: 100%; height: auto; }
+  a { color: #2a5db0; }
+  ::selection { background: rgba(108, 158, 255, 0.35); }
+  mark.epub-rs-hit {
+    background: #ffe08a;
+    padding: 0 2px;
+    border-radius: 2px;
+  }
+  [data-epubcfi] { /* subtle when CFI markers on */ }
+</style>`;
+
+                html = injectIntoHead(html, injectStyle);
+                viewer.srcdoc = html;
+                await new Promise((r) => setTimeout(r, 40));
+
+                const chapterPositions = positionsBySpine.get(index) || [];
+                const titleGuess =
+                    chapterPositions[0]?.title ||
+                    man.href?.split('/').pop() ||
+                    `Section ${index + 1}`;
+                $('chapter-title').textContent = titleGuess;
+                highlightTocForSpine(index);
+            } catch (e) {
+                console.error(e);
+                viewer.srcdoc = errorHtml(String(e));
+            }
+        }
+
+        function injectIntoHead(html, snippet) {
+            if (html.includes('</head>')) return html.replace('</head>', snippet + '</head>');
+            if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, (m) => m + snippet);
+            return snippet + html;
+        }
+
+        function errorHtml(msg) {
+            return `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;color:#a33">
+              <h1>加载失败</h1><pre style="white-space:pre-wrap">${escapeHtml(msg)}</pre></body></html>`;
+        }
+
+        function resolveAsset(absPath) {
+            try {
+                const pathOnly = absPath.split('#')[0].split('?')[0];
+                const bytes = assetParser.get_file_bytes(pathOnly);
+                const url = URL.createObjectURL(new Blob([bytes], { type: getMimeType(pathOnly) }));
+                blobUrls.push(url);
+                return url;
+            } catch (e) {
+                console.warn('asset resolve failed', absPath, e);
+                return null;
+            }
+        }
+
+        function getMimeType(path) {
+            const ext = path.split('.').pop()?.toLowerCase() || '';
+            const map = {
+                jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+                svg: 'image/svg+xml', webp: 'image/webp', css: 'text/css',
+                js: 'application/javascript', woff: 'font/woff', woff2: 'font/woff2',
+                ttf: 'font/ttf', otf: 'font/otf', xhtml: 'application/xhtml+xml',
+                html: 'text/html', xml: 'application/xml',
+            };
+            return map[ext] || 'application/octet-stream';
+        }
+
+        function cleanupBlobUrls() {
+            blobUrls.forEach((u) => URL.revokeObjectURL(u));
+            blobUrls = [];
+        }
+
+        function highlightTocForSpine(index) {
+            const href = spineHref(index);
+            if (!href) return;
+            const root = resolveToRootPath(href);
+            document.querySelectorAll('.toc-list a').forEach((a) => {
+                const h = (a.dataset.href || '').split('#')[0];
+                const match =
+                    h &&
+                    (h === href ||
+                        h === root ||
+                        root.endsWith(h) ||
+                        h.endsWith(href) ||
+                        resolveToRootPath(h) === root);
+                a.classList.toggle('active', !!match);
+            });
+        }
+
+        // ── UI / nav buttons ─────────────────────────────────
+        function updateUI() {
+            if (!book) return;
+            prevBtn.disabled = currentSpineIndex <= 0;
+            nextBtn.disabled = currentSpineIndex >= book.spine.length - 1;
+            pageInfo.textContent = `${currentSpineIndex + 1} / ${book.spine.length}`;
+
+            const chapterPos = positionsBySpine.get(currentSpineIndex) || [];
+            const first = chapterPos[0];
+            const pct = first
+                ? Math.min(100, Math.round((first.total_progression || 0) * 1000) / 10)
+                : Math.round(((currentSpineIndex + 1) / Math.max(book.spine.length, 1)) * 100);
+            $('progress-fill').style.width = `${pct}%`;
+            const locInfo = locations.length
+                ? ` · ${locations.length} 虚拟页`
+                : '';
+            $('progress-label').textContent = `约 ${pct}%${locInfo}`;
+        }
 
         prevBtn.addEventListener('click', async () => {
             if (currentSpineIndex > 0) {
@@ -314,200 +1513,211 @@
             }
         });
 
-        function updateUI() {
+        $('cfi-markers-toggle').addEventListener('change', async () => {
             if (!book) return;
-            
-            prevBtn.classList.remove('hidden');
-            nextBtn.classList.remove('hidden');
-            pageInfo.classList.remove('hidden');
-            
-            prevBtn.disabled = currentSpineIndex === 0;
-            nextBtn.disabled = currentSpineIndex === book.spine.length - 1;
-            
-            pageInfo.textContent = `Section ${currentSpineIndex + 1} / ${book.spine.length}`;
+            showLoading();
+            await loadChapter(currentSpineIndex);
+            hideLoading();
+        });
+
+        // ── Tools ────────────────────────────────────────────
+        $('search-btn').addEventListener('click', runSearch);
+        $('search-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') runSearch();
+        });
+
+        function runSearch() {
+            const q = $('search-input').value.trim();
+            const box = $('search-results');
+            box.innerHTML = '';
+            if (!q || !currentChapterHtml) {
+                box.innerHTML = '<div class="empty-hint">无查询或章节未加载</div>';
+                return;
+            }
+            try {
+                const results = search_text_in_chapter(currentChapterHtml, currentBaseCfi, q) || [];
+                if (!results.length) {
+                    box.innerHTML = '<div class="empty-hint">无匹配</div>';
+                    return;
+                }
+                for (const hit of results.slice(0, 30)) {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'search-hit';
+                    const excerpt = hit.excerpt || hit.snippet || hit.text || q;
+                    btn.innerHTML = `<div class="snippet">${escapeHtml(excerpt)}</div>
+                        <div class="cfi">${escapeHtml(hit.cfi || hit.cfi_range || '')}</div>`;
+                    btn.addEventListener('click', () => {
+                        try {
+                            const cfi = hit.cfi || hit.cfi_range;
+                            if (cfi) {
+                                const res = resolve_cfi(cfi);
+                                console.log('search hit resolve', res);
+                                $('cfi-loc-result').textContent = JSON.stringify(
+                                    { hit, resolve: res },
+                                    null,
+                                    2
+                                );
+                                $('cfi-loc-result').classList.add('ok');
+                            }
+                            // Highlight in iframe
+                            const doc = viewer.contentDocument;
+                            if (doc?.body) {
+                                // simple text highlight pass
+                                clearMarks(doc);
+                                highlightQuery(doc, q);
+                            }
+                        } catch (err) {
+                            console.warn(err);
+                        }
+                    });
+                    box.appendChild(btn);
+                }
+            } catch (e) {
+                box.innerHTML = `<div class="result-box err">${escapeHtml(String(e))}</div>`;
+            }
         }
+
+        function clearMarks(doc) {
+            doc.querySelectorAll('mark.epub-rs-hit').forEach((m) => {
+                const t = doc.createTextNode(m.textContent || '');
+                m.replaceWith(t);
+            });
+        }
+
+        function highlightQuery(doc, query) {
+            if (!query) return;
+            const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            while (walker.nextNode()) nodes.push(walker.currentNode);
+            const lower = query.toLowerCase();
+            for (const node of nodes) {
+                const text = node.textContent || '';
+                const idx = text.toLowerCase().indexOf(lower);
+                if (idx < 0) continue;
+                const range = doc.createRange();
+                range.setStart(node, idx);
+                range.setEnd(node, idx + query.length);
+                const mark = doc.createElement('mark');
+                mark.className = 'epub-rs-hit';
+                try {
+                    range.surroundContents(mark);
+                } catch (_) { /* partial nodes */ }
+            }
+        }
+
+        $('cfi-to-loc-btn').addEventListener('click', () => {
+            const cfi = $('cfi-input').value.trim();
+            const out = $('cfi-loc-result');
+            if (!parser || !cfi) return;
+            try {
+                // wasm-bindgen may surface i64 as bigint
+                const raw = parser.location_from_cfi(cfi);
+                const idx = typeof raw === 'bigint' ? Number(raw) : Number(raw);
+                let pos = null;
+                if (idx >= 0 && locations[idx]) pos = locations[idx];
+                let resolved = null;
+                try {
+                    resolved = resolve_cfi(cfi);
+                } catch (_) { /* optional */ }
+                out.textContent = JSON.stringify({ location_index: idx, position: pos, resolve: resolved }, null, 2);
+                out.className = 'result-box ok';
+                if (pos && typeof pos.spine_index === 'number') {
+                    currentSpineIndex = pos.spine_index;
+                    loadChapter(currentSpineIndex).then(updateUI);
+                }
+            } catch (e) {
+                out.textContent = String(e);
+                out.className = 'result-box err';
+            }
+        });
+
+        $('loc-to-cfi-btn').addEventListener('click', () => {
+            const idx = Number($('loc-input').value);
+            const out = $('loc-cfi-result');
+            if (!parser || Number.isNaN(idx)) return;
+            try {
+                const cfi = parser.cfi_from_location(idx);
+                const pos = locations[idx] || null;
+                out.textContent = JSON.stringify({ index: idx, cfi, position: pos }, null, 2);
+                out.className = 'result-box ok';
+                if (cfi) $('cfi-input').value = cfi;
+            } catch (e) {
+                out.textContent = String(e);
+                out.className = 'result-box err';
+            }
+        });
+
+        $('resolve-cfi-btn').addEventListener('click', () => {
+            const cfi = $('resolve-cfi-input').value.trim() || $('cfi-input').value.trim();
+            const out = $('resolve-cfi-result');
+            if (!cfi) return;
+            try {
+                const res = resolve_cfi(cfi);
+                out.textContent = JSON.stringify(res, null, 2);
+                out.className = 'result-box ok';
+            } catch (e) {
+                out.textContent = String(e);
+                out.className = 'result-box err';
+            }
+        });
+
+        $('cfi-range-btn').addEventListener('click', () => {
+            const a = $('cfi-a').value.trim();
+            const b = $('cfi-b').value.trim();
+            const out = $('cfi-range-result');
+            if (!a || !b) return;
+            try {
+                const range = generate_cfi_range(a, b);
+                const cmp = compare_cfi(a, b);
+                out.textContent = JSON.stringify({ range, compare: cmp, meaning: cmp < 0 ? 'A < B' : cmp > 0 ? 'A > B' : 'A == B' }, null, 2);
+                out.className = 'result-box ok';
+            } catch (e) {
+                out.textContent = String(e);
+                out.className = 'result-box err';
+            }
+        });
+
+        $('semantic-btn').addEventListener('click', () => {
+            const out = $('semantic-result');
+            if (!currentChapterHtml) {
+                out.textContent = '请先加载章节';
+                out.className = 'result-box err';
+                return;
+            }
+            try {
+                const elements = extract_semantic_content(currentChapterHtml, currentBaseCfi) || [];
+                const preview = elements.slice(0, 40).map((el) => ({
+                    tag: el.tag_name,
+                    text: (el.text || '').slice(0, 80),
+                    cfi_range: el.cfi_range,
+                    lang: el.language,
+                }));
+                out.textContent = JSON.stringify(
+                    { total: elements.length, preview },
+                    null,
+                    2
+                );
+                out.className = 'result-box ok';
+            } catch (e) {
+                out.textContent = String(e);
+                out.className = 'result-box err';
+            }
+        });
 
         function showLoading() {
             loading.classList.remove('hidden');
         }
-
         function hideLoading() {
             loading.classList.add('hidden');
         }
 
-        function renderToc(tocEntries) {
-            const sidebar = document.getElementById('sidebar');
-            const container = document.getElementById('toc-container');
-            container.innerHTML = '';
-            
-            const hasCover = !document.getElementById('cover-container').classList.contains('hidden');
-
-            if (!tocEntries || tocEntries.length === 0) {
-                if (!hasCover) sidebar.classList.add('hidden');
-                return;
-            }
-
-            sidebar.classList.remove('hidden');
-            
-            function buildList(entries) {
-                const ul = document.createElement('ul');
-                ul.className = 'toc-list';
-                
-                for (const entry of entries) {
-                    const li = document.createElement('li');
-                    const a = document.createElement('a');
-                    a.textContent = entry.title;
-                    a.onclick = () => navigateToHref(entry.href);
-                    li.appendChild(a);
-                    
-                    if (entry.children && entry.children.length > 0) {
-                        li.appendChild(buildList(entry.children));
-                    }
-                    
-                    ul.appendChild(li);
-                }
-                
-                return ul;
-            }
-
-            container.appendChild(buildList(tocEntries));
-        }
-
-        function navigateToHref(href) {
-            if (!book) return;
-            
-            // The href in TOC might have a hash fragment (e.g. chapter1.xhtml#section1)
-            const parts = href.split('#');
-            const pathOnly = parts[0];
-            const hash = parts.length > 1 ? parts[1] : null;
-            
-            // Find which spine item this path belongs to
-            let foundIndex = -1;
-            for (let i = 0; i < book.spine.length; i++) {
-                const spineItem = book.spine[i];
-                const manifestItem = book.manifest.get(spineItem.idref);
-                if (manifestItem && manifestItem.href === pathOnly) {
-                    foundIndex = i;
-                    break;
-                }
-            }
-            
-            if (foundIndex !== -1) {
-                currentSpineIndex = foundIndex;
-                showLoading();
-                loadChapter(currentSpineIndex).then(() => {
-                    updateUI();
-                    hideLoading();
-                    
-                    // Scroll to the specific section if there's a hash
-                    if (hash) {
-                        // Use a short delay to ensure iframe rendering is fully complete
-                        setTimeout(() => {
-                            try {
-                                const target = viewer.contentDocument.getElementById(hash) || viewer.contentDocument.querySelector(`[name="${hash}"]`);
-                                if (target) {
-                                    target.scrollIntoView({ behavior: 'smooth' });
-                                }
-                            } catch (e) {
-                                console.warn("Could not scroll to hash", hash, e);
-                            }
-                        }, 100);
-                    }
-                });
-            } else {
-                console.warn("Could not find spine item for TOC href:", href);
-            }
-        }
-
-        function cleanupBlobUrls() {
-            blobUrls.forEach(url => URL.revokeObjectURL(url));
-            blobUrls = [];
-        }
-
-        function getMimeType(path) {
-            const ext = path.split('.').pop().toLowerCase();
-            const map = {
-                'jpg': 'image/jpeg', 
-                'jpeg': 'image/jpeg', 
-                'png': 'image/png',
-                'gif': 'image/gif', 
-                'svg': 'image/svg+xml', 
-                'css': 'text/css',
-                'js': 'application/javascript', 
-                'woff': 'font/woff', 
-                'woff2': 'font/woff2',
-                'ttf': 'font/ttf', 
-                'otf': 'font/otf'
-            };
-            return map[ext] || 'application/octet-stream';
-        }
-
-        function resolveAsset(absPath) {
-            try {
-                // Remove URI fragments if any
-                const pathOnly = absPath.split('#')[0].split('?')[0];
-                // Use assetParser to avoid Wasm re-entrancy panic (borrowing mut self twice)
-                const bytes = assetParser.get_file_bytes(pathOnly);
-                const blob = new Blob([bytes], { type: getMimeType(pathOnly) });
-                const url = URL.createObjectURL(blob);
-                blobUrls.push(url);
-                return url;
-            } catch (e) {
-                console.warn(`Failed to resolve asset ${absPath}:`, e);
-                return null;
-            }
-        }
-
-        async function loadChapter(index) {
-            if (!book || !parser) return;
-
-            const spineItem = book.spine[index];
-            const manifestItem = book.manifest.get(spineItem.idref);
-            
-            if (!manifestItem) {
-                viewer.srcdoc = `<h1 style="color:red">Error</h1><p>Manifest item not found for idref: ${spineItem.idref}</p>`;
-                return;
-            }
-
-            // Construct the full path within the ZIP
-            let fullPath = manifestItem.href;
-            if (book.opf_dir && book.opf_dir !== "") {
-                fullPath = book.opf_dir + "/" + manifestItem.href;
-            }
-
-            try {
-                // Rewrite internal links, images, and stylesheets
-                const newHtml = parser.get_chapter_with_rewritten_assets(fullPath, (absPath) => {
-                    // We only rewrite if it's not an external URL (the wasm handles that mostly, but we double check)
-                    return resolveAsset(absPath);
-                });
-                
-                // We add a little bit of CSS to make it fit nicely in the iframe
-                const styleToInject = `
-                    <style>
-                        body { max-width: 100%; overflow-x: hidden; padding: 20px; box-sizing: border-box; }
-                        img { max-width: 100%; height: auto; }
-                    </style>
-                `;
-                
-                let injectedHtml = newHtml;
-                if (injectedHtml.includes('</head>')) {
-                    injectedHtml = injectedHtml.replace('</head>', styleToInject + '</head>');
-                } else if (injectedHtml.includes('<body>')) {
-                    injectedHtml = injectedHtml.replace('<body>', '<body>' + styleToInject);
-                } else {
-                    injectedHtml = styleToInject + injectedHtml;
-                }
-
-                viewer.srcdoc = injectedHtml;
-                
-                // Wait a tiny bit for the iframe to render
-                await new Promise(r => setTimeout(r, 50));
-            } catch (e) {
-                console.error("Failed to load chapter:", e);
-                viewer.srcdoc = `<h1 style="color:red">Failed to load chapter</h1><pre>${e}</pre>`;
-            }
-        }
+        // Keyboard: ← → chapters
+        window.addEventListener('keydown', (e) => {
+            if (e.target.matches('input, textarea')) return;
+            if (e.key === 'ArrowLeft') prevBtn.click();
+            if (e.key === 'ArrowRight') nextBtn.click();
+        });
     </script>
 </body>
 </html>

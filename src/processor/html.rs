@@ -9,9 +9,9 @@
 //! attributes in HTML, in addition to the HTML attribute layer it already covers.
 
 use crate::error::EpubError;
+use crate::path::{is_external_url, normalize_path};
 use lol_html::{HtmlRewriter, Settings, element, text};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -36,15 +36,6 @@ where
 }
 
 use super::css::rewrite_css_impl;
-
-pub(crate) fn is_external_url(url: &str) -> bool {
-    url.starts_with("http://")
-        || url.starts_with("https://")
-        || url.starts_with("data:")
-        || url.starts_with("mailto:")
-        || url.starts_with("ftp:")
-        || url.starts_with("//")
-}
 
 /// Rewrites every image URL inside a `srcset` attribute value.
 ///
@@ -114,36 +105,6 @@ where
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
-
-/// Normalizes a relative URL path against a base directory within the EPUB archive.
-/// Automatically handles URL-decoding (e.g. `%20` -> ` `) and stripping of URL query strings or hashes.
-/// The `base_dir` must be the **directory** containing the referencing file, NOT the file path itself.
-pub fn normalize_path(base_dir: &str, rel_path: &str) -> String {
-    let mut path_only = rel_path;
-    if let Some(idx) = path_only.find('?') {
-        path_only = &path_only[..idx];
-    }
-    if let Some(idx) = path_only.find('#') {
-        path_only = &path_only[..idx];
-    }
-
-    let decoded = percent_encoding::percent_decode_str(path_only).decode_utf8_lossy();
-
-    let mut path = PathBuf::from(base_dir);
-    for component in Path::new(decoded.as_ref()).components() {
-        match component {
-            Component::ParentDir => {
-                path.pop();
-            }
-            Component::Normal(c) => {
-                path.push(c);
-            }
-            _ => {}
-        }
-    }
-
-    path.to_string_lossy().replace('\\', "/")
-}
 
 /// Abstract trait representing a mutable HTML element.
 ///
@@ -619,27 +580,6 @@ pub fn inject_head_content<R: Read, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_normalize_path() {
-        assert_eq!(
-            normalize_path("OEBPS/Text", "../Images/cover.jpg"),
-            "OEBPS/Images/cover.jpg"
-        );
-        assert_eq!(
-            normalize_path("OEBPS/Text", "chapter2.xhtml"),
-            "OEBPS/Text/chapter2.xhtml"
-        );
-        assert_eq!(normalize_path("", "images/cover.jpg"), "images/cover.jpg");
-        assert_eq!(
-            normalize_path("OEBPS/Text", "../Images/my%20cover.jpg"),
-            "OEBPS/Images/my cover.jpg"
-        );
-        assert_eq!(
-            normalize_path("OEBPS", "css/style.css?v=2.0#section"),
-            "OEBPS/css/style.css"
-        );
-    }
 
     #[test]
     fn test_rewrite_resources_resolves_from_parent_directory() {

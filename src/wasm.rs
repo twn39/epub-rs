@@ -1,6 +1,6 @@
 use crate::generator::{EpubBuilder, Theme};
 use crate::model::{Creator, EpubBook};
-use crate::parser::EpubArchive;
+use crate::parser::{EpubArchive, LazyBook};
 use crate::processor;
 use crate::provider::{EpubProvider, ZipProvider};
 use std::io::{Cursor, Read};
@@ -15,23 +15,49 @@ use wasm_bindgen::prelude::*;
 pub struct EpubParser {
     // Maintain the Zip archive connection to avoid re-scanning the central directory.
     archive: EpubArchive<ZipProvider<Cursor<Vec<u8>>>>,
-    // Cache the parsed EPUB metadata model to avoid re-parsing the XML.
-    book: Option<EpubBook>,
+    // Lazy OPF cache: Ready / Failed are sticky (no re-parse of permanent errors).
+    book: LazyBook,
 }
 
 // Private methods — NOT exported to WASM (no #[wasm_bindgen] on this impl block).
 // `wasm-bindgen` only processes methods inside `#[wasm_bindgen] impl` blocks.
 impl EpubParser {
-    /// Lazily parse the OPF on first call; subsequent calls return the cached result.
+    /// Lazily parse the OPF once; success and failure are both cached.
     fn ensure_parsed(&mut self) -> Result<(), JsValue> {
-        if self.book.is_none() {
-            self.book = Some(
-                self.archive
-                    .parse()
-                    .map_err(|e| JsValue::from_str(&e.to_string()))?,
-            );
+        if self.book.is_unparsed() {
+            let result = self.archive.parse().map_err(|e| e.to_string());
+            self.book.store(result);
         }
-        Ok(())
+        self.book
+            .get()
+            .map(|_| ())
+            .map_err(|e| JsValue::from_str(e))
+    }
+
+    /// Borrow cached book after [`ensure_parsed`] succeeded.
+    fn book(&self) -> &EpubBook {
+        self.book
+            .as_book()
+            .expect("book ready after successful ensure_parsed")
+    }
+
+    /// Split `archive` / `book` so callers can mutably use the archive while
+    /// holding an immutable reference to the cached OPF (avoids E0502).
+    fn archive_and_book(
+        &mut self,
+    ) -> Result<
+        (
+            &mut EpubArchive<ZipProvider<Cursor<Vec<u8>>>>,
+            &EpubBook,
+        ),
+        JsValue,
+    > {
+        self.ensure_parsed()?;
+        let Self { archive, book } = self;
+        let book = book
+            .as_book()
+            .expect("book ready after successful ensure_parsed");
+        Ok((archive, book))
     }
 }
 
@@ -45,7 +71,7 @@ impl EpubParser {
 
         Ok(Self {
             archive,
-            book: None,
+            book: LazyBook::default(),
         })
     }
 
@@ -54,7 +80,7 @@ impl EpubParser {
     #[wasm_bindgen]
     pub fn parse(&mut self) -> Result<JsValue, JsValue> {
         self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
+        let book = self.book();
         serde_wasm_bindgen::to_value(book).map_err(|e| e.to_string().into())
     }
 
@@ -85,10 +111,8 @@ impl EpubParser {
     /// Returns a JS Array where [0] is the Uint8Array of the image bytes, and [1] is the MIME type string.
     #[wasm_bindgen]
     pub fn get_cover_image(&mut self) -> Result<js_sys::Array, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let (bytes, mime) = self
-            .archive
+        let (archive, book) = self.archive_and_book()?;
+        let (bytes, mime) = archive
             .get_cover_image(book)
             .map_err(|e| e.to_string())?;
 
@@ -104,9 +128,8 @@ impl EpubParser {
     /// Retrieve the Table of Contents (TOC) of the EPUB.
     #[wasm_bindgen]
     pub fn get_toc(&mut self) -> Result<JsValue, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let toc = self.archive.get_toc(book).map_err(|e| e.to_string())?;
+        let (archive, book) = self.archive_and_book()?;
+        let toc = archive.get_toc(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&toc).map_err(|e| e.to_string().into())
     }
 
@@ -143,10 +166,8 @@ impl EpubParser {
     /// For chapter-grouped positions use `positions_by_reading_order` instead.
     #[wasm_bindgen]
     pub fn generate_locations(&mut self, bytes_per_position: usize) -> Result<JsValue, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let locations = self
-            .archive
+        let (archive, book) = self.archive_and_book()?;
+        let locations = archive
             .generate_locations(book, bytes_per_position)
             .map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&locations).map_err(|e| e.to_string().into())
@@ -164,8 +185,7 @@ impl EpubParser {
         &mut self,
         bytes_per_position: usize,
     ) -> Result<JsValue, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
+        let (archive, book) = self.archive_and_book()?;
         let strategy = crate::parser::ArchiveEntryLength {
             page_length: if bytes_per_position == 0 {
                 crate::parser::BYTES_PER_POSITION
@@ -173,8 +193,7 @@ impl EpubParser {
                 bytes_per_position
             },
         };
-        let by_chapter = self
-            .archive
+        let by_chapter = archive
             .positions_by_reading_order(book, &strategy)
             .map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&by_chapter).map_err(|e| e.to_string().into())
@@ -199,10 +218,8 @@ impl EpubParser {
     /// - `landmarks` — Structural navigation points (epub:type="landmarks"; empty for EPUB 2)
     #[wasm_bindgen]
     pub fn get_navigation(&mut self) -> Result<JsValue, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let nav = self
-            .archive
+        let (archive, book) = self.archive_and_book()?;
+        let nav = archive
             .get_navigation(book)
             .map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav).map_err(|e| e.to_string().into())
@@ -218,10 +235,8 @@ impl EpubParser {
     /// Returns `[]` if no page list is present (page lists are optional per EPUB spec).
     #[wasm_bindgen]
     pub fn get_page_list(&mut self) -> Result<JsValue, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let nav = self
-            .archive
+        let (archive, book) = self.archive_and_book()?;
+        let nav = archive
             .get_navigation(book)
             .map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav.page_list).map_err(|e| e.to_string().into())
@@ -231,9 +246,8 @@ impl EpubParser {
 
     /// Generate positions and build a bidirectional lookup index in one call.
     ///
-    /// Returns a JavaScript object `{ positions: Position[], len: number }` where
-    /// `positions` is the same flat array as `generate_locations()`. Store this
-    /// object and pass it to `location_from_cfi()` and `cfi_from_location()`.
+    /// Returns a JavaScript array of `Position` objects (same as `generate_locations()`).
+    /// Use with `location_from_cfi()` / `cfi_from_location()` for index ↔ CFI lookups.
     ///
     /// `bytes_per_position`: pass `0` to use the Readium/Adobe default of 1024 bytes.
     #[wasm_bindgen]
@@ -241,10 +255,8 @@ impl EpubParser {
         &mut self,
         bytes_per_position: usize,
     ) -> Result<JsValue, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let index = self
-            .archive
+        let (archive, book) = self.archive_and_book()?;
+        let index = archive
             .generate_location_index(book, bytes_per_position)
             .map_err(|e| e.to_string())?;
         // Expose the flat positions array and total count.
@@ -266,10 +278,8 @@ impl EpubParser {
     /// **Algorithm**: O(|cfi_str|) — direct mathematical computation, no binary search.
     #[wasm_bindgen]
     pub fn location_from_cfi(&mut self, cfi_str: &str) -> Result<i64, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let index = self
-            .archive
+        let (archive, book) = self.archive_and_book()?;
+        let index = archive
             .generate_location_index(book, 0)
             .map_err(|e| e.to_string())?;
         Ok(index
@@ -284,10 +294,8 @@ impl EpubParser {
     /// O(1) — direct array access.
     #[wasm_bindgen]
     pub fn cfi_from_location(&mut self, idx: usize) -> Result<Option<String>, JsValue> {
-        self.ensure_parsed()?;
-        let book = self.book.as_ref().unwrap();
-        let index = self
-            .archive
+        let (archive, book) = self.archive_and_book()?;
+        let index = archive
             .generate_location_index(book, 0)
             .map_err(|e| e.to_string())?;
         Ok(index.cfi_from_location(idx).map(str::to_owned))

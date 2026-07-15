@@ -2,7 +2,7 @@
 //!
 //! Separated from `html.rs` to keep CSS-specific parsing logic independent of HTML streaming rewriting.
 
-use super::html::{is_external_url, normalize_path};
+use crate::path::{is_external_url, normalize_path};
 
 /// Rewrites `url(...)` and `@import` references inside a CSS string.
 ///
