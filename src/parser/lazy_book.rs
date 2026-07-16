@@ -99,7 +99,10 @@ mod tests {
     }
 
     /// Adapter-shaped ensure: only parse while unparsed, then get.
-    fn ensure(lazy: &mut LazyBook, parse: impl FnOnce() -> Result<EpubBook, String>) -> Result<(), String> {
+    fn ensure(
+        lazy: &mut LazyBook,
+        parse: impl FnOnce() -> Result<EpubBook, String>,
+    ) -> Result<(), String> {
         if lazy.is_unparsed() {
             lazy.store(parse());
         }

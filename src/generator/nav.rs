@@ -264,5 +264,4 @@ impl EpubBuilder {
         }
         Ok(())
     }
-
 }

@@ -47,13 +47,7 @@ impl EpubParser {
     /// holding an immutable reference to the cached OPF (avoids E0502).
     fn archive_and_book(
         &mut self,
-    ) -> Result<
-        (
-            &mut EpubArchive<ZipProvider<Cursor<Vec<u8>>>>,
-            &EpubBook,
-        ),
-        JsValue,
-    > {
+    ) -> Result<(&mut EpubArchive<ZipProvider<Cursor<Vec<u8>>>>, &EpubBook), JsValue> {
         self.ensure_parsed()?;
         let Self {
             archive,
@@ -133,10 +127,7 @@ impl EpubParser {
     /// Index `0` is always the default rendition (OCF §3.5.1).
     #[wasm_bindgen]
     pub fn get_renditions(&mut self) -> Result<JsValue, JsValue> {
-        let renditions = self
-            .archive
-            .get_renditions()
-            .map_err(|e| e.to_string())?;
+        let renditions = self.archive.get_renditions().map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&renditions).map_err(|e| e.to_string().into())
     }
 
@@ -145,7 +136,10 @@ impl EpubParser {
     /// Replaces any previously cached OPF / position index.
     #[wasm_bindgen]
     pub fn parse_by_index(&mut self, index: usize) -> Result<JsValue, JsValue> {
-        let result = self.archive.parse_by_index(index).map_err(|e| e.to_string());
+        let result = self
+            .archive
+            .parse_by_index(index)
+            .map_err(|e| e.to_string());
         self.store_parsed_book(result);
         self.ensure_parsed()?;
         serde_wasm_bindgen::to_value(self.book()).map_err(|e| e.to_string().into())
@@ -219,9 +213,7 @@ impl EpubParser {
     #[wasm_bindgen]
     pub fn get_cover_image(&mut self) -> Result<js_sys::Array, JsValue> {
         let (archive, book) = self.archive_and_book()?;
-        let (bytes, mime) = archive
-            .get_cover_image(book)
-            .map_err(|e| e.to_string())?;
+        let (bytes, mime) = archive.get_cover_image(book).map_err(|e| e.to_string())?;
 
         let uint8arr = js_sys::Uint8Array::from(&bytes[..]);
         let mime_str = JsValue::from_str(&mime);
@@ -326,9 +318,7 @@ impl EpubParser {
     #[wasm_bindgen]
     pub fn get_navigation(&mut self) -> Result<JsValue, JsValue> {
         let (archive, book) = self.archive_and_book()?;
-        let nav = archive
-            .get_navigation(book)
-            .map_err(|e| e.to_string())?;
+        let nav = archive.get_navigation(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav).map_err(|e| e.to_string().into())
     }
 
@@ -343,9 +333,7 @@ impl EpubParser {
     #[wasm_bindgen]
     pub fn get_page_list(&mut self) -> Result<JsValue, JsValue> {
         let (archive, book) = self.archive_and_book()?;
-        let nav = archive
-            .get_navigation(book)
-            .map_err(|e| e.to_string())?;
+        let nav = archive.get_navigation(book).map_err(|e| e.to_string())?;
         serde_wasm_bindgen::to_value(&nav.page_list).map_err(|e| e.to_string().into())
     }
 

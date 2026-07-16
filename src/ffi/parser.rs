@@ -82,7 +82,9 @@ pub unsafe extern "C" fn epub_parse(handle: *mut EpubHandle) -> *mut c_char {
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_parse: null handle")?;
         h.ensure_parsed()?;
-        Ok(to_json(h.book.as_book().expect("book ready after ensure_parsed")))
+        Ok(to_json(
+            h.book.as_book().expect("book ready after ensure_parsed"),
+        ))
     })
 }
 
@@ -111,16 +113,15 @@ pub unsafe extern "C" fn epub_get_renditions(handle: *mut EpubHandle) -> *mut c_
 /// # Safety
 /// `handle` must be a valid non-null pointer obtained from `epub_open*`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn epub_parse_by_index(
-    handle: *mut EpubHandle,
-    index: usize,
-) -> *mut c_char {
+pub unsafe extern "C" fn epub_parse_by_index(handle: *mut EpubHandle, index: usize) -> *mut c_char {
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_parse_by_index: null handle")?;
         let result = h.archive.parse_by_index(index).map_err(|e| e.to_string());
         h.store_parsed_book(result);
         h.ensure_parsed()?;
-        Ok(to_json(h.book.as_book().expect("book ready after ensure_parsed")))
+        Ok(to_json(
+            h.book.as_book().expect("book ready after ensure_parsed"),
+        ))
     })
 }
 
@@ -167,7 +168,9 @@ pub unsafe extern "C" fn epub_parse_best_for(
             .map_err(|e| e.to_string());
         h.store_parsed_book(result);
         h.ensure_parsed()?;
-        Ok(to_json(h.book.as_book().expect("book ready after ensure_parsed")))
+        Ok(to_json(
+            h.book.as_book().expect("book ready after ensure_parsed"),
+        ))
     })
 }
 

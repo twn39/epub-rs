@@ -333,7 +333,12 @@ mod tests {
     fn fragment_policy_table() {
         let cases = [
             // (base, input, normalize → strip, resolve → keep)
-            ("OEBPS", "ch.xhtml#s1", "OEBPS/ch.xhtml", "OEBPS/ch.xhtml#s1"),
+            (
+                "OEBPS",
+                "ch.xhtml#s1",
+                "OEBPS/ch.xhtml",
+                "OEBPS/ch.xhtml#s1",
+            ),
             (
                 "OEBPS/nav",
                 "../text/ch2.xhtml#s2",
@@ -399,14 +404,8 @@ mod tests {
 
     #[test]
     fn parent_traversal_and_dot_segments() {
-        assert_eq!(
-            join_epub_path("a/b/c", "../../x/y"),
-            "a/x/y"
-        );
-        assert_eq!(
-            join_epub_path("a/b", "././c/./d"),
-            "a/b/c/d"
-        );
+        assert_eq!(join_epub_path("a/b/c", "../../x/y"), "a/x/y");
+        assert_eq!(join_epub_path("a/b", "././c/./d"), "a/b/c/d");
         // Excess .. is popped until empty (no escape above package root)
         assert_eq!(join_epub_path("a", "../../x"), "x");
         assert_eq!(join_epub_path("", "../x"), "x");

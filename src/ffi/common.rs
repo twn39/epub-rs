@@ -182,10 +182,7 @@ impl EpubHandle {
                 bytes_per_position
             };
             // Field-level borrow: `book` (shared) + `archive` (mut).
-            let book = self
-                .book
-                .as_book()
-                .expect("book ready after ensure_parsed");
+            let book = self.book.as_book().expect("book ready after ensure_parsed");
             let index = self
                 .archive
                 .generate_location_index(book, bpp)
