@@ -563,6 +563,7 @@ mod tests {
             title: "Chapter 1".to_string(),
             href: "text/ch1.xhtml".to_string(),
             children: vec![],
+            role: None,
         }];
         let map = build_title_map(&toc);
         assert_eq!(
@@ -577,6 +578,7 @@ mod tests {
             title: "Section".to_string(),
             href: "text/ch1.xhtml#section-2".to_string(),
             children: vec![],
+            role: None,
         }];
         let map = build_title_map(&toc);
         // The fragment-stripped key must exist; the raw key must NOT
@@ -598,11 +600,13 @@ mod tests {
                 title: "First Title".to_string(),
                 href: "ch.xhtml".to_string(),
                 children: vec![],
+                role: None,
             },
             TocEntry {
                 title: "Second Title".to_string(),
                 href: "ch.xhtml".to_string(),
                 children: vec![],
+                role: None,
             },
         ];
         let map = build_title_map(&toc);
@@ -618,7 +622,9 @@ mod tests {
                 title: "Section".to_string(),
                 href: "ch.xhtml#sec1".to_string(),
                 children: vec![],
+                role: None,
             }],
+            role: None,
         }];
         let map = build_title_map(&toc);
         assert!(map.contains_key("ch.xhtml"), "parent entry must be indexed");

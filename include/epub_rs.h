@@ -62,8 +62,8 @@ typedef struct epub_t epub_t;
  *   "start": {
  *     "spine_index": 1,
  *     "steps": [{"node_type": "element", "index": 2, "id": "section1"}, ...],
- *     "xpath": "//*[@id='section1']/...",
- *     "xpath_ns_agnostic": "//*[local-name()][position()=...]",
+ *     "xpath": "id('section1')/...",
+ *     "xpath_ns_agnostic": "local-name() path (namespace-agnostic)",
  *     "id_shortcut": "para5",
  *     "character_offset": 3,
  *     "is_text_node": true
@@ -712,5 +712,46 @@ int epub_get_position_info(struct epub_t *handle,
                            size_t *out_spine_index,
                            float *out_chapter_progression,
                            float *out_total_progression);
+
+/**
+ * Prepare a chapter for WebView embedding (optional CFI + resource inlining).
+ *
+ * `options_json` may be `NULL` or empty for defaults (`inline_resources=true`,
+ * `inject_cfi=false`). Example:
+ * ```json
+ * {"inject_cfi":true,"inline_resources":true,"max_inline_bytes":4194304}
+ * ```
+ *
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * # Safety
+ * - `handle` must be a valid non-null pointer from `epub_open*`.
+ * - `id` must be a valid null-terminated C string.
+ * - `options_json` may be null or a valid C string.
+ */
+char *epub_prepare_chapter(struct epub_t *handle, const char *id, const char *options_json);
+
+/**
+ * Search the entire book for a literal query. Returns JSON `BookSearchHit[]`.
+ *
+ * `max_per_chapter` / `max_total`: pass `0` for defaults (12 / 80).
+ *
+ * # Safety
+ * All pointer parameters must be valid; `handle` from `epub_open*`.
+ */
+char *epub_search_book(struct epub_t *handle,
+                       const char *query,
+                       size_t max_per_chapter,
+                       size_t max_total);
+
+/**
+ * Preferred first-open spine index as JSON `ReadingStartInfo`.
+ *
+ * Example: `{"spine_index":1,"source":"cover_skip","href":"OEBPS/ch1.xhtml"}`.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer from `epub_open*`.
+ */
+char *epub_preferred_reading_start(struct epub_t *handle);
 
 #endif  /* EPUB_RS_H */

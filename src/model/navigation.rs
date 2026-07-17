@@ -4,6 +4,10 @@ pub struct TocEntry {
     pub title: String,
     pub href: String,
     pub children: Vec<TocEntry>,
+    /// Structural role from landmark anchors (`epub:type`), e.g. `"bodymatter"`, `"cover"`.
+    /// Empty for plain TOC / page-list entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 impl TocEntry {
@@ -12,7 +16,13 @@ impl TocEntry {
             title: title.into(),
             href: href.into(),
             children: Vec::new(),
+            role: None,
         }
+    }
+
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
+        self
     }
 
     pub fn add_child(mut self, child: TocEntry) -> Self {

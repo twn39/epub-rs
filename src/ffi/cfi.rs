@@ -15,8 +15,8 @@ use crate::ffi_boundary;
 ///   "start": {
 ///     "spine_index": 1,
 ///     "steps": [{"node_type": "element", "index": 2, "id": "section1"}, ...],
-///     "xpath": "//*[@id='section1']/...",
-///     "xpath_ns_agnostic": "//*[local-name()][position()=...]",
+///     "xpath": "id('section1')/...",
+///     "xpath_ns_agnostic": "local-name() path (namespace-agnostic)",
 ///     "id_shortcut": "para5",
 ///     "character_offset": 3,
 ///     "is_text_node": true

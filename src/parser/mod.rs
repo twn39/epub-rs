@@ -30,6 +30,60 @@ pub use positions::{
     recommended_reflowable_strategy,
 };
 
+/// One full-text search hit across the book (spine + CFI).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct BookSearchHit {
+    pub spine_index: usize,
+    pub manifest_id: String,
+    pub excerpt: String,
+    pub cfi: String,
+}
+
+/// Where a reader should open on first launch.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ReadingStartInfo {
+    pub spine_index: usize,
+    /// `landmark:bodymatter` | `cover_skip` | `spine_zero`
+    pub source: String,
+    pub href: Option<String>,
+}
+
+fn strip_href_fragment(href: &str) -> &str {
+    href.split('#').next().unwrap_or(href)
+}
+
+fn spine_index_for_href(book: &EpubBook, href: &str) -> Option<usize> {
+    let clean = strip_href_fragment(href);
+    let file_name = clean.rsplit('/').next().unwrap_or(clean);
+    book.spine.iter().position(|s| {
+        let Some(item) = book.manifest.get(&s.idref) else {
+            return false;
+        };
+        let mh = strip_href_fragment(&item.href);
+        mh == clean
+            || mh.ends_with(clean)
+            || clean.ends_with(mh)
+            || mh.rsplit('/').next() == Some(file_name)
+    })
+}
+
+fn looks_like_cover_spine(book: &EpubBook, spine_item: &crate::model::SpineItem) -> bool {
+    let id_lower = spine_item.idref.to_ascii_lowercase();
+    if id_lower.contains("cover") || id_lower.contains("titlepage") || id_lower == "title" {
+        return true;
+    }
+    if let Some(item) = book.manifest.get(&spine_item.idref) {
+        let href_lower = item.href.to_ascii_lowercase();
+        if href_lower.contains("cover") || href_lower.contains("titlepage") {
+            return true;
+        }
+        if item.properties.iter().any(|p| p == "cover-image") {
+            return true;
+        }
+    }
+    false
+}
+
 // ── Core struct ───────────────────────────────────────────────────────────────
 
 /// A struct that handles unpacking and parsing EPUB files.
@@ -460,6 +514,156 @@ impl<P: EpubProvider> EpubArchive<P> {
         Ok(crate::processor::extract_semantic_content(
             &html_str, &base_cfi,
         ))
+    }
+
+    /// Prepare chapter HTML for embedding in a WebView-style reader.
+    ///
+    /// Optionally injects `data-cfi` and rewrites local images / fonts / CSS to
+    /// `data:` URIs so the document does not need a custom URL scheme.
+    pub fn prepare_chapter(
+        &mut self,
+        book: &EpubBook,
+        id: &str,
+        options: &crate::processor::PrepareChapterOptions,
+    ) -> Result<String, EpubError> {
+        let spine_index = book
+            .spine
+            .iter()
+            .position(|s| s.idref == id)
+            .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
+        let item = book
+            .manifest
+            .get(id)
+            .ok_or_else(|| EpubError::InvalidFormat(format!("manifest id {id} not found")))?;
+        let chapter_path = item.href.clone();
+        let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
+        let raw = self.get_resource_by_id(book, id)?;
+        let raw_html = String::from_utf8_lossy(&raw).into_owned();
+
+        // Load resources by EPUB-root-relative path (and fall back to id lookup).
+        let mut load = |path: &str| -> Option<Vec<u8>> {
+            if let Ok(bytes) = self.get_resource_by_href(book, path) {
+                return Some(bytes);
+            }
+            // Try matching a manifest item href suffix.
+            for m in book.manifest.values() {
+                if m.href == path || m.href.ends_with(path) || path.ends_with(&m.href) {
+                    if let Ok(bytes) = self.get_resource_by_id(book, &m.id) {
+                        return Some(bytes);
+                    }
+                }
+            }
+            None
+        };
+
+        crate::processor::prepare_chapter_html(
+            &raw_html,
+            &chapter_path,
+            Some(&base_cfi),
+            options,
+            &mut load,
+        )
+    }
+
+    /// Search every linear spine chapter for a literal query.
+    ///
+    /// Returns hits with spine index + CFI (best-effort; skips chapters that fail to load).
+    pub fn search_book(
+        &mut self,
+        book: &EpubBook,
+        query: &str,
+        max_per_chapter: usize,
+        max_total: usize,
+    ) -> Result<Vec<BookSearchHit>, EpubError> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = regex::Regex::new(&regex::escape(trimmed))
+            .map_err(|e| EpubError::InvalidFormat(format!("invalid search query: {e}")))?;
+
+        let mut hits = Vec::new();
+        for (spine_index, spine_item) in book.spine.iter().enumerate() {
+            if !spine_item.linear {
+                continue;
+            }
+            if hits.len() >= max_total {
+                break;
+            }
+            let id = &spine_item.idref;
+            let chapter_hits = match self.search_chapter(book, id, &pattern) {
+                Ok(h) => h,
+                Err(_) => continue,
+            };
+            for r in chapter_hits.into_iter().take(max_per_chapter) {
+                hits.push(BookSearchHit {
+                    spine_index,
+                    manifest_id: id.clone(),
+                    excerpt: r.excerpt,
+                    cfi: r.cfi,
+                });
+                if hits.len() >= max_total {
+                    break;
+                }
+            }
+        }
+        Ok(hits)
+    }
+
+    /// Preferred first-open spine index (landmarks `bodymatter` / skip cover heuristics).
+    pub fn preferred_reading_start(&mut self, book: &EpubBook) -> ReadingStartInfo {
+        // 1. EPUB 3 landmarks
+        if let Ok(nav) = self.get_navigation(book) {
+            for role in ["bodymatter", "text"] {
+                if let Some(entry) = nav.landmarks.iter().find(|e| {
+                    e.role
+                        .as_ref()
+                        .map(|r| {
+                            r.split_whitespace()
+                                .any(|t| t.trim_start_matches("epub:") == role)
+                        })
+                        .unwrap_or(false)
+                }) {
+                    if let Some(idx) = spine_index_for_href(book, &entry.href) {
+                        return ReadingStartInfo {
+                            spine_index: idx,
+                            source: format!("landmark:{role}"),
+                            href: Some(entry.href.clone()),
+                        };
+                    }
+                }
+            }
+        }
+
+        // 2. Skip leading cover-like spine items (id/href/properties heuristics).
+        for (idx, spine_item) in book.spine.iter().enumerate() {
+            if looks_like_cover_spine(book, spine_item) {
+                continue;
+            }
+            let href = book
+                .manifest
+                .get(&spine_item.idref)
+                .map(|m| m.href.clone());
+            return ReadingStartInfo {
+                spine_index: idx,
+                source: if idx == 0 {
+                    "spine_zero".into()
+                } else {
+                    "cover_skip".into()
+                },
+                href,
+            };
+        }
+
+        ReadingStartInfo {
+            spine_index: 0,
+            source: "spine_zero".into(),
+            href: book
+                .spine
+                .first()
+                .and_then(|s| book.manifest.get(&s.idref))
+                .map(|m| m.href.clone()),
+        }
     }
 
     // ── Media Overlays API ──────────────────────────────────────────

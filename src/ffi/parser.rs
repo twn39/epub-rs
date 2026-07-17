@@ -741,3 +741,97 @@ pub unsafe extern "C" fn epub_get_position_info(
         }
     })
 }
+
+/// Prepare a chapter for WebView embedding (optional CFI + resource inlining).
+///
+/// `options_json` may be `NULL` or empty for defaults (`inline_resources=true`,
+/// `inject_cfi=false`). Example:
+/// ```json
+/// {"inject_cfi":true,"inline_resources":true,"max_inline_bytes":4194304}
+/// ```
+///
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// - `handle` must be a valid non-null pointer from `epub_open*`.
+/// - `id` must be a valid null-terminated C string.
+/// - `options_json` may be null or a valid C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_prepare_chapter(
+    handle: *mut EpubHandle,
+    id: *const c_char,
+    options_json: *const c_char,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_prepare_chapter: null handle")?;
+        if id.is_null() {
+            return Err("epub_prepare_chapter: id is null".into());
+        }
+        h.ensure_parsed()?;
+        let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+        let options = if options_json.is_null() {
+            crate::processor::PrepareChapterOptions::default()
+        } else {
+            let raw = unsafe { CStr::from_ptr(options_json) }.to_string_lossy();
+            if raw.trim().is_empty() {
+                crate::processor::PrepareChapterOptions::default()
+            } else {
+                serde_json::from_str(raw.as_ref()).map_err(|e| {
+                    format!("epub_prepare_chapter: invalid options JSON: {e}")
+                })?
+            }
+        };
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
+        let html = h.archive.prepare_chapter(book, id_str.as_ref(), &options)?;
+        Ok(into_c_string(html))
+    })
+}
+
+/// Search the entire book for a literal query. Returns JSON `BookSearchHit[]`.
+///
+/// `max_per_chapter` / `max_total`: pass `0` for defaults (12 / 80).
+///
+/// # Safety
+/// All pointer parameters must be valid; `handle` from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_search_book(
+    handle: *mut EpubHandle,
+    query: *const c_char,
+    max_per_chapter: usize,
+    max_total: usize,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_search_book: null handle")?;
+        if query.is_null() {
+            return Err("epub_search_book: query is null".into());
+        }
+        h.ensure_parsed()?;
+        let q = unsafe { CStr::from_ptr(query) }.to_string_lossy();
+        let per = if max_per_chapter == 0 {
+            12
+        } else {
+            max_per_chapter
+        };
+        let total = if max_total == 0 { 80 } else { max_total };
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
+        let hits = h.archive.search_book(book, q.as_ref(), per, total)?;
+        Ok(to_json(&hits))
+    })
+}
+
+/// Preferred first-open spine index as JSON `ReadingStartInfo`.
+///
+/// Example: `{"spine_index":1,"source":"cover_skip","href":"OEBPS/ch1.xhtml"}`.
+///
+/// # Safety
+/// `handle` must be a valid non-null pointer from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_preferred_reading_start(handle: *mut EpubHandle) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_preferred_reading_start: null handle")?;
+        h.ensure_parsed()?;
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
+        let info = h.archive.preferred_reading_start(book);
+        Ok(to_json(&info))
+    })
+}

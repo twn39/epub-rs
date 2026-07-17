@@ -21,6 +21,12 @@ fn main() {
             .write_to_file(format!("{crate_dir}/include/epub_rs.h"));
 
         println!("cargo:rerun-if-changed=src/ffi.rs");
+        println!("cargo:rerun-if-changed=src/ffi/mod.rs");
+        println!("cargo:rerun-if-changed=src/ffi/parser.rs");
+        println!("cargo:rerun-if-changed=src/ffi/cfi.rs");
+        println!("cargo:rerun-if-changed=src/ffi/common.rs");
+        println!("cargo:rerun-if-changed=src/ffi/crypto.rs");
+        println!("cargo:rerun-if-changed=src/ffi/generator.rs");
         println!("cargo:rerun-if-changed=cbindgen.toml");
     }
 

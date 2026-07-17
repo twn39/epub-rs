@@ -22,6 +22,7 @@ mod cfi;
 mod css;
 mod html;
 mod positions;
+mod prepare;
 mod rewrite;
 mod semantic;
 
@@ -66,4 +67,5 @@ pub use cfi::{SearchResult, inject_cfi_dom, search_chapter};
 // positions exports intentionally omitted — PositionContext and extract_positions
 // are pub(crate) internal utilities; external callers use EpubArchive::generate_locations().
 
+pub use prepare::{PrepareChapterOptions, data_uri, guess_media_type, prepare_chapter_html};
 pub use semantic::extract_semantic_content;

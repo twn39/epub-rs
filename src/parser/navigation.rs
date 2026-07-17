@@ -176,12 +176,14 @@ impl<P: EpubProvider> EpubArchive<P> {
                 .is_some_and(|e| e.name.local.as_ref() == "li")
         }) {
             if let Ok(a_node) = li.select_first("a") {
-                let raw_href = a_node
-                    .attributes
-                    .borrow()
-                    .get("href")
-                    .unwrap_or("")
-                    .to_string();
+                let attrs = a_node.attributes.borrow();
+                let raw_href = attrs.get("href").unwrap_or("").to_string();
+                // Landmark anchors often carry epub:type="bodymatter" | "cover" | …
+                let role = attrs
+                    .get("epub:type")
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                drop(attrs);
 
                 // EPUB hrefs may be percent-encoded in authoring tools; decode before
                 // any path arithmetic so "..%2F" is never treated as a literal segment.
@@ -195,6 +197,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                 let title = a_node.text_contents().trim().to_string();
 
                 let mut entry = TocEntry::new(title, href);
+                entry.role = role;
 
                 // Nesting is meaningful only for TOC hierarchies; page-list and landmarks
                 // are flat by spec, so if they carry a nested <ol> it is ignored here.
@@ -324,6 +327,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 title: pt.title,
                                 href: pt.href,
                                 children: Vec::new(),
+                                role: None,
                             });
                         }
                     } else if !in_page_list
@@ -335,6 +339,7 @@ impl<P: EpubProvider> EpubArchive<P> {
                             title: state.title,
                             href: state.href,
                             children: state.children,
+                            role: None,
                         };
                         if let Some(parent) = stack.last_mut() {
                             parent.children.push(entry);
@@ -555,7 +560,9 @@ mod tests {
         assert_eq!(nav.landmarks.len(), 3);
         assert_eq!(nav.landmarks[0].title, "Cover");
         assert_eq!(nav.landmarks[0].href, "cover.xhtml");
+        assert_eq!(nav.landmarks[0].role.as_deref(), Some("cover"));
         assert_eq!(nav.landmarks[2].title, "Begin Reading");
+        assert_eq!(nav.landmarks[2].role.as_deref(), Some("bodymatter"));
     }
 
     #[test]
