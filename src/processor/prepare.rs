@@ -294,7 +294,114 @@ where
         }
     })?;
 
+    // Host readers (Latte) strip `<head>` and only keep body + `<style>` blocks.
+    // Convert inlined stylesheet `<link href="data:text/css…">` into `<style>` so
+    // publisher CSS survives head-strip / chrome wrap without a second packaging pass.
+    html = promote_data_stylesheet_links(&html);
+
     Ok((html, stats))
+}
+
+/// Replace `<link rel=stylesheet href="data:text/css…">` with `<style>…</style>`.
+///
+/// Leaves external (`http(s):`) and unresolved local links unchanged so callers can
+/// still fall back to host packaging if needed.
+fn promote_data_stylesheet_links(html: &str) -> String {
+    let link_re = regex::Regex::new(r#"(?is)<link\b[^>]*>"#).expect("valid regex");
+    let href_re =
+        regex::Regex::new(r#"(?i)\bhref\s*=\s*["']([^"']+)["']"#).expect("valid regex");
+
+    link_re
+        .replace_all(html, |caps: &regex::Captures| {
+            let tag = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+            let lower = tag.to_ascii_lowercase();
+            let looks_like_css = lower.contains("stylesheet")
+                || lower.contains("text/css")
+                || lower.contains("type=\"text/css\"")
+                || lower.contains("type='text/css'");
+            if !looks_like_css {
+                return tag.to_string();
+            }
+            let Some(href_cap) = href_re.captures(tag) else {
+                return tag.to_string();
+            };
+            let href = href_cap.get(1).map(|m| m.as_str()).unwrap_or("").trim();
+            let Some(css) = decode_data_css_uri(href) else {
+                return tag.to_string();
+            };
+            if css.trim().is_empty() {
+                return String::new();
+            }
+            // Escape `</style>` sequences that could break out of the injected block.
+            let safe = css.replace("</style", "<\\/style").replace("</STYLE", "<\\/STYLE");
+            format!("<style type=\"text/css\">\n{safe}\n</style>")
+        })
+        .into_owned()
+}
+
+/// Decode `data:text/css…` (base64 or URL-encoded) into CSS text.
+fn decode_data_css_uri(href: &str) -> Option<String> {
+    let lower = href.to_ascii_lowercase();
+    if !lower.starts_with("data:") {
+        return None;
+    }
+    // Accept text/css and generic data URIs produced by this module.
+    let is_css = lower.starts_with("data:text/css")
+        || lower.starts_with("data:text/plain")
+        || lower.starts_with("data:application/css");
+    if !is_css && !lower.contains("text/css") {
+        // Still try generic `data:,…` / `data:;base64,…` only when charset-less CSS.
+        if !(lower.starts_with("data:,") || lower.starts_with("data:;")) {
+            return None;
+        }
+    }
+
+    let comma = href.find(',')?;
+    let meta = &href[..comma];
+    let payload = &href[comma + 1..];
+    let is_b64 = meta.to_ascii_lowercase().contains(";base64");
+    if is_b64 {
+        let bytes = B64.decode(payload.as_bytes()).ok()?;
+        // Lossy UTF-8 is fine for publisher CSS with legacy encodings.
+        Some(String::from_utf8_lossy(&bytes).into_owned())
+    } else {
+        // Percent-decoded URL payload (rare for our pipeline, but cheap to support).
+        Some(urlencoding_minimal_decode(payload))
+    }
+}
+
+/// Minimal percent-decoding for `data:,…` payloads (no full URL crate dependency).
+fn urlencoding_minimal_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h1 = bytes[i + 1];
+            let h2 = bytes[i + 2];
+            if let (Some(a), Some(b)) = (from_hex(h1), from_hex(h2)) {
+                out.push((a << 4) | b);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -427,5 +534,59 @@ mod tests {
         assert_eq!(stats.skipped_oversize, 1);
         assert_eq!(stats.missing, 1);
         assert_eq!(stats.considered, 3);
+    }
+
+    #[test]
+    fn prepare_promotes_stylesheet_link_to_style_element() {
+        let html = r#"<html><head>
+            <link rel="stylesheet" type="text/css" href="styles/ch.css"/>
+        </head><body><p class="x">hi</p></body></html>"#;
+        let out = prepare_chapter_html(
+            html,
+            "OEBPS/Text/ch1.xhtml",
+            None,
+            &PrepareChapterOptions {
+                inject_cfi: false,
+                inline_resources: true,
+                max_inline_bytes: 64 * 1024,
+            },
+            |path| {
+                if path == "OEBPS/Text/styles/ch.css" || path.ends_with("styles/ch.css") {
+                    Some(LoadedResource {
+                        bytes: b"p.x { color: #c00; }".to_vec(),
+                        media_type: Some("text/css".into()),
+                    })
+                } else {
+                    None
+                }
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("<style"),
+            "stylesheet should become a <style> block: {out}"
+        );
+        assert!(
+            out.contains("p.x { color: #c00; }") || out.contains("color: #c00"),
+            "publisher CSS body should be present: {out}"
+        );
+        // Original local link should not remain unresolved.
+        assert!(
+            !out.contains("href=\"styles/ch.css\""),
+            "relative stylesheet href should be rewritten: {out}"
+        );
+    }
+
+    #[test]
+    fn promote_data_stylesheet_decodes_base64_css() {
+        let css = "body{color:red}";
+        let uri = data_uri("text/css", css.as_bytes());
+        let html = format!(
+            r#"<html><head><link rel="stylesheet" href="{uri}"/></head><body></body></html>"#
+        );
+        let out = promote_data_stylesheet_links(&html);
+        assert!(out.contains("<style"));
+        assert!(out.contains("body{color:red}"));
+        assert!(!out.contains("<link"));
     }
 }
