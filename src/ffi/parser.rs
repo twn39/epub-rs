@@ -786,6 +786,49 @@ pub unsafe extern "C" fn epub_prepare_chapter(
     })
 }
 
+/// Like [`epub_prepare_chapter`], but returns JSON `{ "html": string, "stats": PrepareStats }`.
+///
+/// `PrepareStats` fields: `considered`, `inlined`, `skipped_oversize`, `missing`, `skipped_type`.
+/// Use this from hosts that want inlining diagnostics without a second prepare pass.
+///
+/// The caller must free the returned string with `epub_free_string()`.
+///
+/// # Safety
+/// Same as [`epub_prepare_chapter`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_prepare_chapter_with_stats(
+    handle: *mut EpubHandle,
+    id: *const c_char,
+    options_json: *const c_char,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_prepare_chapter_with_stats: null handle")?;
+        if id.is_null() {
+            return Err("epub_prepare_chapter_with_stats: id is null".into());
+        }
+        h.ensure_parsed()?;
+        let id_str = unsafe { CStr::from_ptr(id) }.to_string_lossy();
+        let options = if options_json.is_null() {
+            crate::processor::PrepareChapterOptions::default()
+        } else {
+            let raw = unsafe { CStr::from_ptr(options_json) }.to_string_lossy();
+            if raw.trim().is_empty() {
+                crate::processor::PrepareChapterOptions::default()
+            } else {
+                serde_json::from_str(raw.as_ref()).map_err(|e| {
+                    format!("epub_prepare_chapter_with_stats: invalid options JSON: {e}")
+                })?
+            }
+        };
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
+        let (html, stats) =
+            h.archive
+                .prepare_chapter_with_stats(book, id_str.as_ref(), &options)?;
+        let payload = serde_json::json!({ "html": html, "stats": stats });
+        Ok(into_c_string(payload.to_string()))
+    })
+}
+
 /// Search the entire book for a literal query. Returns JSON `BookSearchHit[]`.
 ///
 /// `max_per_chapter` / `max_total`: pass `0` for defaults (12 / 80).

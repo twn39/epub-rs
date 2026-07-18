@@ -732,6 +732,21 @@ int epub_get_position_info(struct epub_t *handle,
 char *epub_prepare_chapter(struct epub_t *handle, const char *id, const char *options_json);
 
 /**
+ * Like [`epub_prepare_chapter`], but returns JSON `{ "html": string, "stats": PrepareStats }`.
+ *
+ * `PrepareStats` fields: `considered`, `inlined`, `skipped_oversize`, `missing`, `skipped_type`.
+ * Use this from hosts that want inlining diagnostics without a second prepare pass.
+ *
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * # Safety
+ * Same as [`epub_prepare_chapter`].
+ */
+char *epub_prepare_chapter_with_stats(struct epub_t *handle,
+                                      const char *id,
+                                      const char *options_json);
+
+/**
  * Search the entire book for a literal query. Returns JSON `BookSearchHit[]`.
  *
  * `max_per_chapter` / `max_total`: pass `0` for defaults (12 / 80).

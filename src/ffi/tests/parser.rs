@@ -3,7 +3,8 @@ use crate::ffi::common::{epub_free, epub_free_string, epub_last_error};
 use crate::ffi::parser::{
     epub_cfi_from_location_fast, epub_generate_location_index, epub_get_position_info,
     epub_get_toc, epub_location_from_cfi_fast, epub_open, epub_parse, epub_preferred_reading_start,
-    epub_prepare_chapter, epub_search_book, epub_search_book_with_options,
+    epub_prepare_chapter, epub_prepare_chapter_with_stats, epub_search_book,
+    epub_search_book_with_options,
 };
 use std::ffi::CString;
 use std::ptr;
@@ -157,6 +158,17 @@ fn test_ffi_prepare_search_reading_start() {
     let html = unsafe { std::ffi::CStr::from_ptr(prep) }.to_string_lossy();
     assert!(html.contains("Hello") || html.contains("html"), "{html}");
     unsafe { epub_free_string(prep) };
+
+    let prep_stats = unsafe { epub_prepare_chapter_with_stats(handle, id.as_ptr(), ptr::null()) };
+    assert!(!prep_stats.is_null(), "prepare_chapter_with_stats null: {:?}", unsafe {
+        std::ffi::CStr::from_ptr(epub_last_error())
+    });
+    let stats_json = unsafe { std::ffi::CStr::from_ptr(prep_stats) }.to_string_lossy();
+    assert!(
+        stats_json.contains("\"html\"") && stats_json.contains("\"stats\""),
+        "{stats_json}"
+    );
+    unsafe { epub_free_string(prep_stats) };
 
     let q = CString::new("Hello").unwrap();
     let hits = unsafe { epub_search_book(handle, q.as_ptr(), 5, 20) };
