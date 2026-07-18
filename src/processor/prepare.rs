@@ -102,9 +102,8 @@ where
     F: FnMut(&str) -> Option<Vec<u8>>,
 {
     let mut html = if options.inject_cfi {
-        let base = base_cfi.ok_or_else(|| {
-            EpubError::InvalidFormat("inject_cfi requires base_cfi".to_string())
-        })?;
+        let base = base_cfi
+            .ok_or_else(|| EpubError::InvalidFormat("inject_cfi requires base_cfi".to_string()))?;
         inject_cfi_dom(raw_html, base)?
     } else {
         raw_html.to_string()

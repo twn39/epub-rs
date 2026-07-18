@@ -93,7 +93,11 @@ fn main() {
         };
         for i in sample_idx {
             let id = &linear[i].idref;
-            let href = book.manifest.get(id).map(|m| m.href.clone()).unwrap_or_default();
+            let href = book
+                .manifest
+                .get(id)
+                .map(|m| m.href.clone())
+                .unwrap_or_default();
             match archive.prepare_chapter(&book, id, &opts) {
                 Ok(html) => {
                     let has_data_uri = html.contains("data:");
@@ -109,7 +113,8 @@ fn main() {
         }
 
         // media type breakdown
-        let mut types: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        let mut types: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
         for m in book.manifest.values() {
             *types.entry(m.media_type.clone()).or_default() += 1;
         }

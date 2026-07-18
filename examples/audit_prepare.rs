@@ -19,7 +19,10 @@ fn collect_epubs(root: &Path) -> Vec<PathBuf> {
     };
     for entry in rd.flatten() {
         let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("epub")) == Some(true)
+        if p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("epub"))
+            == Some(true)
         {
             out.push(p);
         }
@@ -95,7 +98,9 @@ fn audit_one(path: &Path) {
     }
     println!(
         "  size: {:.1} MB | spine: {spine_n} (linear {linear_n}) | manifest: {}",
-        fs::metadata(path).map(|m| m.len() as f64 / 1_048_576.0).unwrap_or(0.0),
+        fs::metadata(path)
+            .map(|m| m.len() as f64 / 1_048_576.0)
+            .unwrap_or(0.0),
         book.manifest.len()
     );
 
@@ -223,10 +228,7 @@ fn audit_one(path: &Path) {
     if !failures.is_empty() {
         println!("  sample issues (up to 12):");
         for (loc, href, reason) in &failures {
-            println!(
-                "    - {loc}  href={href}\n      {}",
-                truncate(reason, 160)
-            );
+            println!("    - {loc}  href={href}\n      {}", truncate(reason, 160));
         }
     }
     println!();
@@ -280,9 +282,7 @@ fn main() {
 
     // Aggregate re-scan for summary table
     println!("# Summary");
-    println!(
-        "| Book | Linear | engine_ok | no_cfi_retry | fail | usable% |"
-    );
+    println!("| Book | Linear | engine_ok | no_cfi_retry | fail | usable% |");
     println!("|------|--------|-----------|--------------|------|---------|");
 
     for path in &all {
@@ -332,9 +332,7 @@ fn main() {
             ((ok + retry) as f64 / n as f64) * 100.0
         };
         let label = truncate(&short_name(path), 42);
-        println!(
-            "| {label} | {n} | {ok} | {retry} | {fail} | {usable:.1}% |"
-        );
+        println!("| {label} | {n} | {ok} | {retry} | {fail} | {usable:.1}% |");
     }
 
     let usable_all = if total_ch == 0 {

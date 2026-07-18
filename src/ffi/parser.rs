@@ -776,9 +776,8 @@ pub unsafe extern "C" fn epub_prepare_chapter(
             if raw.trim().is_empty() {
                 crate::processor::PrepareChapterOptions::default()
             } else {
-                serde_json::from_str(raw.as_ref()).map_err(|e| {
-                    format!("epub_prepare_chapter: invalid options JSON: {e}")
-                })?
+                serde_json::from_str(raw.as_ref())
+                    .map_err(|e| format!("epub_prepare_chapter: invalid options JSON: {e}"))?
             }
         };
         let book = h.book.as_book().expect("book ready after ensure_parsed");

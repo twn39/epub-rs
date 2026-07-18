@@ -547,10 +547,10 @@ impl<P: EpubProvider> EpubArchive<P> {
             }
             // Try matching a manifest item href suffix.
             for m in book.manifest.values() {
-                if m.href == path || m.href.ends_with(path) || path.ends_with(&m.href) {
-                    if let Ok(bytes) = self.get_resource_by_id(book, &m.id) {
-                        return Some(bytes);
-                    }
+                if (m.href == path || m.href.ends_with(path) || path.ends_with(&m.href))
+                    && let Ok(bytes) = self.get_resource_by_id(book, &m.id)
+                {
+                    return Some(bytes);
                 }
             }
             None
@@ -623,14 +623,13 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 .any(|t| t.trim_start_matches("epub:") == role)
                         })
                         .unwrap_or(false)
-                }) {
-                    if let Some(idx) = spine_index_for_href(book, &entry.href) {
-                        return ReadingStartInfo {
-                            spine_index: idx,
-                            source: format!("landmark:{role}"),
-                            href: Some(entry.href.clone()),
-                        };
-                    }
+                }) && let Some(idx) = spine_index_for_href(book, &entry.href)
+                {
+                    return ReadingStartInfo {
+                        spine_index: idx,
+                        source: format!("landmark:{role}"),
+                        href: Some(entry.href.clone()),
+                    };
                 }
             }
         }
@@ -640,10 +639,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             if looks_like_cover_spine(book, spine_item) {
                 continue;
             }
-            let href = book
-                .manifest
-                .get(&spine_item.idref)
-                .map(|m| m.href.clone());
+            let href = book.manifest.get(&spine_item.idref).map(|m| m.href.clone());
             return ReadingStartInfo {
                 spine_index: idx,
                 source: if idx == 0 {
