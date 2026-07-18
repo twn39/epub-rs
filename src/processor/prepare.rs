@@ -3,13 +3,37 @@
 //! Produces self-contained (or nearly self-contained) HTML by optionally:
 //! - injecting `data-cfi` attributes
 //! - rewriting relative resources to `data:` URIs (images, fonts, stylesheets)
+//!
+//! Resource bytes are supplied by the caller. When wired through
+//! [`crate::parser::EpubArchive::prepare_chapter`], font obfuscation is already
+//! reversed (same as other resource reads). Prefer declaring media types from
+//! the OPF manifest when known.
 
+use super::cfi::inject_cfi_dom;
+use super::html::rewrite_resources;
+use super::rewrite::RewriteContext;
 use crate::error::EpubError;
 use crate::path::{is_external_url, normalize_path};
-use crate::processor::{inject_cfi_dom, rewrite_css, rewrite_resources};
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// Bytes loaded for prepare, optionally with a declared OPF media type.
+#[derive(Debug, Clone)]
+pub struct LoadedResource {
+    pub bytes: Vec<u8>,
+    /// Manifest `media-type` when known; extension guessing is used as fallback.
+    pub media_type: Option<String>,
+}
+
+impl From<Vec<u8>> for LoadedResource {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            media_type: None,
+        }
+    }
+}
 
 /// Options for [`prepare_chapter_html`].
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -43,10 +67,12 @@ fn default_max_inline() -> usize {
     4 * 1024 * 1024
 }
 
-/// Guess a MIME type from an EPUB-internal path.
+/// Guess a MIME type from an EPUB-internal path (extension only).
 pub fn guess_media_type(path: &str) -> &'static str {
     let lower = path.to_ascii_lowercase();
-    let ext = lower.rsplit('.').next().unwrap_or("");
+    // Strip query/fragment if a raw URL slipped through.
+    let path_only = lower.split(['?', '#']).next().unwrap_or(&lower);
+    let ext = path_only.rsplit('.').next().unwrap_or("");
     match ext {
         "png" => "image/png",
         "jpg" | "jpeg" | "jpe" => "image/jpeg",
@@ -65,42 +91,127 @@ pub fn guess_media_type(path: &str) -> &'static str {
     }
 }
 
+/// Prefer a declared media type; fall back to path extension.
+pub fn resolve_media_type(path: &str, declared: Option<&str>) -> String {
+    if let Some(mt) = declared {
+        let t = mt.trim();
+        if !t.is_empty() && t != "application/octet-stream" {
+            return t.to_string();
+        }
+    }
+    guess_media_type(path).to_string()
+}
+
+fn is_inlineable_media(mt: &str) -> bool {
+    let lower = mt.to_ascii_lowercase();
+    lower.starts_with("image/")
+        || lower.starts_with("font/")
+        || lower.starts_with("audio/")
+        || lower == "text/css"
+        || lower == "application/font-woff"
+        || lower == "application/font-woff2"
+        || lower == "application/vnd.ms-opentype"
+        || lower == "application/x-font-ttf"
+        || lower == "application/x-font-opentype"
+}
+
 /// Encode bytes as a `data:` URI.
 pub fn data_uri(media_type: &str, bytes: &[u8]) -> String {
     format!("data:{media_type};base64,{}", B64.encode(bytes))
 }
 
+/// Collect local resource references from HTML (src/href/poster/srcset + CSS url()).
 fn collect_local_refs(html: &str) -> Vec<String> {
     let mut out = Vec::new();
-    // href / src attributes
-    let attr_re =
-        regex::Regex::new(r#"(?i)(?:src|href)\s*=\s*["']([^"']+)["']"#).expect("valid regex");
+
+    let attr_re = regex::Regex::new(r#"(?i)(?:src|href|poster)\s*=\s*["']([^"']+)["']"#)
+        .expect("valid regex");
     for cap in attr_re.captures_iter(html) {
         out.push(cap[1].to_string());
     }
-    // CSS url(...)
+
+    // srcset: comma-separated candidates (`url [descriptor]`).
+    let srcset_re = regex::Regex::new(r#"(?i)srcset\s*=\s*["']([^"']+)["']"#).expect("valid regex");
+    for cap in srcset_re.captures_iter(html) {
+        for candidate in cap[1].split(',') {
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let url_part = match trimmed.find(|c: char| c.is_ascii_whitespace()) {
+                Some(idx) => &trimmed[..idx],
+                None => trimmed,
+            };
+            if !url_part.is_empty() {
+                out.push(url_part.to_string());
+            }
+        }
+    }
+
+    // CSS url(...) — lightweight scan; nested CSS reloaded via RewriteContext later.
     let url_re = regex::Regex::new(r#"(?i)url\(\s*['"]?([^'")]+)['"]?\s*\)"#).expect("valid regex");
     for cap in url_re.captures_iter(html) {
         out.push(cap[1].to_string());
     }
+
     out
+}
+
+fn push_normalized_ref(pending: &mut Vec<String>, base_dir: &str, raw: &str) {
+    let raw = raw.trim();
+    if raw.is_empty() || is_external_url(raw) || raw.starts_with('#') {
+        return;
+    }
+    pending.push(normalize_path(base_dir, raw));
+}
+
+/// Counters from a prepare pass (resource inlining).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PrepareStats {
+    /// Unique resource paths considered for inlining.
+    pub considered: usize,
+    /// Successfully rewritten to `data:` URIs (images/fonts/css).
+    pub inlined: usize,
+    /// Skipped because loaded size exceeded `max_inline_bytes`.
+    pub skipped_oversize: usize,
+    /// Loader returned `None`.
+    pub missing: usize,
+    /// Loaded but media type not eligible for inlining.
+    pub skipped_type: usize,
 }
 
 /// Prepare chapter HTML for offline / WKWebView-style embedding.
 ///
 /// `base_cfi` is required when `options.inject_cfi` is true (spine base, e.g. `/6/4!`).
 /// `chapter_path` is the EPUB-root-relative path of the chapter document (for URL join).
-/// `load_resource` loads EPUB-root-relative paths and returns raw bytes.
+/// `load_resource` loads EPUB-root-relative paths (and may supply manifest media types).
 pub fn prepare_chapter_html<F>(
     raw_html: &str,
     chapter_path: &str,
     base_cfi: Option<&str>,
     options: &PrepareChapterOptions,
-    mut load_resource: F,
+    load_resource: F,
 ) -> Result<String, EpubError>
 where
-    F: FnMut(&str) -> Option<Vec<u8>>,
+    F: FnMut(&str) -> Option<LoadedResource>,
 {
+    let (html, _) =
+        prepare_chapter_html_with_stats(raw_html, chapter_path, base_cfi, options, load_resource)?;
+    Ok(html)
+}
+
+/// Same as [`prepare_chapter_html`] but returns inlining statistics.
+pub fn prepare_chapter_html_with_stats<F>(
+    raw_html: &str,
+    chapter_path: &str,
+    base_cfi: Option<&str>,
+    options: &PrepareChapterOptions,
+    mut load_resource: F,
+) -> Result<(String, PrepareStats), EpubError>
+where
+    F: FnMut(&str) -> Option<LoadedResource>,
+{
+    let mut stats = PrepareStats::default();
     let mut html = if options.inject_cfi {
         let base = base_cfi
             .ok_or_else(|| EpubError::InvalidFormat("inject_cfi requires base_cfi".to_string()))?;
@@ -110,94 +221,69 @@ where
     };
 
     if !options.inline_resources {
-        return Ok(html);
+        return Ok((html, stats));
     }
 
-    let base_dir = match chapter_path.rfind('/') {
-        Some(i) => chapter_path[..i].to_string(),
-        None => String::new(),
-    };
+    let chapter_ctx = RewriteContext::from_document_path(chapter_path);
+    let base_dir = chapter_ctx.base_dir().to_string();
 
-    // Resolve and load every local ref we can find (including CSS-nested fonts/images).
-    let mut pending: Vec<String> = collect_local_refs(&html)
-        .into_iter()
-        .filter(|r| !is_external_url(r) && !r.starts_with('#') && !r.is_empty())
-        .map(|r| normalize_path(&base_dir, &r))
-        .collect();
+    let mut pending: Vec<String> = Vec::new();
+    for r in collect_local_refs(&html) {
+        push_normalized_ref(&mut pending, &base_dir, &r);
+    }
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut uri_map: HashMap<String, String> = HashMap::new();
+    // Keep CSS source for a second pass after nested fonts/images are inlined.
+    let mut css_sources: HashMap<String, String> = HashMap::new();
 
     while let Some(path) = pending.pop() {
         if !seen.insert(path.clone()) {
             continue;
         }
-        let Some(bytes) = load_resource(&path) else {
+        stats.considered += 1;
+        let Some(loaded) = load_resource(&path) else {
+            stats.missing += 1;
             continue;
         };
-        if bytes.len() > options.max_inline_bytes {
+        if loaded.bytes.len() > options.max_inline_bytes {
+            stats.skipped_oversize += 1;
             continue;
         }
-        let mt = guess_media_type(&path);
+        let mt = resolve_media_type(&path, loaded.media_type.as_deref());
         if mt == "text/css" {
-            let css = String::from_utf8_lossy(&bytes);
-            let css_dir = match path.rfind('/') {
-                Some(i) => &path[..i],
-                None => "",
-            };
-            // Queue nested url() targets for loading.
-            for rel in collect_local_refs(&format!("url({css})")) {
-                if is_external_url(&rel) {
-                    continue;
+            let css = String::from_utf8_lossy(&loaded.bytes).into_owned();
+            let css_ctx = RewriteContext::from_document_path(&path);
+            // Discover nested url() / @import targets without rewriting yet.
+            let _ = css_ctx.rewrite_css(&css, |abs: &str| {
+                if !is_external_url(abs) {
+                    pending.push(abs.to_string());
                 }
-                pending.push(normalize_path(css_dir, &rel));
-            }
-            let rewritten = rewrite_css(&css, &path, |inner| {
-                if is_external_url(inner) {
-                    return None;
-                }
-                let joined = normalize_path(css_dir, inner);
-                uri_map.get(&joined).cloned()
+                None
             });
-            // Nested deps may not be in map yet — second rewrite after loop is heavy;
-            // rebuild CSS after all loads by re-running rewrite with full map.
-            uri_map.insert(path, rewritten); // temporary plain CSS; fixed below
-        } else if mt.starts_with("image/") || mt.starts_with("font/") || mt.starts_with("audio/") {
-            uri_map.insert(path, data_uri(mt, &bytes));
+            css_sources.insert(path, css);
+        } else if is_inlineable_media(&mt) {
+            uri_map.insert(path, data_uri(&mt, &loaded.bytes));
+            stats.inlined += 1;
+        } else {
+            stats.skipped_type += 1;
         }
     }
 
-    // Rebuild CSS entries now that fonts/images are materialised.
-    let css_paths: Vec<String> = uri_map
-        .keys()
-        .filter(|p| guess_media_type(p) == "text/css")
-        .cloned()
-        .collect();
-    for path in css_paths {
-        let Some(bytes) = load_resource(&path) else {
-            continue;
-        };
-        if bytes.len() > options.max_inline_bytes {
-            continue;
-        }
-        let css = String::from_utf8_lossy(&bytes);
-        let rewritten = rewrite_css(&css, &path, |inner| {
-            if is_external_url(inner) {
+    // Materialise CSS as data: URIs with nested resources rewritten.
+    for (path, css) in css_sources {
+        let css_ctx = RewriteContext::from_document_path(&path);
+        let rewritten = css_ctx.rewrite_css(&css, |abs: &str| {
+            if is_external_url(abs) {
                 return None;
             }
-            let css_dir = match path.rfind('/') {
-                Some(i) => &path[..i],
-                None => "",
-            };
-            let joined = normalize_path(css_dir, inner);
-            uri_map.get(&joined).cloned()
+            uri_map.get(abs).cloned()
         });
         uri_map.insert(path, data_uri("text/css", rewritten.as_bytes()));
+        stats.inlined += 1;
     }
 
     let uri_map = Arc::new(uri_map);
-    // `rewrite_resources` already joins relative refs against the chapter path;
-    // the resolver receives EPUB-root-relative absolute paths.
     html = rewrite_resources(&html, chapter_path, {
         let uri_map = Arc::clone(&uri_map);
         move |abs_path| {
@@ -208,7 +294,7 @@ where
         }
     })?;
 
-    Ok(html)
+    Ok((html, stats))
 }
 
 #[cfg(test)]
@@ -219,6 +305,19 @@ mod tests {
     fn data_uri_roundtrip_prefix() {
         let uri = data_uri("image/png", b"\x89PNG");
         assert!(uri.starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn resolve_media_type_prefers_manifest() {
+        assert_eq!(
+            resolve_media_type("x.bin", Some("image/webp")),
+            "image/webp"
+        );
+        assert_eq!(resolve_media_type("x.png", None), "image/png");
+        assert_eq!(
+            resolve_media_type("x.png", Some("application/octet-stream")),
+            "image/png"
+        );
     }
 
     #[test]
@@ -236,7 +335,10 @@ mod tests {
             },
             |path| {
                 if path == "OEBPS/img/a.png" {
-                    Some(png.to_vec())
+                    Some(LoadedResource {
+                        bytes: png.to_vec(),
+                        media_type: Some("image/png".into()),
+                    })
                 } else {
                     None
                 }
@@ -245,6 +347,34 @@ mod tests {
         .unwrap();
         assert!(out.contains("data:image/png;base64,"));
         assert!(!out.contains("src=\"img/a.png\""));
+    }
+
+    #[test]
+    fn prepare_inlines_srcset_and_strips_fragment() {
+        let html = r#"<html><body>
+            <img src="a.png#frag" srcset="a.png 1x, b.jpg 2x"/>
+        </body></html>"#;
+        let out = prepare_chapter_html(
+            html,
+            "ch1.xhtml",
+            None,
+            &PrepareChapterOptions {
+                inject_cfi: false,
+                inline_resources: true,
+                max_inline_bytes: 4096,
+            },
+            |path| match path {
+                "a.png" => Some(LoadedResource::from(b"png".to_vec())),
+                "b.jpg" => Some(LoadedResource {
+                    bytes: b"jpg".to_vec(),
+                    media_type: Some("image/jpeg".into()),
+                }),
+                _ => None,
+            },
+        )
+        .unwrap();
+        assert!(out.contains("data:image/png;base64,") || out.contains("data:image/jpeg;base64,"));
+        assert!(out.contains("data:"));
     }
 
     #[test]
@@ -259,9 +389,43 @@ mod tests {
                 inline_resources: false,
                 max_inline_bytes: 1024,
             },
-            |_| Some(b"x".to_vec()),
+            |_| Some(LoadedResource::from(b"x".to_vec())),
         )
         .unwrap();
         assert!(out.contains("src=\"a.png\""));
+    }
+
+    #[test]
+    fn collect_srcset_refs() {
+        let refs = collect_local_refs(r#"<img srcset="img/a.png 1x, img/b.png 2x">"#);
+        assert!(refs.iter().any(|r| r.contains("a.png")));
+        assert!(refs.iter().any(|r| r.contains("b.png")));
+    }
+
+    #[test]
+    fn prepare_stats_count_missing_and_oversize() {
+        let html = r#"<html><body>
+            <img src="ok.png"/><img src="big.png"/><img src="gone.png"/>
+        </body></html>"#;
+        let (_out, stats) = prepare_chapter_html_with_stats(
+            html,
+            "ch.xhtml",
+            None,
+            &PrepareChapterOptions {
+                inject_cfi: false,
+                inline_resources: true,
+                max_inline_bytes: 10,
+            },
+            |path| match path {
+                "ok.png" => Some(LoadedResource::from(b"small".to_vec())),
+                "big.png" => Some(LoadedResource::from(vec![0u8; 100])),
+                _ => None,
+            },
+        )
+        .unwrap();
+        assert_eq!(stats.inlined, 1);
+        assert_eq!(stats.skipped_oversize, 1);
+        assert_eq!(stats.missing, 1);
+        assert_eq!(stats.considered, 3);
     }
 }

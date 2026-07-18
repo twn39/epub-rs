@@ -2,8 +2,10 @@ use super::common::make_epub_bytes;
 use crate::ffi::common::{epub_free, epub_free_string, epub_last_error};
 use crate::ffi::parser::{
     epub_cfi_from_location_fast, epub_generate_location_index, epub_get_position_info,
-    epub_get_toc, epub_location_from_cfi_fast, epub_open, epub_parse,
+    epub_get_toc, epub_location_from_cfi_fast, epub_open, epub_parse, epub_preferred_reading_start,
+    epub_prepare_chapter, epub_search_book, epub_search_book_with_options,
 };
+use std::ffi::CString;
 use std::ptr;
 
 #[test]
@@ -128,6 +130,45 @@ fn test_ffi_fast_path_positions_and_caching() {
         )
     };
     assert_eq!(ok_oob, 0, "OOB index should return 0");
+
+    unsafe { epub_free(handle) };
+}
+
+#[test]
+fn test_ffi_prepare_search_reading_start() {
+    let bytes = make_epub_bytes();
+    let handle = unsafe { epub_open(bytes.as_ptr(), bytes.len()) };
+    assert!(!handle.is_null());
+
+    let start_ptr = unsafe { epub_preferred_reading_start(handle) };
+    assert!(!start_ptr.is_null(), "preferred_reading_start null");
+    let start_json = unsafe { std::ffi::CStr::from_ptr(start_ptr) }.to_string_lossy();
+    assert!(
+        start_json.contains("spine_index"),
+        "unexpected: {start_json}"
+    );
+    unsafe { epub_free_string(start_ptr) };
+
+    let id = CString::new("ch1").unwrap();
+    let prep = unsafe { epub_prepare_chapter(handle, id.as_ptr(), ptr::null()) };
+    assert!(!prep.is_null(), "prepare_chapter null: {:?}", unsafe {
+        std::ffi::CStr::from_ptr(epub_last_error())
+    });
+    let html = unsafe { std::ffi::CStr::from_ptr(prep) }.to_string_lossy();
+    assert!(html.contains("Hello") || html.contains("html"), "{html}");
+    unsafe { epub_free_string(prep) };
+
+    let q = CString::new("Hello").unwrap();
+    let hits = unsafe { epub_search_book(handle, q.as_ptr(), 5, 20) };
+    assert!(!hits.is_null());
+    let hits_json = unsafe { std::ffi::CStr::from_ptr(hits) }.to_string_lossy();
+    assert!(hits_json.starts_with('['), "{hits_json}");
+    unsafe { epub_free_string(hits) };
+
+    let opts = CString::new(r#"{"case_insensitive":true,"max_total":10}"#).unwrap();
+    let hits2 = unsafe { epub_search_book_with_options(handle, q.as_ptr(), opts.as_ptr()) };
+    assert!(!hits2.is_null());
+    unsafe { epub_free_string(hits2) };
 
     unsafe { epub_free(handle) };
 }

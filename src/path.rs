@@ -8,14 +8,51 @@
 
 /// Returns true when `url` is not an EPUB-internal relative path and must not
 /// be joined against a base directory (schemes, protocol-relative, data URIs).
+///
+/// Case-insensitive scheme match for common absolute / non-package URLs.
 pub fn is_external_url(url: &str) -> bool {
-    url.starts_with("http://")
-        || url.starts_with("https://")
-        || url.starts_with("data:")
-        || url.starts_with("mailto:")
-        || url.starts_with("ftp:")
-        || url.starts_with("blob:")
-        || url.starts_with("//")
+    let trimmed = url.trim_start();
+    if trimmed.starts_with("//") {
+        return true;
+    }
+    // Fast path for the common schemes (already lowercased in most EPUBs).
+    if trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("data:")
+        || trimmed.starts_with("mailto:")
+        || trimmed.starts_with("ftp:")
+        || trimmed.starts_with("blob:")
+        || trimmed.starts_with("javascript:")
+        || trimmed.starts_with("file:")
+        || trimmed.starts_with("about:")
+    {
+        return true;
+    }
+    // Case-insensitive fallback for `HTTP://`, `Data:`, etc.
+    if let Some(idx) = trimmed.find(':') {
+        let scheme = &trimmed[..idx];
+        if scheme
+            .bytes()
+            .all(|b| b.is_ascii_alphabetic() || b == b'+' || b == b'.' || b == b'-')
+            && !scheme.is_empty()
+        {
+            let lower = scheme.to_ascii_lowercase();
+            return matches!(
+                lower.as_str(),
+                "http"
+                    | "https"
+                    | "data"
+                    | "mailto"
+                    | "ftp"
+                    | "blob"
+                    | "javascript"
+                    | "file"
+                    | "about"
+                    | "chrome"
+            );
+        }
+    }
+    false
 }
 
 /// Joins `base_dir` and a relative path, resolving `.` and `..` segments.
@@ -417,5 +454,79 @@ mod tests {
         assert_eq!(resolve_href("OEBPS", ""), "");
         assert_eq!(normalize_path("", "images/a.jpg"), "images/a.jpg");
         assert_eq!(normalize_path("OEBPS", ""), "OEBPS");
+    }
+
+    /// Extended regression table: schemes, encoding, deep `..`, mixed query/fragment.
+    #[test]
+    fn extended_path_policy_regression_table() {
+        // Schemes that must never be treated as package-relative paths.
+        for url in [
+            "https://a/b",
+            "HTTP://a/b",
+            "data:text/plain,hi",
+            "DATA:image/png;base64,xx",
+            "//cdn.example/x",
+            "javascript:void(0)",
+            "file:///tmp/x",
+            "about:blank",
+            "chrome://settings",
+            "mailto:a@b.c",
+            "blob:https://x/y",
+            "ftp://h/f",
+        ] {
+            assert!(is_external_url(url), "expected external: {url}");
+            // resolve_href still passthrough only for the original is_external set
+            // that uses starts_with checks — external gate for rewrite is is_external_url.
+        }
+
+        assert!(!is_external_url("images/a.png"));
+        assert!(!is_external_url("../fonts/a.woff2"));
+        assert!(!is_external_url("a.png#frag"));
+        assert!(!is_external_url("OEBPS/Text/ch.xhtml"));
+
+        // normalize strips ?/#; resolve keeps #.
+        assert_eq!(
+            normalize_path("OEBPS/Text", "img/a.png?cache=1#top"),
+            "OEBPS/Text/img/a.png"
+        );
+        assert_eq!(
+            resolve_href("OEBPS/Text", "img/a.png#top"),
+            "OEBPS/Text/img/a.png#top"
+        );
+
+        // Percent-encoded path segments (unicode + encoded `..`).
+        assert_eq!(
+            normalize_path("OEBPS", "Images/%E4%B8%AD.png"),
+            "OEBPS/Images/中.png"
+        );
+        assert_eq!(
+            normalize_path("a/b", "%2e%2e/c/d.png"),
+            // percent_decode turns %2e%2e into `..` then join resolves
+            "a/c/d.png"
+        );
+
+        // Deep parent traversal stays under package root semantics.
+        assert_eq!(
+            join_epub_path("OEBPS/a/b/c", "../../../x/y.xhtml"),
+            "OEBPS/x/y.xhtml"
+        );
+        assert_eq!(
+            normalize_path("OEBPS/a/b/c", "../../../x/y.xhtml#s"),
+            "OEBPS/x/y.xhtml"
+        );
+        assert_eq!(
+            resolve_href("OEBPS/a/b/c", "../../../x/y.xhtml#s"),
+            "OEBPS/x/y.xhtml#s"
+        );
+
+        // Dot segments only.
+        assert_eq!(
+            join_epub_path("OEBPS", "././Text/./ch.xhtml"),
+            "OEBPS/Text/ch.xhtml"
+        );
+
+        // Fragment-only and empty remain stable.
+        assert_eq!(resolve_href("OEBPS/nav", "#"), "#");
+        assert_eq!(normalize_path("OEBPS", "#only"), "OEBPS");
     }
 }

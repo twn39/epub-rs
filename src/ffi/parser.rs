@@ -813,7 +813,51 @@ pub unsafe extern "C" fn epub_search_book(
         };
         let total = if max_total == 0 { 80 } else { max_total };
         let book = h.book.as_book().expect("book ready after ensure_parsed");
+        // Case-insensitive by default (SearchBookOptions); caps from C args.
         let hits = h.archive.search_book(book, q.as_ref(), per, total)?;
+        Ok(to_json(&hits))
+    })
+}
+
+/// Full-book search with JSON options (`SearchBookOptions`).
+///
+/// Example options:
+/// ```json
+/// {"max_per_chapter":12,"max_total":80,"case_insensitive":true,"include_non_linear":false}
+/// ```
+/// Pass null/`{}` for defaults. Returns JSON `BookSearchHit[]`.
+///
+/// # Safety
+/// Pointers must be valid; `handle` from `epub_open*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn epub_search_book_with_options(
+    handle: *mut EpubHandle,
+    query: *const c_char,
+    options_json: *const c_char,
+) -> *mut c_char {
+    ffi_boundary!(ptr::null_mut(), {
+        let h = unsafe { handle.as_mut() }.ok_or("epub_search_book_with_options: null handle")?;
+        if query.is_null() {
+            return Err("epub_search_book_with_options: query is null".into());
+        }
+        h.ensure_parsed()?;
+        let q = unsafe { CStr::from_ptr(query) }.to_string_lossy();
+        let opts = if options_json.is_null() {
+            crate::parser::SearchBookOptions::default()
+        } else {
+            let raw = unsafe { CStr::from_ptr(options_json) }.to_string_lossy();
+            if raw.trim().is_empty() {
+                crate::parser::SearchBookOptions::default()
+            } else {
+                serde_json::from_str(raw.as_ref()).map_err(|e| {
+                    format!("epub_search_book_with_options: invalid options JSON: {e}")
+                })?
+            }
+        };
+        let book = h.book.as_book().expect("book ready after ensure_parsed");
+        let hits = h
+            .archive
+            .search_book_with_options(book, q.as_ref(), &opts)?;
         Ok(to_json(&hits))
     })
 }

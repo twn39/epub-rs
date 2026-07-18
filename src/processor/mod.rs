@@ -13,7 +13,7 @@
 //! share one policy with navigation and the generator.
 //!
 //! CSS URL scanning lives in [`rewrite`] — both [`html`] and [`css`] depend on
-//! it (no mutual HTML↔CSS ownership).
+//! it via [`RewriteContext`] (no mutual HTML↔CSS ownership).
 //!
 //! All public items are re-exported at this level so every existing caller of
 //! `crate::processor::foo()` continues to work without any changes.
@@ -23,7 +23,7 @@ mod css;
 mod html;
 mod positions;
 mod prepare;
-mod rewrite;
+pub mod rewrite;
 mod semantic;
 
 // ── Shared DOM traversal helpers ──────────────────────────────────────────────
@@ -67,5 +67,9 @@ pub use cfi::{SearchResult, inject_cfi_dom, search_chapter};
 // positions exports intentionally omitted — PositionContext and extract_positions
 // are pub(crate) internal utilities; external callers use EpubArchive::generate_locations().
 
-pub use prepare::{PrepareChapterOptions, data_uri, guess_media_type, prepare_chapter_html};
+pub use prepare::{
+    LoadedResource, PrepareChapterOptions, PrepareStats, data_uri, guess_media_type,
+    prepare_chapter_html, prepare_chapter_html_with_stats, resolve_media_type,
+};
+pub use rewrite::RewriteContext;
 pub use semantic::extract_semantic_content;

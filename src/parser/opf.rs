@@ -1,9 +1,10 @@
-//! OPF package document, container, and encryption parsing.
+//! OPF package document and container parsing.
 //!
 //! Handles:
 //! - `META-INF/container.xml` → rootfile paths
-//! - `META-INF/encryption.xml` → obfuscated resource map
-//! - `*.opf` → full `EpubBook` (metadata, manifest, spine)
+//! - `*.opf` → full `EpubBook` (metadata, manifest, spine, guide)
+//!
+//! Encryption lives in [`super::encryption`].
 
 use crate::error::EpubError;
 use crate::model::{EpubBook, ManifestItem};
@@ -174,110 +175,6 @@ impl<P: EpubProvider> EpubArchive<P> {
         } else {
             Ok(renditions)
         }
-    }
-
-    /// Reads `META-INF/encryption.xml` to find obfuscated/encrypted resources.
-    ///
-    /// Returns a map from ZIP-relative path to [`crate::crypto::EncryptionInfo`],
-    /// which carries both the obfuscation algorithm and the optional original
-    /// plaintext length from `<Compression OriginalLength="N">`.
-    pub(super) fn parse_encryption(
-        &mut self,
-    ) -> Result<std::collections::HashMap<String, crate::crypto::EncryptionInfo>, EpubError> {
-        let mut encryptions = std::collections::HashMap::new();
-
-        let mut enc_file = match self.provider.read_file("META-INF/encryption.xml") {
-            Ok(f) => f,
-            Err(_) => return Ok(encryptions), // Doesn't exist, which is fine
-        };
-
-        let mut buf = String::new();
-        if enc_file.read_to_string(&mut buf).is_err() {
-            return Ok(encryptions);
-        }
-
-        let mut reader = Reader::from_str(&buf);
-        reader.config_mut().trim_text(true);
-
-        let mut current_algo = None;
-        // Original plaintext length from <Compression OriginalLength="N">.
-        // Only present for LCP/AES full-content encryption; absent for IDPF/Adobe font obfuscation.
-        let mut current_original_length: Option<u64> = None;
-        let mut current_uri: Option<String> = None;
-        let mut event_buf = Vec::new();
-
-        loop {
-            match reader.read_event_into(&mut event_buf) {
-                Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => {
-                    let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
-
-                    if name.ends_with("EncryptionMethod") {
-                        for attr in e.attributes() {
-                            if let Ok(attr) = attr
-                                && attr.key.as_ref() == b"Algorithm"
-                            {
-                                let val = String::from_utf8_lossy(&attr.value);
-                                if val == "http://www.idpf.org/2008/embedding" {
-                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Idpf);
-                                } else if val == "http://ns.adobe.com/pdf/enc#RC" {
-                                    current_algo = Some(crate::crypto::ObfuscationAlgorithm::Adobe);
-                                }
-                            }
-                        }
-                    } else if name.ends_with("CipherReference") {
-                        for attr in e.attributes() {
-                            if let Ok(attr) = attr
-                                && attr.key.as_ref() == b"URI"
-                            {
-                                let uri = String::from_utf8_lossy(&attr.value).into_owned();
-                                // URL Decode URI (encryption.xml URIs are standard percent-encoded)
-                                let decoded_uri = percent_encoding::percent_decode_str(&uri)
-                                    .decode_utf8_lossy()
-                                    .into_owned();
-                                current_uri = Some(decoded_uri);
-                            }
-                        }
-                    } else if name.ends_with("Compression") {
-                        // <comp:Compression Method="8" OriginalLength="13291">
-                        // Method 8 = deflate was applied before encryption.
-                        // Method 4 = stored (no compression) before encryption.
-                        // OriginalLength = plaintext size; absent for font obfuscation.
-                        for attr in e.attributes() {
-                            if let Ok(attr) = attr
-                                && attr.key.as_ref() == b"OriginalLength"
-                            {
-                                let val = String::from_utf8_lossy(&attr.value);
-                                current_original_length = val.parse::<u64>().ok();
-                            }
-                        }
-                    }
-                }
-                Ok(Event::End(ref e)) => {
-                    let name = String::from_utf8_lossy(e.name().into_inner()).into_owned();
-                    if name.ends_with("EncryptedData") {
-                        // Commit the entry when we have both an algorithm and a URI.
-                        if let (Some(algo), Some(uri)) = (current_algo, current_uri.take()) {
-                            encryptions.insert(
-                                uri,
-                                crate::crypto::EncryptionInfo {
-                                    algorithm: algo,
-                                    original_length: current_original_length,
-                                },
-                            );
-                        }
-                        // Reset per-entry state.
-                        current_algo = None;
-                        current_original_length = None;
-                    }
-                }
-                Ok(Event::Eof) => break,
-                Err(_) => break, // Gracefully ignore encryption XML parsing errors
-                _ => {}
-            }
-            event_buf.clear();
-        }
-
-        Ok(encryptions)
     }
 
     /// Parses the OPF file (usually `.opf`) to build the full [`EpubBook`] domain model.
@@ -616,6 +513,34 @@ impl<P: EpubProvider> EpubArchive<P> {
                                 linear,
                                 layout_override,
                                 page_spread,
+                            });
+                        }
+                    } else if name_str.ends_with("reference") {
+                        // EPUB 2 <guide><reference type="text" href="..." title="..."/></guide>
+                        let mut ref_type = String::new();
+                        let mut href = String::new();
+                        let mut title = None;
+                        for attr in e.attributes().flatten() {
+                            let key = String::from_utf8_lossy(attr.key.into_inner());
+                            let value = String::from_utf8_lossy(&attr.value).into_owned();
+                            match key.as_ref() {
+                                "type" => ref_type = value,
+                                "href" => {
+                                    let decoded = percent_encoding::percent_decode_str(&value)
+                                        .decode_utf8_lossy()
+                                        .into_owned();
+                                    // Resolve against OPF directory → package-root-relative.
+                                    href = crate::path::resolve_href(&book.opf_dir, &decoded);
+                                }
+                                "title" => title = Some(value),
+                                _ => {}
+                            }
+                        }
+                        if !ref_type.is_empty() && !href.is_empty() {
+                            book.guide.push(crate::model::GuideReference {
+                                ref_type,
+                                href,
+                                title,
                             });
                         }
                     }
@@ -1661,5 +1586,194 @@ mod tests {
         let back: crate::model::AltIdentifier = serde_json::from_str(&json).unwrap();
         assert_eq!(back.value(), "978-3-16-148410-0");
         assert_eq!(back.scheme(), Some("ISBN"));
+    }
+
+    // ── encryption.xml: font + AES OriginalLength ─────────────────────────────
+
+    fn epub_with_encryption(encryption_xml: &str) -> Vec<u8> {
+        let opf = r#"<?xml version="1.0"?>
+             <package version="3.0" xmlns="http://www.idpf.org/2007/opf"
+                      unique-identifier="uid">
+               <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                 <dc:title>Enc</dc:title>
+                 <dc:identifier id="uid">urn:uuid:enc</dc:identifier>
+               </metadata>
+               <manifest>
+                 <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+                 <item id="f1" href="fonts/a.otf" media-type="font/otf"/>
+               </manifest>
+               <spine>
+                 <itemref idref="c1"/>
+               </spine>
+             </package>"#;
+        let container = br#"<?xml version="1.0"?>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+              <rootfiles>
+                <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+              </rootfiles>
+            </container>"#;
+        let mut buf = Vec::new();
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("META-INF/container.xml", stored).unwrap();
+        zip.write_all(container).unwrap();
+        zip.start_file("META-INF/encryption.xml", stored).unwrap();
+        zip.write_all(encryption_xml.as_bytes()).unwrap();
+        zip.start_file("content.opf", stored).unwrap();
+        zip.write_all(opf.as_bytes()).unwrap();
+        zip.start_file("ch1.xhtml", stored).unwrap();
+        zip.write_all(b"<html><body>Hi</body></html>").unwrap();
+        zip.start_file("fonts/a.otf", stored).unwrap();
+        zip.write_all(&[0u8; 100]).unwrap();
+        zip.finish().unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_encryption_font_and_aes_original_length() {
+        let enc = r#"<?xml version="1.0"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:enc"
+            xmlns:enc="http://www.w3.org/2001/04/xmlenc#"
+            xmlns:comp="http://www.idpf.org/2016/encryption#compression">
+  <enc:EncryptedData>
+    <enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <enc:CipherData>
+      <enc:CipherReference URI="fonts/a.otf"/>
+    </enc:CipherData>
+  </enc:EncryptedData>
+  <enc:EncryptedData>
+    <enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/>
+    <enc:CipherData>
+      <enc:CipherReference URI="ch1.xhtml"/>
+    </enc:CipherData>
+    <enc:EncryptionProperties>
+      <enc:EncryptionProperty>
+        <comp:Compression Method="8" OriginalLength="42"/>
+      </enc:EncryptionProperty>
+    </enc:EncryptionProperties>
+  </enc:EncryptedData>
+</encryption>"#;
+        let bytes = epub_with_encryption(enc);
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+
+        let font = book.encryptions.get("fonts/a.otf").expect("font entry");
+        assert_eq!(font.algorithm, crate::crypto::ObfuscationAlgorithm::Idpf);
+        assert!(font.original_length.is_none());
+        assert!(font.font_obfuscation().is_some());
+
+        let chapter = book.encryptions.get("ch1.xhtml").expect("aes entry");
+        assert_eq!(
+            chapter.algorithm,
+            crate::crypto::ObfuscationAlgorithm::AesCbc
+        );
+        assert_eq!(chapter.original_length, Some(42));
+        assert!(chapter.font_obfuscation().is_none());
+        assert!(
+            chapter
+                .algorithm_uri
+                .as_deref()
+                .unwrap_or("")
+                .contains("aes256-cbc")
+        );
+    }
+
+    // ── EPUB 2 guide ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_epub2_guide_text_reference() {
+        let opf = r#"<?xml version="1.0"?>
+             <package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="uid">
+               <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                 <dc:title>Guide Book</dc:title>
+                 <dc:identifier id="uid">urn:uuid:guide</dc:identifier>
+                 <dc:language>en</dc:language>
+               </metadata>
+               <manifest>
+                 <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
+                 <item id="c1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
+                 <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+               </manifest>
+               <spine toc="ncx">
+                 <itemref idref="cover"/>
+                 <itemref idref="c1"/>
+               </spine>
+               <guide>
+                 <reference type="cover" href="cover.xhtml" title="Cover"/>
+                 <reference type="text" href="text/ch1.xhtml" title="Start"/>
+               </guide>
+             </package>"#;
+        let container = br#"<?xml version="1.0"?>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+              <rootfiles>
+                <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+              </rootfiles>
+            </container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("META-INF/container.xml", stored).unwrap();
+            zip.write_all(container).unwrap();
+            zip.start_file("OEBPS/content.opf", stored).unwrap();
+            zip.write_all(opf.as_bytes()).unwrap();
+            zip.start_file("OEBPS/cover.xhtml", stored).unwrap();
+            zip.write_all(b"<html><body>Cover</body></html>").unwrap();
+            zip.start_file("OEBPS/text/ch1.xhtml", stored).unwrap();
+            zip.write_all(b"<html><body>Chapter</body></html>").unwrap();
+            zip.start_file("OEBPS/toc.ncx", stored).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0"?>
+                <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+                  <head><meta name="dtb:uid" content="urn:uuid:guide"/></head>
+                  <docTitle><text>Guide Book</text></docTitle>
+                  <navMap>
+                    <navPoint id="np1"><navLabel><text>Ch1</text></navLabel>
+                      <content src="text/ch1.xhtml"/></navPoint>
+                  </navMap>
+                </ncx>"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        let mut archive = EpubArchive::new(Cursor::new(buf)).unwrap();
+        let book = archive.parse().unwrap();
+        assert_eq!(book.guide.len(), 2);
+        assert_eq!(book.guide[0].ref_type, "cover");
+        assert_eq!(book.guide[1].ref_type, "text");
+        // href resolved against OEBPS/
+        assert_eq!(book.guide[1].href, "OEBPS/text/ch1.xhtml");
+
+        let start = archive.preferred_reading_start(&book);
+        assert_eq!(start.source, "guide:text");
+        assert_eq!(start.spine_index, 1);
+    }
+
+    #[test]
+    fn test_content_decryptor_hook() {
+        // AES entry without real crypto — decryptor rewrites ciphertext to plaintext.
+        let enc = r#"<?xml version="1.0"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:enc"
+            xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData>
+    <enc:EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes256-cbc"/>
+    <enc:CipherData>
+      <enc:CipherReference URI="ch1.xhtml"/>
+    </enc:CipherData>
+  </enc:EncryptedData>
+</encryption>"#;
+        let bytes = epub_with_encryption(enc);
+        let mut archive = EpubArchive::new(Cursor::new(bytes)).unwrap();
+        let book = archive.parse().unwrap();
+        archive.set_content_decryptor(|path, cipher, info| {
+            assert_eq!(path, "ch1.xhtml");
+            assert_eq!(info.algorithm, crate::crypto::ObfuscationAlgorithm::AesCbc);
+            assert!(!cipher.is_empty());
+            Some(b"<html><body>DECRYPTED</body></html>".to_vec())
+        });
+        let out = archive.get_resource_by_href(&book, "ch1.xhtml").unwrap();
+        assert_eq!(out, b"<html><body>DECRYPTED</body></html>");
     }
 }

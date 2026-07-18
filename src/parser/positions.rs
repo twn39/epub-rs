@@ -736,6 +736,7 @@ mod tests {
             spine,
             opf_dir: String::new(),
             toc_id: None,
+            guide: Vec::new(),
             encryptions: HashMap::new(),
         }
     }

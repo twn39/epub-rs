@@ -3,6 +3,7 @@
 pub mod a11y;
 pub mod base;
 pub mod book;
+pub mod guide;
 pub mod manifest;
 pub mod metadata;
 pub mod navigation;
@@ -36,6 +37,9 @@ pub use a11y::{
     A11yAccessMode, A11yCertification, A11yExemption, A11yFeature, A11yHazard,
     A11yPrimaryAccessMode, A11yProfile, Accessibility,
 };
+
+// Re-export guide references (EPUB 2)
+pub use guide::GuideReference;
 
 // Re-export central book structure
 pub use book::EpubBook;

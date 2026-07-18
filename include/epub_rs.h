@@ -745,6 +745,22 @@ char *epub_search_book(struct epub_t *handle,
                        size_t max_total);
 
 /**
+ * Full-book search with JSON options (`SearchBookOptions`).
+ *
+ * Example options:
+ * ```json
+ * {"max_per_chapter":12,"max_total":80,"case_insensitive":true,"include_non_linear":false}
+ * ```
+ * Pass null/`{}` for defaults. Returns JSON `BookSearchHit[]`.
+ *
+ * # Safety
+ * Pointers must be valid; `handle` from `epub_open*`.
+ */
+char *epub_search_book_with_options(struct epub_t *handle,
+                                    const char *query,
+                                    const char *options_json);
+
+/**
  * Preferred first-open spine index as JSON `ReadingStartInfo`.
  *
  * Example: `{"spine_index":1,"source":"cover_skip","href":"OEBPS/ch1.xhtml"}`.

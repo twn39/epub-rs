@@ -337,6 +337,108 @@ impl EpubParser {
         serde_wasm_bindgen::to_value(&nav.page_list).map_err(|e| e.to_string().into())
     }
 
+    // ── Reading-system: prepare / search / first-open ─────────────────────────
+
+    /// Prepare a spine chapter for WebView embedding (optional `data-cfi` + data-URI assets).
+    ///
+    /// `id` is the manifest/spine idref. `options` is a JS object matching
+    /// `PrepareChapterOptions` (or `null` / `undefined` for defaults):
+    /// `{ inject_cfi?: boolean, inline_resources?: boolean, max_inline_bytes?: number }`.
+    ///
+    /// Fonts listed in `encryption.xml` are deobfuscated during resource load
+    /// (same path as other archive reads).
+    #[wasm_bindgen]
+    pub fn prepare_chapter(&mut self, id: &str, options: JsValue) -> Result<String, JsValue> {
+        let (archive, book) = self.archive_and_book()?;
+        let opts = if options.is_null() || options.is_undefined() {
+            processor::PrepareChapterOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|e| format!("prepare_chapter: invalid options: {e}"))?
+        };
+        archive
+            .prepare_chapter(book, id, &opts)
+            .map_err(|e| e.to_string().into())
+    }
+
+    /// Like `prepare_chapter`, but returns `{ html, stats }` where `stats` is
+    /// `PrepareStats` (`considered`, `inlined`, `skipped_oversize`, `missing`, `skipped_type`).
+    #[wasm_bindgen]
+    pub fn prepare_chapter_with_stats(
+        &mut self,
+        id: &str,
+        options: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let (archive, book) = self.archive_and_book()?;
+        let opts = if options.is_null() || options.is_undefined() {
+            processor::PrepareChapterOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|e| format!("prepare_chapter_with_stats: invalid options: {e}"))?
+        };
+        let (html, stats) = archive
+            .prepare_chapter_with_stats(book, id, &opts)
+            .map_err(|e| e.to_string())?;
+        let payload = serde_json::json!({ "html": html, "stats": stats });
+        serde_wasm_bindgen::to_value(&payload).map_err(|e| e.to_string().into())
+    }
+
+    /// Search the whole book for a literal query. Returns `BookSearchHit[]`.
+    ///
+    /// `max_per_chapter` / `max_total`: pass `0` for defaults (12 / 80).
+    /// Matching is case-insensitive by default (see `search_book_with_options`).
+    #[wasm_bindgen]
+    pub fn search_book(
+        &mut self,
+        query: &str,
+        max_per_chapter: usize,
+        max_total: usize,
+    ) -> Result<JsValue, JsValue> {
+        let (archive, book) = self.archive_and_book()?;
+        let per = if max_per_chapter == 0 {
+            12
+        } else {
+            max_per_chapter
+        };
+        let total = if max_total == 0 { 80 } else { max_total };
+        let hits = archive
+            .search_book(book, query, per, total)
+            .map_err(|e| e.to_string())?;
+        serde_wasm_bindgen::to_value(&hits).map_err(|e| e.to_string().into())
+    }
+
+    /// Search with explicit options (JS object matching `SearchBookOptions`).
+    ///
+    /// Fields: `max_per_chapter`, `max_total`, `case_insensitive`, `include_non_linear`.
+    #[wasm_bindgen]
+    pub fn search_book_with_options(
+        &mut self,
+        query: &str,
+        options: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let (archive, book) = self.archive_and_book()?;
+        let opts = if options.is_null() || options.is_undefined() {
+            crate::parser::SearchBookOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|e| format!("search_book_with_options: invalid options: {e}"))?
+        };
+        let hits = archive
+            .search_book_with_options(book, query, &opts)
+            .map_err(|e| e.to_string())?;
+        serde_wasm_bindgen::to_value(&hits).map_err(|e| e.to_string().into())
+    }
+
+    /// Preferred first-open spine location (`ReadingStartInfo` JSON).
+    ///
+    /// Uses landmarks (`bodymatter` / `text`) then cover-skip heuristics.
+    #[wasm_bindgen]
+    pub fn preferred_reading_start(&mut self) -> Result<JsValue, JsValue> {
+        let (archive, book) = self.archive_and_book()?;
+        let info = archive.preferred_reading_start(book);
+        serde_wasm_bindgen::to_value(&info).map_err(|e| e.to_string().into())
+    }
+
     // ── Bidirectional location-index ↔ CFI conversion ────────────────────────
 
     /// Generate positions and build a bidirectional lookup index in one call.

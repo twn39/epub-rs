@@ -1,3 +1,4 @@
+use super::guide::GuideReference;
 use super::manifest::ManifestItem;
 use super::metadata::Metadata;
 use super::spine::SpineItem;
@@ -16,6 +17,9 @@ pub struct EpubBook {
     pub opf_dir: String,
     /// ID of the NCX table of contents if available
     pub toc_id: Option<String>,
+    /// EPUB 2 OPF `<guide>` references (empty for pure EPUB 3 books without a guide).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guide: Vec<GuideReference>,
     /// Map of encrypted files and their full encryption metadata (ZIP relative path → EncryptionInfo).
     ///
     /// Populated from `META-INF/encryption.xml`. Each entry carries the obfuscation algorithm

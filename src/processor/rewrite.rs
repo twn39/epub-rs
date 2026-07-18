@@ -2,8 +2,50 @@
 //!
 //! Both [`super::html`] and [`super::css`] depend on this module so neither owns
 //! the other — path joining still goes through [`crate::path`].
+//!
+//! [`RewriteContext`] is the public “rewrite without owning HTML or CSS modules”
+//! surface used by prepare and any future reading-system transforms.
 
 use crate::path::{is_external_url, normalize_path};
+
+/// Path-scoped rewrite helper: document path → base directory + CSS URL engine.
+///
+/// HTML and CSS modules both resolve relative refs the same way; prepare uses
+/// this so it never imports `html`/`css` as owners of each other.
+#[derive(Debug, Clone)]
+pub struct RewriteContext {
+    /// EPUB-root-relative path of the referencing file (e.g. `OEBPS/css/style.css`).
+    pub document_path: String,
+}
+
+impl RewriteContext {
+    pub fn from_document_path(document_path: impl Into<String>) -> Self {
+        Self {
+            document_path: document_path.into(),
+        }
+    }
+
+    /// Directory portion of [`Self::document_path`] (empty when the file is at package root).
+    pub fn base_dir(&self) -> &str {
+        match self.document_path.rfind('/') {
+            Some(i) => &self.document_path[..i],
+            None => "",
+        }
+    }
+
+    /// Resolve a raw relative reference against this document (strips `?` / `#`).
+    pub fn resolve_ref(&self, rel: &str) -> String {
+        normalize_path(self.base_dir(), rel)
+    }
+
+    /// Rewrite `url(...)` / `@import` in a CSS string via `resolver(epub_root_relative)`.
+    pub fn rewrite_css<F>(&self, css: &str, mut resolver: F) -> String
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        rewrite_css_urls(css, self.base_dir(), &mut resolver)
+    }
+}
 
 /// Span of a single rewriteable URL token inside a CSS string.
 #[derive(Debug)]

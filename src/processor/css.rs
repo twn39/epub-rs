@@ -3,7 +3,7 @@
 //! Scanning and URL splicing live in [`super::rewrite`] so HTML rewriting can
 //! share the same engine without depending on this module (or vice versa).
 
-use super::rewrite::rewrite_css_urls;
+use super::rewrite::RewriteContext;
 
 /// Rewrites `url(...)` and `@import` references inside a CSS string.
 ///
@@ -20,17 +20,12 @@ use super::rewrite::rewrite_css_urls;
 /// and `@import "…"` / `@import '…'` rules.  External URLs (`http:`, `https:`,
 /// `data:`, `blob:`) are always passed through unchanged.
 ///
-/// Uses a zero-dependency hand-written two-pass scanner — no `regex` crate —
-/// so this compiles to minimal WASM binary size.
-pub fn rewrite_css<F>(css: &str, css_file_path: &str, mut resolver: F) -> String
+/// Delegates to [`RewriteContext`] (shared with HTML inline style rewriting).
+pub fn rewrite_css<F>(css: &str, css_file_path: &str, resolver: F) -> String
 where
     F: FnMut(&str) -> Option<String>,
 {
-    let css_dir = match css_file_path.rfind('/') {
-        Some(idx) => &css_file_path[..idx],
-        None => "",
-    };
-    rewrite_css_urls(css, css_dir, &mut resolver)
+    RewriteContext::from_document_path(css_file_path).rewrite_css(css, resolver)
 }
 
 #[cfg(test)]

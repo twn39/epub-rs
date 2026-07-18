@@ -1,18 +1,55 @@
-//! EPUB Font Deobfuscation
+//! EPUB Font Deobfuscation & encryption metadata
 //!
-//! Provides support for decrypting obfuscated fonts using IDPF and Adobe algorithms
-//! as defined in the EPUB standard and `META-INF/encryption.xml`.
+//! Provides:
+//! - IDPF / Adobe **font** obfuscation (XOR header; reversible without a DRM key)
+//! - Metadata for **full-content** encryption (AES-CBC / LCP): algorithm URI +
+//!   `OriginalLength` for accurate reading positions
+//!
+//! Full AES/LCP content decryption requires a content key and is **not**
+//! performed by this crate — resource APIs return ciphertext unchanged for
+//! non-font encryption entries.
 
 use sha1::{Digest, Sha1};
 use std::io::{Read, Result};
 
-/// Recognized obfuscation algorithms for EPUB resources.
+/// Encryption / obfuscation algorithm recorded in `META-INF/encryption.xml`.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObfuscationAlgorithm {
-    /// IDPF Font Obfuscation algorithm (`http://www.idpf.org/2008/embedding`)
+    /// IDPF Font Obfuscation (`http://www.idpf.org/2008/embedding`)
     Idpf,
-    /// Adobe Font Obfuscation algorithm (`http://ns.adobe.com/pdf/enc#RC`)
+    /// Adobe Font Obfuscation (`http://ns.adobe.com/pdf/enc#RC`)
     Adobe,
+    /// Full-content AES-CBC (e.g. W3C xmlenc AES-128/256, LCP).
+    /// Not XOR-deobfuscated by this library.
+    AesCbc,
+    /// Recognized `EncryptionMethod` URI that is neither font obfuscation nor AES-CBC.
+    Unknown,
+}
+
+impl ObfuscationAlgorithm {
+    /// True for IDPF/Adobe font schemes that this crate can reverse.
+    pub fn is_font_obfuscation(self) -> bool {
+        matches!(self, Self::Idpf | Self::Adobe)
+    }
+
+    /// Parse an `EncryptionMethod Algorithm="..."` URI.
+    pub fn from_algorithm_uri(uri: &str) -> Self {
+        let u = uri.trim();
+        if u == "http://www.idpf.org/2008/embedding" {
+            Self::Idpf
+        } else if u == "http://ns.adobe.com/pdf/enc#RC" {
+            Self::Adobe
+        } else if u.contains("aes256-cbc")
+            || u.contains("aes128-cbc")
+            || u.contains("xmlenc#aes")
+            || u.ends_with("#aes256-cbc")
+            || u.ends_with("#aes128-cbc")
+        {
+            Self::AesCbc
+        } else {
+            Self::Unknown
+        }
+    }
 }
 
 /// Full encryption metadata for a single entry listed in `META-INF/encryption.xml`.
@@ -23,7 +60,7 @@ pub enum ObfuscationAlgorithm {
 /// Mirrors go-toolkit's `manifest.Encryption` struct, which is the authoritative
 /// reference for how `OriginalLength` flows from `encryption.xml` into position
 /// computation via the `OriginalLength` reflowable strategy.
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EncryptionInfo {
     /// The obfuscation or encryption algorithm applied to this entry.
     pub algorithm: ObfuscationAlgorithm,
@@ -42,6 +79,21 @@ pub struct EncryptionInfo {
     /// Used by the [`crate::parser::OriginalLength`] reflowable strategy to
     /// compute accurate reading positions for encrypted EPUBs.
     pub original_length: Option<u64>,
+
+    /// Raw `Algorithm` URI from `EncryptionMethod` (when known).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm_uri: Option<String>,
+}
+
+impl EncryptionInfo {
+    /// Font schemes that [`DeobfuscatingReader`] can reverse.
+    pub fn font_obfuscation(&self) -> Option<ObfuscationAlgorithm> {
+        if self.algorithm.is_font_obfuscation() {
+            Some(self.algorithm)
+        } else {
+            None
+        }
+    }
 }
 
 /// Generates a 20-byte key for the IDPF font obfuscation algorithm based on the EPUB Unique Identifier.
@@ -76,7 +128,10 @@ pub fn generate_adobe_key(identifier: &str) -> Vec<u8> {
 }
 
 /// A wrapper around a `Read` stream that transparently deobfuscates the first 1024 or 1040 bytes
-/// of the stream using the provided obfuscation algorithm and key.
+/// of the stream using the provided **font** obfuscation algorithm and key.
+///
+/// Only [`ObfuscationAlgorithm::Idpf`] and [`ObfuscationAlgorithm::Adobe`] are valid.
+/// Passing AES/unknown algorithms yields a zero-key no-op (prefer not calling this path).
 pub struct DeobfuscatingReader<'a> {
     inner: Box<dyn Read + 'a>,
     key: Vec<u8>,
@@ -85,7 +140,7 @@ pub struct DeobfuscatingReader<'a> {
 }
 
 impl<'a> DeobfuscatingReader<'a> {
-    /// Creates a new `DeobfuscatingReader`.
+    /// Creates a new `DeobfuscatingReader` for a font obfuscation algorithm.
     pub fn new(
         inner: Box<dyn Read + 'a>,
         identifier: &str,
@@ -94,6 +149,8 @@ impl<'a> DeobfuscatingReader<'a> {
         let (key, obfuscation_length) = match algorithm {
             ObfuscationAlgorithm::Idpf => (generate_idpf_key(identifier), 1040),
             ObfuscationAlgorithm::Adobe => (generate_adobe_key(identifier), 1024),
+            // Identity: should not be used for content encryption.
+            ObfuscationAlgorithm::AesCbc | ObfuscationAlgorithm::Unknown => (Vec::new(), 0),
         };
 
         Self {
@@ -182,5 +239,47 @@ mod tests {
 
         assert_eq!(output.len(), 2000);
         assert_eq!(output, original_data);
+    }
+
+    #[test]
+    fn from_algorithm_uri_table() {
+        assert_eq!(
+            ObfuscationAlgorithm::from_algorithm_uri("http://www.idpf.org/2008/embedding"),
+            ObfuscationAlgorithm::Idpf
+        );
+        assert_eq!(
+            ObfuscationAlgorithm::from_algorithm_uri("http://ns.adobe.com/pdf/enc#RC"),
+            ObfuscationAlgorithm::Adobe
+        );
+        assert_eq!(
+            ObfuscationAlgorithm::from_algorithm_uri("http://www.w3.org/2001/04/xmlenc#aes256-cbc"),
+            ObfuscationAlgorithm::AesCbc
+        );
+        assert_eq!(
+            ObfuscationAlgorithm::from_algorithm_uri("http://www.w3.org/2001/04/xmlenc#aes128-cbc"),
+            ObfuscationAlgorithm::AesCbc
+        );
+        assert_eq!(
+            ObfuscationAlgorithm::from_algorithm_uri("http://example.com/custom"),
+            ObfuscationAlgorithm::Unknown
+        );
+        assert!(ObfuscationAlgorithm::Idpf.is_font_obfuscation());
+        assert!(!ObfuscationAlgorithm::AesCbc.is_font_obfuscation());
+    }
+
+    #[test]
+    fn encryption_info_font_obfuscation_helper() {
+        let font = EncryptionInfo {
+            algorithm: ObfuscationAlgorithm::Adobe,
+            original_length: None,
+            algorithm_uri: None,
+        };
+        assert_eq!(font.font_obfuscation(), Some(ObfuscationAlgorithm::Adobe));
+        let aes = EncryptionInfo {
+            algorithm: ObfuscationAlgorithm::AesCbc,
+            original_length: Some(100),
+            algorithm_uri: Some("http://www.w3.org/2001/04/xmlenc#aes256-cbc".into()),
+        };
+        assert!(aes.font_obfuscation().is_none());
     }
 }

@@ -1,16 +1,20 @@
 //! EPUB parser module.
 //!
 //! Split into focused submodules:
-//! - [`opf`]        — `META-INF/container.xml`, `encryption.xml`, and OPF package parsing
-//! - [`positions`]  — Package-level progression (byte-length strategies); not DOM CFI walk
-//! - [`navigation`] — TOC, page-list, and landmarks from `nav.xhtml` or `.ncx`
+//! - [`opf`]         — `META-INF/container.xml` and OPF package parsing (incl. EPUB 2 guide)
+//! - [`encryption`]  — `META-INF/encryption.xml`
+//! - [`positions`]   — Package-level progression (byte-length strategies); not DOM CFI walk
+//! - [`navigation`]  — TOC, page-list, and landmarks from `nav.xhtml` or `.ncx`
+//! - [`reading`]     — prepare chapter, book search, preferred reading-start
 
 // Adapter-only OPF cache (WASM / C FFI). Compiled in tests for unit coverage.
+mod encryption;
 #[cfg(any(target_arch = "wasm32", feature = "ffi", test))]
 mod lazy_book;
 mod navigation;
 mod opf;
 pub mod positions;
+mod reading;
 mod smil;
 
 #[cfg(any(target_arch = "wasm32", feature = "ffi"))]
@@ -29,62 +33,16 @@ pub use positions::{
     ArchiveEntryLength, BYTES_PER_POSITION, OriginalLength, PositionIndex, ReflowableStrategy,
     recommended_reflowable_strategy,
 };
-
-/// One full-text search hit across the book (spine + CFI).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct BookSearchHit {
-    pub spine_index: usize,
-    pub manifest_id: String,
-    pub excerpt: String,
-    pub cfi: String,
-}
-
-/// Where a reader should open on first launch.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ReadingStartInfo {
-    pub spine_index: usize,
-    /// `landmark:bodymatter` | `cover_skip` | `spine_zero`
-    pub source: String,
-    pub href: Option<String>,
-}
-
-fn strip_href_fragment(href: &str) -> &str {
-    href.split('#').next().unwrap_or(href)
-}
-
-fn spine_index_for_href(book: &EpubBook, href: &str) -> Option<usize> {
-    let clean = strip_href_fragment(href);
-    let file_name = clean.rsplit('/').next().unwrap_or(clean);
-    book.spine.iter().position(|s| {
-        let Some(item) = book.manifest.get(&s.idref) else {
-            return false;
-        };
-        let mh = strip_href_fragment(&item.href);
-        mh == clean
-            || mh.ends_with(clean)
-            || clean.ends_with(mh)
-            || mh.rsplit('/').next() == Some(file_name)
-    })
-}
-
-fn looks_like_cover_spine(book: &EpubBook, spine_item: &crate::model::SpineItem) -> bool {
-    let id_lower = spine_item.idref.to_ascii_lowercase();
-    if id_lower.contains("cover") || id_lower.contains("titlepage") || id_lower == "title" {
-        return true;
-    }
-    if let Some(item) = book.manifest.get(&spine_item.idref) {
-        let href_lower = item.href.to_ascii_lowercase();
-        if href_lower.contains("cover") || href_lower.contains("titlepage") {
-            return true;
-        }
-        if item.properties.iter().any(|p| p == "cover-image") {
-            return true;
-        }
-    }
-    false
-}
+pub use reading::{BookSearchHit, ReadingStartInfo, SearchBookOptions};
 
 // ── Core struct ───────────────────────────────────────────────────────────────
+
+/// Optional AES/LCP content decryptor.
+///
+/// Arguments: `(zip_path, ciphertext, encryption_info) → plaintext`.
+/// Return `None` to leave the resource as ciphertext (or skip decryption).
+pub type ContentDecryptFn =
+    Box<dyn FnMut(&str, &[u8], &crate::crypto::EncryptionInfo) -> Option<Vec<u8>> + Send>;
 
 /// A struct that handles unpacking and parsing EPUB files.
 pub struct EpubArchive<P: EpubProvider> {
@@ -97,6 +55,8 @@ pub struct EpubArchive<P: EpubProvider> {
     current_cache_size: usize,
     /// Maximum size of cache in bytes.
     max_cache_size_bytes: usize,
+    /// Optional hook for full-content AES/LCP decryption (not used for font obfuscation).
+    content_decryptor: Option<ContentDecryptFn>,
 }
 
 impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
@@ -109,6 +69,7 @@ impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
             cache_order: VecDeque::new(),
             current_cache_size: 0,
             max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
+            content_decryptor: None,
         })
     }
 }
@@ -124,6 +85,7 @@ impl EpubArchive<DirProvider> {
             cache_order: VecDeque::new(),
             current_cache_size: 0,
             max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
+            content_decryptor: None,
         }
     }
 }
@@ -139,7 +101,64 @@ impl<P: EpubProvider> EpubArchive<P> {
             cache_order: VecDeque::new(),
             current_cache_size: 0,
             max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
+            content_decryptor: None,
         }
+    }
+
+    /// Install a content decryptor for AES/LCP (and other non-font) encrypted resources.
+    ///
+    /// Font obfuscation (IDPF/Adobe) is always handled built-in and does not use this hook.
+    /// When the hook returns `None`, ciphertext bytes are returned unchanged.
+    ///
+    /// Clears the resource cache so subsequent reads re-apply decryption.
+    pub fn set_content_decryptor<F>(&mut self, f: F)
+    where
+        F: FnMut(&str, &[u8], &crate::crypto::EncryptionInfo) -> Option<Vec<u8>> + Send + 'static,
+    {
+        self.content_decryptor = Some(Box::new(f));
+        self.clear_resource_cache();
+    }
+
+    /// Remove any content decryptor and clear the resource cache.
+    pub fn clear_content_decryptor(&mut self) {
+        self.content_decryptor = None;
+        self.clear_resource_cache();
+    }
+
+    fn clear_resource_cache(&mut self) {
+        self.cache.clear();
+        self.cache_order.clear();
+        self.current_cache_size = 0;
+    }
+
+    /// Apply font deobfuscation and optional content decryptor to raw archive bytes.
+    fn process_encrypted_bytes(
+        content_decryptor: &mut Option<ContentDecryptFn>,
+        book: &EpubBook,
+        zip_path: &str,
+        bytes: Vec<u8>,
+    ) -> Vec<u8> {
+        let Some(enc) = book.encryptions.get(zip_path) else {
+            return bytes;
+        };
+        if let Some(font_algo) = enc.font_obfuscation() {
+            let identifier = book.metadata.identifier.as_deref().unwrap_or("");
+            let mut deobfuscated = crate::crypto::DeobfuscatingReader::new(
+                Box::new(std::io::Cursor::new(bytes)),
+                identifier,
+                font_algo,
+            );
+            let mut dec_bytes = Vec::new();
+            let _ = deobfuscated.read_to_end(&mut dec_bytes);
+            return dec_bytes;
+        }
+        // Content encryption (AES/LCP, etc.)
+        if let Some(decryptor) = content_decryptor
+            && let Some(plain) = decryptor(zip_path, &bytes, enc)
+        {
+            return plain;
+        }
+        bytes
     }
     /// Returns all renditions declared in `META-INF/container.xml`.
     ///
@@ -313,19 +332,8 @@ impl<P: EpubProvider> EpubArchive<P> {
             let mut buf_reader = file;
             buf_reader.read_to_end(&mut bytes)?;
 
-            let decrypted = if let Some(enc) = book.encryptions.get(&zip_path) {
-                let identifier = book.metadata.identifier.as_deref().unwrap_or("");
-                let mut deobfuscated = crate::crypto::DeobfuscatingReader::new(
-                    Box::new(std::io::Cursor::new(bytes)),
-                    identifier,
-                    enc.algorithm,
-                );
-                let mut dec_bytes = Vec::new();
-                deobfuscated.read_to_end(&mut dec_bytes)?;
-                dec_bytes
-            } else {
-                bytes
-            };
+            let decrypted =
+                Self::process_encrypted_bytes(&mut self.content_decryptor, book, &zip_path, bytes);
 
             let decrypted_len = decrypted.len();
 
@@ -348,14 +356,22 @@ impl<P: EpubProvider> EpubArchive<P> {
             Ok(Box::new(std::io::Cursor::new(cached.as_slice())))
         } else {
             // 3. Bypass cache for files exceeding the size limit
-            let file = self.provider.read_file(&zip_path)?;
-            if let Some(enc) = book.encryptions.get(&zip_path) {
-                let identifier = book.metadata.identifier.as_deref().unwrap_or("");
-                let deobfuscated =
-                    crate::crypto::DeobfuscatingReader::new(file, identifier, enc.algorithm);
-                Ok(Box::new(deobfuscated))
+            // Large files: stream when unencrypted; materialise when encryption map hits.
+            if book.encryptions.contains_key(&zip_path) {
+                let mut raw = Vec::new();
+                {
+                    let mut r = self.provider.read_file(&zip_path)?;
+                    r.read_to_end(&mut raw)?;
+                }
+                let decrypted = Self::process_encrypted_bytes(
+                    &mut self.content_decryptor,
+                    book,
+                    &zip_path,
+                    raw,
+                );
+                Ok(Box::new(std::io::Cursor::new(decrypted)))
             } else {
-                Ok(file)
+                Ok(self.provider.read_file(&zip_path)?)
             }
         }
     }
@@ -516,151 +532,7 @@ impl<P: EpubProvider> EpubArchive<P> {
         ))
     }
 
-    /// Prepare chapter HTML for embedding in a WebView-style reader.
-    ///
-    /// Optionally injects `data-cfi` and rewrites local images / fonts / CSS to
-    /// `data:` URIs so the document does not need a custom URL scheme.
-    pub fn prepare_chapter(
-        &mut self,
-        book: &EpubBook,
-        id: &str,
-        options: &crate::processor::PrepareChapterOptions,
-    ) -> Result<String, EpubError> {
-        let spine_index = book
-            .spine
-            .iter()
-            .position(|s| s.idref == id)
-            .ok_or_else(|| EpubError::InvalidFormat(format!("ID {} not found in spine", id)))?;
-        let item = book
-            .manifest
-            .get(id)
-            .ok_or_else(|| EpubError::InvalidFormat(format!("manifest id {id} not found")))?;
-        let chapter_path = item.href.clone();
-        let base_cfi = crate::cfi::EpubCfi::generate_spine_base_cfi(spine_index, id);
-        let raw = self.get_resource_by_id(book, id)?;
-        let raw_html = String::from_utf8_lossy(&raw).into_owned();
-
-        // Load resources by EPUB-root-relative path (and fall back to id lookup).
-        let mut load = |path: &str| -> Option<Vec<u8>> {
-            if let Ok(bytes) = self.get_resource_by_href(book, path) {
-                return Some(bytes);
-            }
-            // Try matching a manifest item href suffix.
-            for m in book.manifest.values() {
-                if (m.href == path || m.href.ends_with(path) || path.ends_with(&m.href))
-                    && let Ok(bytes) = self.get_resource_by_id(book, &m.id)
-                {
-                    return Some(bytes);
-                }
-            }
-            None
-        };
-
-        crate::processor::prepare_chapter_html(
-            &raw_html,
-            &chapter_path,
-            Some(&base_cfi),
-            options,
-            &mut load,
-        )
-    }
-
-    /// Search every linear spine chapter for a literal query.
-    ///
-    /// Returns hits with spine index + CFI (best-effort; skips chapters that fail to load).
-    pub fn search_book(
-        &mut self,
-        book: &EpubBook,
-        query: &str,
-        max_per_chapter: usize,
-        max_total: usize,
-    ) -> Result<Vec<BookSearchHit>, EpubError> {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return Ok(Vec::new());
-        }
-        let pattern = regex::Regex::new(&regex::escape(trimmed))
-            .map_err(|e| EpubError::InvalidFormat(format!("invalid search query: {e}")))?;
-
-        let mut hits = Vec::new();
-        for (spine_index, spine_item) in book.spine.iter().enumerate() {
-            if !spine_item.linear {
-                continue;
-            }
-            if hits.len() >= max_total {
-                break;
-            }
-            let id = &spine_item.idref;
-            let chapter_hits = match self.search_chapter(book, id, &pattern) {
-                Ok(h) => h,
-                Err(_) => continue,
-            };
-            for r in chapter_hits.into_iter().take(max_per_chapter) {
-                hits.push(BookSearchHit {
-                    spine_index,
-                    manifest_id: id.clone(),
-                    excerpt: r.excerpt,
-                    cfi: r.cfi,
-                });
-                if hits.len() >= max_total {
-                    break;
-                }
-            }
-        }
-        Ok(hits)
-    }
-
-    /// Preferred first-open spine index (landmarks `bodymatter` / skip cover heuristics).
-    pub fn preferred_reading_start(&mut self, book: &EpubBook) -> ReadingStartInfo {
-        // 1. EPUB 3 landmarks
-        if let Ok(nav) = self.get_navigation(book) {
-            for role in ["bodymatter", "text"] {
-                if let Some(entry) = nav.landmarks.iter().find(|e| {
-                    e.role
-                        .as_ref()
-                        .map(|r| {
-                            r.split_whitespace()
-                                .any(|t| t.trim_start_matches("epub:") == role)
-                        })
-                        .unwrap_or(false)
-                }) && let Some(idx) = spine_index_for_href(book, &entry.href)
-                {
-                    return ReadingStartInfo {
-                        spine_index: idx,
-                        source: format!("landmark:{role}"),
-                        href: Some(entry.href.clone()),
-                    };
-                }
-            }
-        }
-
-        // 2. Skip leading cover-like spine items (id/href/properties heuristics).
-        for (idx, spine_item) in book.spine.iter().enumerate() {
-            if looks_like_cover_spine(book, spine_item) {
-                continue;
-            }
-            let href = book.manifest.get(&spine_item.idref).map(|m| m.href.clone());
-            return ReadingStartInfo {
-                spine_index: idx,
-                source: if idx == 0 {
-                    "spine_zero".into()
-                } else {
-                    "cover_skip".into()
-                },
-                href,
-            };
-        }
-
-        ReadingStartInfo {
-            spine_index: 0,
-            source: "spine_zero".into(),
-            href: book
-                .spine
-                .first()
-                .and_then(|s| book.manifest.get(&s.idref))
-                .map(|m| m.href.clone()),
-        }
-    }
+    // Reading-system APIs (prepare / search / reading-start) live in `reading.rs`.
 
     // ── Media Overlays API ──────────────────────────────────────────
 
@@ -815,6 +687,7 @@ mod tests {
             spine: Vec::new(),
             opf_dir: String::new(),
             toc_id: None,
+            guide: Vec::new(),
             encryptions: HashMap::new(),
         }
     }

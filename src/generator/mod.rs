@@ -1,7 +1,8 @@
 //! EPUB generator module using Builder pattern.
 //!
 //! Layout:
-//! - [`mod`] (this file) — `EpubBuilder` API, ZIP assembly, theme injection
+//! - [`mod`] (this file) — `EpubBuilder` API, validation, theme / nav orchestration
+//! - [`package`] — ZIP assembly (mimetype-first, compression policy)
 //! - [`nav`] — `nav.xhtml` / `toc.ncx` serialization
 //! - [`opf`] — `content.opf` serialization
 use crate::error::EpubError;
@@ -9,9 +10,6 @@ use crate::model::{EpubVersion, Metadata, SpineItem, TocEntry};
 use std::io::{Read, Seek, Write};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
-use zip::CompressionMethod;
-use zip::ZipWriter;
-use zip::write::SimpleFileOptions;
 
 /// Represents the content of a resource, which can be either fully in-memory or a readable stream.
 pub enum ResourceContent {
@@ -24,6 +22,7 @@ use crate::path::epub_relative_path;
 
 mod nav;
 mod opf;
+mod package;
 
 // ── Built-in themes ──────────────────────────────────────────────────────────
 
@@ -581,51 +580,12 @@ impl EpubBuilder {
         self.validate()?;
         self.preprocess_resources()?;
 
-        let mut zip = ZipWriter::new(writer);
-
-        // 1. Write `mimetype` (MUST be first, MUST be uncompressed)
-        let options_stored =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        zip.start_file("mimetype", options_stored)?;
-        zip.write_all(b"application/epub+zip")?;
-
-        // Standard compression for the rest of the files
-        let options_deflated =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-        // 2. Write `META-INF/container.xml`
-        zip.start_file("META-INF/container.xml", options_deflated)?;
-        let container_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-    <rootfiles>
-        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-    </rootfiles>
-</container>"#;
-        zip.write_all(container_xml.as_bytes())?;
-
-        // Generate OPF content
         let opf_content = self.generate_opf(!self.toc.is_empty())?;
-
-        // 3. Write resources
-        for res in self.resources {
-            let zip_path = format!("OEBPS/{}", res.href);
-            zip.start_file(&zip_path, options_deflated)?;
-            match res.content {
-                ResourceContent::Bytes(bytes) => {
-                    zip.write_all(&bytes)?;
-                }
-                ResourceContent::Stream(mut stream) => {
-                    std::io::copy(&mut stream, &mut zip)?;
-                }
-            }
-        }
-
-        // 4. Write `OEBPS/content.opf`
-        zip.start_file("OEBPS/content.opf", options_deflated)?;
-        zip.write_all(&opf_content)?;
-
-        zip.finish()?;
-        Ok(())
+        let resources = self
+            .resources
+            .into_iter()
+            .map(|res| (res.href, res.content));
+        package::write_epub_zip(writer, resources, &opf_content)
     }
 
     /// Preprocess resources: sets up dynamic stylesheet, generates navigation,
