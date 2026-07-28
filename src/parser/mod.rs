@@ -15,6 +15,7 @@ mod navigation;
 mod opf;
 pub mod positions;
 mod reading;
+pub mod resolve;
 mod smil;
 
 #[cfg(any(target_arch = "wasm32", feature = "ffi"))]
@@ -57,6 +58,11 @@ pub struct EpubArchive<P: EpubProvider> {
     max_cache_size_bytes: usize,
     /// Optional hook for full-content AES/LCP decryption (not used for font obfuscation).
     content_decryptor: Option<ContentDecryptFn>,
+    /// Parsed navigation document for the current rendition.
+    ///
+    /// Invalidated by [`EpubArchive::parse_rendition`]; avoids re-parsing
+    /// `nav.xhtml` / NCX on every TOC / landmarks / title lookup.
+    nav_cache: Option<crate::model::NavigationDocument>,
 }
 
 impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
@@ -70,6 +76,7 @@ impl<R: Read + Seek> EpubArchive<ZipProvider<R>> {
             current_cache_size: 0,
             max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
             content_decryptor: None,
+            nav_cache: None,
         })
     }
 }
@@ -86,6 +93,7 @@ impl EpubArchive<DirProvider> {
             current_cache_size: 0,
             max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
             content_decryptor: None,
+            nav_cache: None,
         }
     }
 }
@@ -102,6 +110,7 @@ impl<P: EpubProvider> EpubArchive<P> {
             current_cache_size: 0,
             max_cache_size_bytes: 16 * 1024 * 1024, // 16MB default
             content_decryptor: None,
+            nav_cache: None,
         }
     }
 
@@ -292,6 +301,8 @@ impl<P: EpubProvider> EpubArchive<P> {
     pub fn parse_rendition(&mut self, opf_path: &str) -> Result<EpubBook, EpubError> {
         let mut book = self.parse_opf(opf_path)?;
         book.encryptions = self.parse_encryption().unwrap_or_default();
+        // A new rendition means different nav / manifest hrefs.
+        self.nav_cache = None;
         Ok(book)
     }
 
@@ -308,32 +319,44 @@ impl<P: EpubProvider> EpubArchive<P> {
         } else {
             Self::normalize_path(&book.opf_dir, href)
         };
+        self.read_zip_entry(book, &zip_path)
+    }
 
+    /// Get a readable stream for a package-root-relative ZIP path (no OPF join).
+    ///
+    /// Use this when the caller already holds a canonical package path (e.g.
+    /// from [`EpubArchive::resolve_resource_path`]); manifest hrefs should go
+    /// through [`Self::read_resource_by_href`] instead.
+    pub fn read_zip_entry<'a>(
+        &'a mut self,
+        book: &EpubBook,
+        zip_path: &str,
+    ) -> Result<Box<dyn Read + 'a>, EpubError> {
         // 1. Check if the resource is in the cache (Cache Hit)
-        if self.cache.contains_key(&zip_path) {
+        if self.cache.contains_key(zip_path) {
             // Update LRU access order by moving this key to the back of the queue
-            if let Some(pos) = self.cache_order.iter().position(|k| k == &zip_path) {
+            if let Some(pos) = self.cache_order.iter().position(|k| k == zip_path) {
                 self.cache_order.remove(pos);
             }
-            self.cache_order.push_back(zip_path.clone());
+            self.cache_order.push_back(zip_path.to_string());
 
-            let cached = self.cache.get(&zip_path).unwrap();
+            let cached = self.cache.get(zip_path).unwrap();
             return Ok(Box::new(std::io::Cursor::new(cached.as_slice())));
         }
 
         // 2. Cache Miss: Query the length and check if we should cache it
-        let length = self.provider.entry_length(&zip_path).unwrap_or(0) as usize;
+        let length = self.provider.entry_length(zip_path).unwrap_or(0) as usize;
         let max_cache_size = 2 * 1024 * 1024; // 2MB file size limit for caching
 
         if length <= max_cache_size {
             // Read, decompress, and decrypt/deobfuscate the resource
-            let file = self.provider.read_file(&zip_path)?;
+            let file = self.provider.read_file(zip_path)?;
             let mut bytes = Vec::new();
             let mut buf_reader = file;
             buf_reader.read_to_end(&mut bytes)?;
 
             let decrypted =
-                Self::process_encrypted_bytes(&mut self.content_decryptor, book, &zip_path, bytes);
+                Self::process_encrypted_bytes(&mut self.content_decryptor, book, zip_path, bytes);
 
             let decrypted_len = decrypted.len();
 
@@ -349,29 +372,29 @@ impl<P: EpubProvider> EpubArchive<P> {
 
             // Insert into the cache and update the LRU order
             self.current_cache_size += decrypted_len;
-            self.cache.insert(zip_path.clone(), decrypted);
-            self.cache_order.push_back(zip_path.clone());
+            self.cache.insert(zip_path.to_string(), decrypted);
+            self.cache_order.push_back(zip_path.to_string());
 
-            let cached = self.cache.get(&zip_path).unwrap();
+            let cached = self.cache.get(zip_path).unwrap();
             Ok(Box::new(std::io::Cursor::new(cached.as_slice())))
         } else {
             // 3. Bypass cache for files exceeding the size limit
             // Large files: stream when unencrypted; materialise when encryption map hits.
-            if book.encryptions.contains_key(&zip_path) {
+            if book.encryptions.contains_key(zip_path) {
                 let mut raw = Vec::new();
                 {
-                    let mut r = self.provider.read_file(&zip_path)?;
+                    let mut r = self.provider.read_file(zip_path)?;
                     r.read_to_end(&mut raw)?;
                 }
                 let decrypted = Self::process_encrypted_bytes(
                     &mut self.content_decryptor,
                     book,
-                    &zip_path,
+                    zip_path,
                     raw,
                 );
                 Ok(Box::new(std::io::Cursor::new(decrypted)))
             } else {
-                Ok(self.provider.read_file(&zip_path)?)
+                Ok(self.provider.read_file(zip_path)?)
             }
         }
     }
@@ -398,6 +421,22 @@ impl<P: EpubProvider> EpubArchive<P> {
         href: &str,
     ) -> Result<Vec<u8>, EpubError> {
         let mut file = self.read_resource_by_href(book, href)?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Read the raw bytes of a resource by its package-root-relative ZIP path.
+    ///
+    /// Goes through the same LRU cache and decryption path as the href-based
+    /// readers; use it when the path was canonicalized up front (e.g. via
+    /// [`EpubArchive::resolve_resource_path`]).
+    pub fn get_resource_by_zip_path(
+        &mut self,
+        book: &EpubBook,
+        zip_path: &str,
+    ) -> Result<Vec<u8>, EpubError> {
+        let mut file = self.read_zip_entry(book, zip_path)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
         Ok(buf)

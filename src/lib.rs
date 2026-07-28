@@ -2,6 +2,7 @@ pub mod cfi;
 pub mod crypto;
 pub mod error;
 pub mod generator;
+pub mod mime;
 pub mod model;
 pub mod parser;
 pub mod path;

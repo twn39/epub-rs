@@ -785,4 +785,114 @@ char *epub_search_book_with_options(struct epub_t *handle,
  */
 char *epub_preferred_reading_start(struct epub_t *handle);
 
+/**
+ * Normalize a resource reference against a base directory (pure, no handle).
+ *
+ * Strips query/fragment, percent-decodes, and resolves `.` / `..` segments.
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * # Safety
+ * Both pointers must be null or valid null-terminated C strings.
+ */
+char *epub_normalize_path(const char *base_dir, const char *rel_path);
+
+/**
+ * Resolve `rel_href` against the chapter document it appears in (pure, no handle).
+ *
+ * Semantics:
+ * - external URLs (`http:`, `data:`, …) and fragment-only refs pass through unchanged
+ * - empty refs resolve to the chapter path itself
+ * - root-absolute (`/x/y`) resolves package-root-relative
+ * - otherwise the ref is joined against the chapter's parent directory
+ *
+ * Query strings and fragments are stripped (resource references cannot point
+ * into fragments). The caller must free the result with `epub_free_string()`.
+ *
+ * # Safety
+ * Both pointers must be null or valid null-terminated C strings.
+ */
+char *epub_resolve_chapter_href(const char *chapter_href, const char *rel_href);
+
+/**
+ * Extension-based media type guess (pure, no handle).
+ *
+ * Falls back to `application/octet-stream` for unknown extensions. Prefer
+ * [`epub_resource_media_type`] when a handle is available (manifest wins).
+ * The caller must free the result with `epub_free_string()`.
+ *
+ * # Safety
+ * `path` must be null or a valid null-terminated C string.
+ */
+char *epub_mime_for_path(const char *path);
+
+/**
+ * Resolve a resource reference to the canonical package path that exists in
+ * the archive (chapter-relative → OPF-relative → root-relative → manifest
+ * fuzzy). `chapter_href` may be NULL or empty.
+ *
+ * Returns NULL when no candidate exists (check `epub_last_error()` — it
+ * stays empty for a plain miss). The caller must free a non-NULL result with
+ * `epub_free_string()`.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer from `epub_open*`; string
+ * arguments must be null or valid null-terminated C strings.
+ */
+char *epub_resolve_resource_path(struct epub_t *handle,
+                                 const char *chapter_href,
+                                 const char *rel_path);
+
+/**
+ * Media type for a manifest or package path (manifest first, extension table
+ * fallback). Never returns NULL for a valid handle.
+ *
+ * The caller must free the returned string with `epub_free_string()`.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer from `epub_open*`; `path` must
+ * be a valid null-terminated C string.
+ */
+char *epub_resource_media_type(struct epub_t *handle, const char *path);
+
+/**
+ * Resolve + load a resource in one call.
+ *
+ * On success the return value points to `*out_len` bytes (free with
+ * `epub_free_bytes(ptr, *out_len)`) and `*out_media_type` is a media-type
+ * string (free with `epub_free_string()`). Returns NULL when the reference
+ * cannot be resolved or read.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer from `epub_open*`; `out_len` and
+ * `out_media_type` must be valid non-null writable pointers; string arguments
+ * must be null or valid null-terminated C strings.
+ */
+unsigned char *epub_get_resolved_resource(struct epub_t *handle,
+                                          const char *chapter_href,
+                                          const char *rel_path,
+                                          size_t *out_len,
+                                          char **out_media_type);
+
+/**
+ * TOC title for a nav href (verbatim → normalized → suffix matching).
+ *
+ * Returns NULL when no entry matches. The caller must free a non-NULL result
+ * with `epub_free_string()`.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer from `epub_open*`; `href` must
+ * be a valid null-terminated C string.
+ */
+char *epub_toc_title_for_href(struct epub_t *handle, const char *href);
+
+/**
+ * Absolute 0-based spine index for a nav/TOC href, or `-1` when no spine
+ * item matches.
+ *
+ * # Safety
+ * `handle` must be a valid non-null pointer from `epub_open*`; `href` must
+ * be a valid null-terminated C string.
+ */
+ptrdiff_t epub_spine_index_for_href(struct epub_t *handle, const char *href);
+
 #endif  /* EPUB_RS_H */

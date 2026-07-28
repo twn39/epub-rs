@@ -73,7 +73,7 @@ fn strip_href_fragment(href: &str) -> &str {
     href.split('#').next().unwrap_or(href)
 }
 
-fn spine_index_for_href(book: &EpubBook, href: &str) -> Option<usize> {
+pub(crate) fn spine_index_for_href(book: &EpubBook, href: &str) -> Option<usize> {
     let clean = strip_href_fragment(href);
     let file_name = clean.rsplit('/').next().unwrap_or(clean);
     book.spine.iter().position(|s| {

@@ -27,6 +27,7 @@ fn main() {
         println!("cargo:rerun-if-changed=src/ffi/common.rs");
         println!("cargo:rerun-if-changed=src/ffi/crypto.rs");
         println!("cargo:rerun-if-changed=src/ffi/generator.rs");
+        println!("cargo:rerun-if-changed=src/ffi/path.rs");
         println!("cargo:rerun-if-changed=cbindgen.toml");
     }
 

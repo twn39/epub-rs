@@ -9,6 +9,7 @@ pub mod common;
 pub mod crypto;
 pub mod generator;
 pub mod parser;
+pub mod path;
 
 #[cfg(test)]
 mod tests;

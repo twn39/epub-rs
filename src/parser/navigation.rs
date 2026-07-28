@@ -29,7 +29,21 @@ impl<P: EpubProvider> EpubArchive<P> {
     ///
     /// Calling both `get_toc()` and `get_page_list()` separately would read and parse the file
     /// twice; use this method when you need more than one navigation list.
+    ///
+    /// The result is memoized per rendition (cleared by
+    /// [`EpubArchive::parse_rendition`]), so repeated TOC / landmarks / title
+    /// lookups do not re-parse the navigation file.
     pub fn get_navigation(&mut self, book: &EpubBook) -> Result<NavigationDocument, EpubError> {
+        if let Some(cached) = &self.nav_cache {
+            return Ok(cached.clone());
+        }
+        let nav = self.load_navigation(book)?;
+        self.nav_cache = Some(nav.clone());
+        Ok(nav)
+    }
+
+    /// Read + parse the navigation document (no cache; see [`Self::get_navigation`]).
+    fn load_navigation(&mut self, book: &EpubBook) -> Result<NavigationDocument, EpubError> {
         // nav.xhtml supersedes the NCX in EPUB 3: it expresses all three navigation
         // types (toc, page-list, landmarks) in a single HTML file.  Using it first
         // avoids loading the NCX at all for the vast majority of modern EPUBs.
