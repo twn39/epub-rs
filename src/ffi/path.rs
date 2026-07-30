@@ -15,7 +15,10 @@ use crate::ffi_boundary;
 ///
 /// # Safety
 /// `ptr` must be null or a valid null-terminated C string.
-unsafe fn read_required<'a>(ptr: *const c_char, name: &str) -> Result<std::borrow::Cow<'a, str>, crate::ffi::common::FfiError> {
+unsafe fn read_required<'a>(
+    ptr: *const c_char,
+    name: &str,
+) -> Result<std::borrow::Cow<'a, str>, crate::ffi::common::FfiError> {
     if ptr.is_null() {
         return Err(format!("{name} is null").into());
     }
@@ -55,7 +58,10 @@ pub unsafe extern "C" fn epub_normalize_path(
     ffi_boundary!(ptr::null_mut(), {
         let base = unsafe { read_optional(base_dir) }.unwrap_or_default();
         let rel = unsafe { read_required(rel_path, "epub_normalize_path: rel_path")? };
-        Ok(into_c_string(crate::path::normalize_path(&base, rel.as_ref())))
+        Ok(into_c_string(crate::path::normalize_path(
+            &base,
+            rel.as_ref(),
+        )))
     })
 }
 
@@ -119,7 +125,9 @@ fn resolve_chapter_href(chapter_href: &str, rel_href: &str) -> String {
 pub unsafe extern "C" fn epub_mime_for_path(path: *const c_char) -> *mut c_char {
     ffi_boundary!(ptr::null_mut(), {
         let p = unsafe { read_required(path, "epub_mime_for_path: path")? };
-        Ok(into_c_string(crate::mime::mime_for_path(p.as_ref()).to_string()))
+        Ok(into_c_string(
+            crate::mime::mime_for_path(p.as_ref()).to_string(),
+        ))
     })
 }
 
@@ -146,7 +154,10 @@ pub unsafe extern "C" fn epub_resolve_resource_path(
         let chapter = unsafe { read_optional(chapter_href) };
         h.ensure_parsed()?;
         let book = h.book.as_book().expect("book ready after ensure_parsed");
-        match h.archive.resolve_resource_path(book, chapter.as_deref(), rel.as_ref()) {
+        match h
+            .archive
+            .resolve_resource_path(book, chapter.as_deref(), rel.as_ref())
+        {
             Some(resolved) => Ok(into_c_string(resolved.zip_path)),
             None => Ok(ptr::null_mut()),
         }
@@ -171,7 +182,9 @@ pub unsafe extern "C" fn epub_resource_media_type(
         let p = unsafe { read_required(path, "epub_resource_media_type: path")? };
         h.ensure_parsed()?;
         let book = h.book.as_book().expect("book ready after ensure_parsed");
-        Ok(into_c_string(h.archive.resource_media_type(book, p.as_ref())))
+        Ok(into_c_string(
+            h.archive.resource_media_type(book, p.as_ref()),
+        ))
     })
 }
 
@@ -197,14 +210,17 @@ pub unsafe extern "C" fn epub_get_resolved_resource(
     ffi_boundary!(ptr::null_mut(), {
         let h = unsafe { handle.as_mut() }.ok_or("epub_get_resolved_resource: null handle")?;
         if out_len.is_null() || out_media_type.is_null() {
-            return Err("epub_get_resolved_resource: out_len and out_media_type must be non-null".into());
+            return Err(
+                "epub_get_resolved_resource: out_len and out_media_type must be non-null".into(),
+            );
         }
         let rel = unsafe { read_required(rel_path, "epub_get_resolved_resource: rel_path")? };
         let chapter = unsafe { read_optional(chapter_href) };
         h.ensure_parsed()?;
         let book = h.book.as_book().expect("book ready after ensure_parsed");
         let (bytes, media_type) =
-            h.archive.get_resolved_resource(book, chapter.as_deref(), rel.as_ref())?;
+            h.archive
+                .get_resolved_resource(book, chapter.as_deref(), rel.as_ref())?;
         let media_type_ptr = std::ffi::CString::new(media_type)
             .map_err(|_| "Internal: media_type contained a null byte")?
             .into_raw();
@@ -258,10 +274,12 @@ pub unsafe extern "C" fn epub_spine_index_for_href(
         let href = unsafe { read_required(href, "epub_spine_index_for_href: href")? };
         h.ensure_parsed()?;
         let book = h.book.as_book().expect("book ready after ensure_parsed");
-        Ok(match h.archive.spine_index_for_toc_href(book, href.as_ref()) {
-            Some(idx) => idx as isize,
-            None => -1,
-        })
+        Ok(
+            match h.archive.spine_index_for_toc_href(book, href.as_ref()) {
+                Some(idx) => idx as isize,
+                None => -1,
+            },
+        )
     })
 }
 
@@ -296,8 +314,14 @@ mod tests {
 
     #[test]
     fn chapter_href_root_absolute_and_empty() {
-        assert_eq!(resolve_chapter_href("OEBPS/ch1.xhtml", "/OEBPS/a.png"), "OEBPS/a.png");
-        assert_eq!(resolve_chapter_href("OEBPS/ch1.xhtml", ""), "OEBPS/ch1.xhtml");
+        assert_eq!(
+            resolve_chapter_href("OEBPS/ch1.xhtml", "/OEBPS/a.png"),
+            "OEBPS/a.png"
+        );
+        assert_eq!(
+            resolve_chapter_href("OEBPS/ch1.xhtml", ""),
+            "OEBPS/ch1.xhtml"
+        );
     }
 
     #[test]

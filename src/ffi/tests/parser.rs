@@ -160,9 +160,11 @@ fn test_ffi_prepare_search_reading_start() {
     unsafe { epub_free_string(prep) };
 
     let prep_stats = unsafe { epub_prepare_chapter_with_stats(handle, id.as_ptr(), ptr::null()) };
-    assert!(!prep_stats.is_null(), "prepare_chapter_with_stats null: {:?}", unsafe {
-        std::ffi::CStr::from_ptr(epub_last_error())
-    });
+    assert!(
+        !prep_stats.is_null(),
+        "prepare_chapter_with_stats null: {:?}",
+        unsafe { std::ffi::CStr::from_ptr(epub_last_error()) }
+    );
     let stats_json = unsafe { std::ffi::CStr::from_ptr(prep_stats) }.to_string_lossy();
     assert!(
         stats_json.contains("\"html\"") && stats_json.contains("\"stats\""),

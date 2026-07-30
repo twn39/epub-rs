@@ -76,7 +76,11 @@ fn hrefs_match(book: &EpubBook, a: &str, b: &str) -> bool {
 impl<P: EpubProvider> EpubArchive<P> {
     /// Manifest media type for a package path, preferring exact matches.
     fn manifest_media_type(book: &EpubBook, path: &str) -> Option<String> {
-        if let Some(item) = book.manifest.values().find(|m| hrefs_equal(book, &m.href, path)) {
+        if let Some(item) = book
+            .manifest
+            .values()
+            .find(|m| hrefs_equal(book, &m.href, path))
+        {
             return Some(item.media_type.clone());
         }
         book.manifest
@@ -134,7 +138,11 @@ impl<P: EpubProvider> EpubArchive<P> {
             // 1. Chapter-relative (HTML href semantics: relative to the
             //    referencing document's own directory).
             if let Some(ch) = chapter_href {
-                let ch_clean = ch.split(['?', '#']).next().unwrap_or(ch).trim_start_matches('/');
+                let ch_clean = ch
+                    .split(['?', '#'])
+                    .next()
+                    .unwrap_or(ch)
+                    .trim_start_matches('/');
                 let ch_pkg = if !opf_dir.is_empty() && !ch_clean.starts_with(&format!("{opf_dir}/"))
                 {
                     join_epub_path(opf_dir, ch_clean)
@@ -224,7 +232,12 @@ impl<P: EpubProvider> EpubArchive<P> {
         None
     }
 
-    fn find_toc_title(book: &EpubBook, entries: &[TocEntry], href: &str, fuzzy: bool) -> Option<String> {
+    fn find_toc_title(
+        book: &EpubBook,
+        entries: &[TocEntry],
+        href: &str,
+        fuzzy: bool,
+    ) -> Option<String> {
         for entry in entries {
             let matched = if fuzzy {
                 hrefs_match(book, &entry.href, href)
@@ -266,18 +279,20 @@ mod tests {
             .compression_method(zip::CompressionMethod::Stored);
 
         writer.start_file("OEBPS/Text/ch1.xhtml", opts).unwrap();
-        writer.write_all(b"<html><body><p>one</p></body></html>").unwrap();
+        writer
+            .write_all(b"<html><body><p>one</p></body></html>")
+            .unwrap();
         writer.start_file("OEBPS/Text/ch2.xhtml", opts).unwrap();
-        writer.write_all(b"<html><body><p>two</p></body></html>").unwrap();
+        writer
+            .write_all(b"<html><body><p>two</p></body></html>")
+            .unwrap();
         writer.start_file("OEBPS/Images/cover.jpg", opts).unwrap();
         writer.write_all(b"fake-jpeg").unwrap();
         writer.start_file("OEBPS/Images/my pic.png", opts).unwrap();
         writer.write_all(b"fake-png").unwrap();
         writer.start_file("OEBPS/Styles/main.css", opts).unwrap();
         writer.write_all(b"body {}").unwrap();
-        writer
-            .start_file("OEBPS/nav.xhtml", opts)
-            .unwrap();
+        writer.start_file("OEBPS/nav.xhtml", opts).unwrap();
         writer
             .write_all(
                 br#"<html xmlns:epub="http://www.idpf.org/2007/ops"><body>
@@ -367,7 +382,11 @@ mod tests {
         let mut archive = mock_archive();
         let book = mock_book();
         let r = archive
-            .resolve_resource_path(&book, Some("Text/ch1.xhtml"), "../Images/my%20pic.png?v=2#frag")
+            .resolve_resource_path(
+                &book,
+                Some("Text/ch1.xhtml"),
+                "../Images/my%20pic.png?v=2#frag",
+            )
             .unwrap();
         assert_eq!(r.zip_path, "OEBPS/Images/my pic.png");
         assert_eq!(r.media_type, "image/png");
@@ -394,7 +413,11 @@ mod tests {
                 .resolve_resource_path(&book, None, "https://example.com/a.png")
                 .is_none()
         );
-        assert!(archive.resolve_resource_path(&book, None, "nope/none.png").is_none());
+        assert!(
+            archive
+                .resolve_resource_path(&book, None, "nope/none.png")
+                .is_none()
+        );
     }
 
     #[test]
@@ -414,7 +437,10 @@ mod tests {
     fn media_type_prefers_manifest() {
         let archive = mock_archive();
         let book = mock_book();
-        assert_eq!(archive.resource_media_type(&book, "Images/cover.jpg"), "image/jpeg");
+        assert_eq!(
+            archive.resource_media_type(&book, "Images/cover.jpg"),
+            "image/jpeg"
+        );
         assert_eq!(
             archive.resource_media_type(&book, "OEBPS/Images/cover.jpg"),
             "image/jpeg"
@@ -424,7 +450,10 @@ mod tests {
             archive.resource_media_type(&book, "anything/unknown.xyz"),
             "application/octet-stream"
         );
-        assert_eq!(archive.resource_media_type(&book, "a/b/font.woff2"), "font/woff2");
+        assert_eq!(
+            archive.resource_media_type(&book, "a/b/font.woff2"),
+            "font/woff2"
+        );
     }
 
     // ── toc_title_for_href ───────────────────────────────────────────────────
@@ -436,7 +465,9 @@ mod tests {
         // Manifest href form (OPF-relative) must match the engine's
         // package-root-relative TOC href.
         assert_eq!(
-            archive.toc_title_for_href(&book, "Text/ch1.xhtml").as_deref(),
+            archive
+                .toc_title_for_href(&book, "Text/ch1.xhtml")
+                .as_deref(),
             Some("Chapter 1")
         );
     }
@@ -457,7 +488,11 @@ mod tests {
     fn toc_title_none_for_unknown_href() {
         let mut archive = mock_archive();
         let book = mock_book();
-        assert!(archive.toc_title_for_href(&book, "Nope/none.xhtml").is_none());
+        assert!(
+            archive
+                .toc_title_for_href(&book, "Nope/none.xhtml")
+                .is_none()
+        );
     }
 
     // ── spine_index_for_toc_href ─────────────────────────────────────────────
@@ -466,8 +501,14 @@ mod tests {
     fn spine_index_matches_nav_href() {
         let archive = mock_archive();
         let book = mock_book();
-        assert_eq!(archive.spine_index_for_toc_href(&book, "OEBPS/Text/ch2.xhtml"), Some(1));
-        assert_eq!(archive.spine_index_for_toc_href(&book, "Text/ch1.xhtml"), Some(0));
+        assert_eq!(
+            archive.spine_index_for_toc_href(&book, "OEBPS/Text/ch2.xhtml"),
+            Some(1)
+        );
+        assert_eq!(
+            archive.spine_index_for_toc_href(&book, "Text/ch1.xhtml"),
+            Some(0)
+        );
         assert_eq!(archive.spine_index_for_toc_href(&book, "none.xhtml"), None);
     }
 }

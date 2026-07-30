@@ -308,8 +308,7 @@ where
 /// still fall back to host packaging if needed.
 fn promote_data_stylesheet_links(html: &str) -> String {
     let link_re = regex::Regex::new(r#"(?is)<link\b[^>]*>"#).expect("valid regex");
-    let href_re =
-        regex::Regex::new(r#"(?i)\bhref\s*=\s*["']([^"']+)["']"#).expect("valid regex");
+    let href_re = regex::Regex::new(r#"(?i)\bhref\s*=\s*["']([^"']+)["']"#).expect("valid regex");
 
     link_re
         .replace_all(html, |caps: &regex::Captures| {
@@ -333,7 +332,9 @@ fn promote_data_stylesheet_links(html: &str) -> String {
                 return String::new();
             }
             // Escape `</style>` sequences that could break out of the injected block.
-            let safe = css.replace("</style", "<\\/style").replace("</STYLE", "<\\/STYLE");
+            let safe = css
+                .replace("</style", "<\\/style")
+                .replace("</STYLE", "<\\/STYLE");
             format!("<style type=\"text/css\">\n{safe}\n</style>")
         })
         .into_owned()

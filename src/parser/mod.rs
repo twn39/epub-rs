@@ -386,12 +386,8 @@ impl<P: EpubProvider> EpubArchive<P> {
                     let mut r = self.provider.read_file(zip_path)?;
                     r.read_to_end(&mut raw)?;
                 }
-                let decrypted = Self::process_encrypted_bytes(
-                    &mut self.content_decryptor,
-                    book,
-                    zip_path,
-                    raw,
-                );
+                let decrypted =
+                    Self::process_encrypted_bytes(&mut self.content_decryptor, book, zip_path, raw);
                 Ok(Box::new(std::io::Cursor::new(decrypted)))
             } else {
                 Ok(self.provider.read_file(zip_path)?)
