@@ -533,13 +533,22 @@ mod tests {
 
     #[test]
     fn test_a11y_profile_from_opf_value_url_aliases() {
-        let p_a = A11yProfile::from_opf_value("http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-a").unwrap();
+        let p_a = A11yProfile::from_opf_value(
+            "http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-a",
+        )
+        .unwrap();
         assert_eq!(p_a.0, A11yProfile::A10_WCAG_20_A);
 
-        let p_aa = A11yProfile::from_opf_value("https://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aa").unwrap();
+        let p_aa = A11yProfile::from_opf_value(
+            "https://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aa",
+        )
+        .unwrap();
         assert_eq!(p_aa.0, A11yProfile::A10_WCAG_20_AA);
 
-        let p_aaa = A11yProfile::from_opf_value("http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aaa").unwrap();
+        let p_aaa = A11yProfile::from_opf_value(
+            "http://www.idpf.org/epub/a11y/accessibility-20170105.html#wcag-aaa",
+        )
+        .unwrap();
         assert_eq!(p_aaa.0, A11yProfile::A10_WCAG_20_AAA);
 
         assert!(A11yProfile::from_opf_value("http://invalid.url").is_none());
@@ -558,9 +567,18 @@ mod tests {
 
     #[test]
     fn test_a11y_profile_sorting_ranks() {
-        let p_a = A11yProfile::from_opf_value("http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-a").unwrap();
-        let p_aa = A11yProfile::from_opf_value("http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-aa").unwrap();
-        let p_aaa = A11yProfile::from_opf_value("http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-aaa").unwrap();
+        let p_a = A11yProfile::from_opf_value(
+            "http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-a",
+        )
+        .unwrap();
+        let p_aa = A11yProfile::from_opf_value(
+            "http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-aa",
+        )
+        .unwrap();
+        let p_aaa = A11yProfile::from_opf_value(
+            "http://idpf.org/epub/a11y/accessibility-20170105.html#wcag-aaa",
+        )
+        .unwrap();
 
         assert!(p_a < p_aa);
         assert!(p_aa < p_aaa);
@@ -578,7 +596,10 @@ mod tests {
 
     #[test]
     fn test_a11y_enum_from_str_and_serde() {
-        assert_eq!(A11yAccessMode::from_str("auditory"), A11yAccessMode::Auditory);
+        assert_eq!(
+            A11yAccessMode::from_str("auditory"),
+            A11yAccessMode::Auditory
+        );
         assert_eq!(A11yAccessMode::from_str("visual"), A11yAccessMode::Visual);
         assert_eq!(
             A11yAccessMode::from_str("customMode"),
@@ -590,19 +611,28 @@ mod tests {
         let deserialized_mode: A11yAccessMode = serde_json::from_str("\"chartOnVisual\"").unwrap();
         assert_eq!(deserialized_mode, A11yAccessMode::ChartOnVisual);
 
-        assert_eq!(A11yPrimaryAccessMode::from_str("tactile"), A11yPrimaryAccessMode::Tactile);
+        assert_eq!(
+            A11yPrimaryAccessMode::from_str("tactile"),
+            A11yPrimaryAccessMode::Tactile
+        );
         assert_eq!(
             A11yPrimaryAccessMode::from_str("customPrimary"),
             A11yPrimaryAccessMode::Other(String::from("customPrimary"))
         );
 
-        assert_eq!(A11yFeature::from_str("tableOfContents"), A11yFeature::TableOfContents);
+        assert_eq!(
+            A11yFeature::from_str("tableOfContents"),
+            A11yFeature::TableOfContents
+        );
         assert_eq!(
             A11yFeature::from_str("customFeature"),
             A11yFeature::Other(String::from("customFeature"))
         );
 
-        assert_eq!(A11yHazard::from_str("noFlashingHazard"), A11yHazard::NoFlashingHazard);
+        assert_eq!(
+            A11yHazard::from_str("noFlashingHazard"),
+            A11yHazard::NoFlashingHazard
+        );
         assert_eq!(
             A11yHazard::from_str("customHazard"),
             A11yHazard::Other(String::from("customHazard"))
@@ -623,12 +653,14 @@ mod tests {
         let empty_a11y = Accessibility::default();
         assert!(empty_a11y.is_empty());
 
-        let mut populated_a11y = Accessibility::default();
-        populated_a11y.summary = Some(String::from("Accessible book"));
+        let populated_a11y = Accessibility {
+            summary: Some(String::from("Accessible book")),
+            ..Default::default()
+        };
+
         assert!(!populated_a11y.is_empty());
 
         let cert = A11yCertification::default();
         assert!(cert.is_empty());
     }
 }
-

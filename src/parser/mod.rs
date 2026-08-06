@@ -890,7 +890,7 @@ mod tests {
     fn test_parse_best_for_scoring() {
         use crate::model::RenditionInfo;
 
-        let renditions = vec![
+        let renditions = [
             RenditionInfo {
                 opf_path: "default.opf".to_string(),
                 layout: Some("pre-paginated".to_string()),
@@ -920,45 +920,53 @@ mod tests {
         // 1. Layout match (reflowable) should pick text.opf (weight 2 for layout match + 0 for language fr != en = score 2)
         let layout_pref = "reflowable";
         let lang_pref = "fr";
-        let best1 = renditions.iter().max_by_key(|r| {
-            let mut score = 0;
-            if r.layout.as_deref() == Some(layout_pref) {
-                score += 2;
-            }
-            if r.language.as_deref() == Some(lang_pref) {
-                score += 1;
-            }
-            score
-        }).unwrap();
+        let best1 = renditions
+            .iter()
+            .max_by_key(|r| {
+                let mut score = 0;
+                if r.layout.as_deref() == Some(layout_pref) {
+                    score += 2;
+                }
+                if r.language.as_deref() == Some(lang_pref) {
+                    score += 1;
+                }
+                score
+            })
+            .unwrap();
         assert_eq!(best1.opf_path, "text.opf");
 
         // 2. Exact match (pre-paginated + en) should pick comic.opf (score 3)
         let layout_pref2 = "pre-paginated";
         let lang_pref2 = "en";
-        let best2 = renditions.iter().max_by_key(|r| {
-            let mut score = 0;
-            if r.layout.as_deref() == Some(layout_pref2) {
-                score += 2;
-            }
-            if r.language.as_deref() == Some(lang_pref2) {
-                score += 1;
-            }
-            score
-        }).unwrap();
+        let best2 = renditions
+            .iter()
+            .max_by_key(|r| {
+                let mut score = 0;
+                if r.layout.as_deref() == Some(layout_pref2) {
+                    score += 2;
+                }
+                if r.language.as_deref() == Some(lang_pref2) {
+                    score += 1;
+                }
+                score
+            })
+            .unwrap();
         assert_eq!(best2.opf_path, "comic.opf");
     }
 
     #[test]
     fn test_get_resource_by_id_missing_item() {
-        let provider = MockProvider { files: HashMap::new() };
+        let provider = MockProvider {
+            files: HashMap::new(),
+        };
         let mut archive = EpubArchive::new_with_provider(provider);
         let book = make_test_book();
-        let err = archive.get_resource_by_id(&book, "nonexistent_id").unwrap_err();
+        let err = archive
+            .get_resource_by_id(&book, "nonexistent_id")
+            .unwrap_err();
         match err {
             EpubError::InvalidFormat(msg) => assert!(msg.contains("nonexistent_id")),
             other => panic!("Expected InvalidFormat, got {other:?}"),
         }
     }
-
 }
-

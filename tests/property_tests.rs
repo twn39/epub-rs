@@ -251,4 +251,3 @@ proptest! {
         prop_assert_eq!(book.metadata.title, Some(title));
     }
 }
-

@@ -229,12 +229,12 @@ fn test_ffi_renditions_and_navigation() {
 
 #[test]
 fn test_ffi_resources_cfi_and_semantic_content() {
+    use crate::ffi::common::epub_free_bytes;
     use crate::ffi::parser::{
         epub_cfi_from_location, epub_get_chapter_with_cfi, epub_get_resource_by_id,
         epub_get_semantic_content, epub_has_media_overlays, epub_location_from_cfi,
         epub_positions_by_reading_order, epub_search_chapter,
     };
-    use crate::ffi::common::epub_free_bytes;
 
     let bytes = make_epub_bytes();
     let handle = unsafe { epub_open(bytes.as_ptr(), bytes.len()) };
@@ -279,10 +279,8 @@ fn test_ffi_resources_cfi_and_semantic_content() {
 
     unsafe { epub_free_string(pos_ptr) };
 
-
     let has_mo = unsafe { epub_has_media_overlays(handle) };
     assert_eq!(has_mo, 0);
 
     unsafe { epub_free(handle) };
 }
-

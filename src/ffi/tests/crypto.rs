@@ -4,7 +4,8 @@ use std::ffi::CString;
 
 #[test]
 fn test_epub_decrypt_font_ffi_idpf() {
-    let dummy_font_data = vec![0u8; 64];
+    let dummy_font_data = [0u8; 64];
+
     let identifier = CString::new("urn:uuid:12345678-1234-1234-1234-123456789abc").unwrap();
     let mut out_len: usize = 0;
 
@@ -26,7 +27,8 @@ fn test_epub_decrypt_font_ffi_idpf() {
 
 #[test]
 fn test_epub_decrypt_font_ffi_adobe() {
-    let dummy_font_data = vec![0u8; 64];
+    let dummy_font_data = [0u8; 64];
+
     let identifier = CString::new("urn:uuid:12345678-1234-1234-1234-123456789abc").unwrap();
     let mut out_len: usize = 0;
 
@@ -48,7 +50,8 @@ fn test_epub_decrypt_font_ffi_adobe() {
 
 #[test]
 fn test_epub_decrypt_font_ffi_null_guards() {
-    let dummy_font_data = vec![0u8; 64];
+    let dummy_font_data = [0u8; 64];
+
     let identifier = CString::new("urn:uuid:12345678").unwrap();
     let mut out_len: usize = 0;
 

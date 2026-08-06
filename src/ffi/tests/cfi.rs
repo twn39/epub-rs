@@ -23,7 +23,10 @@ fn test_epub_resolve_cfi_null_pointer() {
     let result = unsafe { epub_resolve_cfi(std::ptr::null()) };
     assert!(result.is_null());
     let err = unsafe { std::ffi::CStr::from_ptr(epub_last_error()) }.to_string_lossy();
-    assert!(err.contains("null"), "expected null error message, got: {err}");
+    assert!(
+        err.contains("null"),
+        "expected null error message, got: {err}"
+    );
 }
 
 #[test]
@@ -54,12 +57,13 @@ fn test_epub_generate_cfi_range_ffi() {
     assert!(!res.is_null());
 
     let range_str = unsafe { std::ffi::CStr::from_ptr(res) }.to_string_lossy();
-    assert!(range_str.contains("epubcfi(/6/4!/4/2,:10,:50)"), "unexpected range: {range_str}");
-
+    assert!(
+        range_str.contains("epubcfi(/6/4!/4/2,:10,:50)"),
+        "unexpected range: {range_str}"
+    );
 
     unsafe { epub_free_string(res) };
 
     let null_res = unsafe { epub_generate_cfi_range(std::ptr::null(), end.as_ptr()) };
     assert!(null_res.is_null());
 }
-

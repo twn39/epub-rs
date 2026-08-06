@@ -161,4 +161,3 @@ fn test_generator_null_pointer_guards() {
 
     unsafe { epub_generator_free(handle) };
 }
-

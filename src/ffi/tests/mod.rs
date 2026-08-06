@@ -4,4 +4,3 @@ mod crypto;
 mod generator;
 mod parser;
 mod path;
-

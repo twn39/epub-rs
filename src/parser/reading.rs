@@ -544,9 +544,9 @@ mod tests {
 
     #[test]
     fn test_search_book_no_hits_and_caps() {
-        use std::io::Cursor;
         use crate::generator::EpubBuilder;
         use crate::model::Metadata;
+        use std::io::Cursor;
 
         let metadata = Metadata {
             title: Some("Search Limits".into()),
@@ -557,16 +557,20 @@ mod tests {
         let mut buf = Cursor::new(Vec::new());
         EpubBuilder::new()
             .metadata(metadata)
-            .add_chapter("ch1", "ch1.xhtml", b"<html><body><p>Hello World</p></body></html>".to_vec())
+            .add_chapter(
+                "ch1",
+                "ch1.xhtml",
+                b"<html><body><p>Hello World</p></body></html>".to_vec(),
+            )
             .generate(&mut buf)
             .unwrap();
 
         let mut archive = EpubArchive::new(Cursor::new(buf.into_inner())).unwrap();
         let book = archive.parse().unwrap();
 
-        let hits = archive.search_book(&book, "NonexistentTerm", 5, 10).unwrap();
+        let hits = archive
+            .search_book(&book, "NonexistentTerm", 5, 10)
+            .unwrap();
         assert!(hits.is_empty(), "expected no hits for nonexistent term");
     }
 }
-
-

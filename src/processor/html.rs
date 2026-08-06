@@ -802,7 +802,9 @@ mod tests {
     fn test_rewrite_resources_resolver_none_keeps_original() {
         let html = r#"<html><body><img src="missing.jpg" /></body></html>"#;
         let result = rewrite_resources(html, "OEBPS/ch1.xhtml", |_| None).unwrap();
-        assert!(result.contains(r#"src="missing.jpg""#), "original src preserved: {result}");
+        assert!(
+            result.contains(r#"src="missing.jpg""#),
+            "original src preserved: {result}"
+        );
     }
 }
-

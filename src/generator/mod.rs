@@ -814,11 +814,18 @@ mod tests {
             .metadata(metadata)
             .theme(Theme::Modern)
             .add_chapter("ch1", "text/ch1.xhtml", b"<h1>Title</h1>".to_vec())
-            .add_resource_stream("large_img", "images/large.bin", "application/octet-stream", stream)
+            .add_resource_stream(
+                "large_img",
+                "images/large.bin",
+                "application/octet-stream",
+                stream,
+            )
             .add_landmark("cover", "text/ch1.xhtml", "Cover");
 
         let mut buffer = Cursor::new(Vec::new());
-        builder.generate(&mut buffer).expect("Failed to generate EPUB with stream");
+        builder
+            .generate(&mut buffer)
+            .expect("Failed to generate EPUB with stream");
 
         let data = buffer.into_inner();
         let reader = Cursor::new(data);
@@ -838,7 +845,10 @@ mod tests {
             let mut css_file = archive.by_name("OEBPS/styles/epub-rs-modern.css").unwrap();
             let mut css_content = String::new();
             css_file.read_to_string(&mut css_content).unwrap();
-            assert!(css_content.contains("font-family"), "CSS content: {css_content}");
+            assert!(
+                css_content.contains("font-family"),
+                "CSS content: {css_content}"
+            );
         }
     }
 
@@ -848,25 +858,25 @@ mod tests {
         use crate::model::Metadata;
 
         // 1. Missing title, language, identifier
-        let mut metadata = Metadata::default();
-        metadata.title = None;
-        metadata.language = None;
-        metadata.identifier = None;
+        let metadata = Metadata {
+            title: None,
+            language: None,
+            identifier: None,
+            ..Default::default()
+        };
 
-        let builder = EpubBuilder::new()
-            .metadata(metadata);
+        let builder = EpubBuilder::new().metadata(metadata);
 
         let res = builder.validate();
         match res {
             Err(EpubError::ValidationFailed(errs)) => {
                 let combined = errs.join("\n");
-                assert!(combined.contains("Missing mandatory metadata: <dc:title>"), "{combined}");
+                assert!(
+                    combined.contains("Missing mandatory metadata: <dc:title>"),
+                    "{combined}"
+                );
             }
             other => panic!("Expected ValidationFailed, got {other:?}"),
         }
     }
-
-
 }
-
-
