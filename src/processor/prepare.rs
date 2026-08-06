@@ -590,4 +590,65 @@ mod tests {
         assert!(out.contains("body{color:red}"));
         assert!(!out.contains("<link"));
     }
+
+    #[test]
+    fn prepare_oversize_resource_keeps_original_src() {
+        // When an image exceeds max_inline_bytes, the original src must be preserved,
+        // not replaced with a data URI.
+        let html = r#"<html><body><img src="large.png"/></body></html>"#;
+        let (out, stats) = prepare_chapter_html_with_stats(
+            html,
+            "ch.xhtml",
+            None,
+            &PrepareChapterOptions {
+                inject_cfi: false,
+                inline_resources: true,
+                max_inline_bytes: 512,
+            },
+            |_| Some(LoadedResource::from(vec![0u8; 1024])),
+        )
+        .unwrap();
+        assert_eq!(stats.skipped_oversize, 1);
+        assert_eq!(stats.inlined, 0);
+        // The src attribute must NOT have been rewritten to a data: URI.
+        assert!(
+            !out.contains("data:"),
+            "oversize resource must not be inlined: {out}"
+        );
+        assert!(out.contains("large.png"), "original src must remain: {out}");
+    }
+
+    #[test]
+    fn prepare_multiple_images_partial_oversize() {
+        // Mixed: one small (inlined), one oversize (skipped), one missing.
+        let html = r#"<html><body>
+            <img src="small.png"/>
+            <img src="big.png"/>
+            <img src="absent.png"/>
+        </body></html>"#;
+        let (out, stats) = prepare_chapter_html_with_stats(
+            html,
+            "ch.xhtml",
+            None,
+            &PrepareChapterOptions {
+                inject_cfi: false,
+                inline_resources: true,
+                max_inline_bytes: 20,
+            },
+            |path| match path {
+                "small.png" => Some(LoadedResource::from(b"tiny".to_vec())),
+                "big.png" => Some(LoadedResource::from(vec![0u8; 100])),
+                _ => None,
+            },
+        )
+        .unwrap();
+        assert_eq!(stats.inlined, 1, "exactly one image inlined");
+        assert_eq!(stats.skipped_oversize, 1, "one image skipped oversize");
+        assert_eq!(stats.missing, 1, "one image missing");
+        assert_eq!(stats.considered, 3);
+        // The inlined image should appear as a data URI.
+        assert!(out.contains("data:"), "inlined img must be data URI: {out}");
+        // The oversize image src must remain as-is.
+        assert!(out.contains("big.png"), "oversize src must remain: {out}");
+    }
 }

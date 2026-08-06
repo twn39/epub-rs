@@ -807,4 +807,46 @@ mod tests {
             "original src preserved: {result}"
         );
     }
+
+    #[test]
+    fn test_rewrite_resources_data_uri_passthrough() {
+        // Already-inlined data URIs must not be double-encoded.
+        let data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+        let html = format!(r#"<html><body><img src="{data}" /></body></html>"#);
+        let result = rewrite_resources(&html, "OEBPS/ch1.xhtml", |_| {
+            panic!("resolver must never be called for data: URIs")
+        })
+        .unwrap();
+        assert!(
+            result.contains(data),
+            "data URI must pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_resources_absolute_url_passthrough() {
+        // External URLs must be left as-is without calling the resolver.
+        let html = r#"<html><body><img src="https://cdn.example.com/cover.jpg" /></body></html>"#;
+        let result = rewrite_resources(html, "OEBPS/ch1.xhtml", |_| {
+            panic!("resolver must never be called for http/https URLs")
+        })
+        .unwrap();
+        assert!(result.contains("https://cdn.example.com/cover.jpg"));
+    }
+
+    #[test]
+    fn test_rewrite_resources_empty_src_unchanged() {
+        // An empty src attribute should not crash the rewriter.
+        let html = r#"<html><body><img src="" alt="x"/></body></html>"#;
+        let result = rewrite_resources(html, "OEBPS/ch1.xhtml", |_| None).unwrap();
+        assert!(result.contains("<img"), "img element must remain: {result}");
+    }
+
+    #[test]
+    fn test_rewrite_resources_fragment_only_href_unchanged() {
+        // Fragment-only hrefs (#section) must not be resolved against the provider.
+        let html = r##"<html><body><a href="#chapter-1">Go</a></body></html>"##;
+        let result = rewrite_resources(html, "OEBPS/ch1.xhtml", |_| None).unwrap();
+        assert!(result.contains("href=\"#chapter-1\""), "{result}");
+    }
 }
