@@ -219,3 +219,36 @@ fn cfi_longer_step_sequence_is_greater() {
     let longer = make_path(&[(6, false), (4, false), (2, false)], &[], None);
     assert!(shorter < longer, "/6/4 should be less than /6/4/2");
 }
+
+use epub_rs::generator::EpubBuilder;
+use epub_rs::model::{EpubVersion, Metadata};
+use std::io::Cursor;
+
+proptest! {
+    /// Generator -> Parser roundtrip title preservation for arbitrary non-empty titles.
+    #[test]
+    fn prop_generator_parser_title_roundtrip(title in "[a-zA-Z0-9_-]{1,50}") {
+        let metadata = Metadata {
+            title: Some(title.clone()),
+            identifier: Some("urn:uuid:prop-test-id".to_string()),
+            language: Some("en".to_string()),
+            ..Default::default()
+        };
+
+
+        let builder = EpubBuilder::new()
+            .version(EpubVersion::V30)
+            .metadata(metadata)
+            .add_chapter("ch1", "text/ch1.xhtml", b"<h1>Hello</h1>".to_vec());
+
+        let mut buffer = Cursor::new(Vec::new());
+        builder.generate(&mut buffer).expect("generation should succeed");
+
+        let data = buffer.into_inner();
+        let mut archive = epub_rs::parser::EpubArchive::new(Cursor::new(data)).expect("archive creation should succeed");
+        let book = archive.parse().expect("parsing generated EPUB should succeed");
+
+        prop_assert_eq!(book.metadata.title, Some(title));
+    }
+}
+

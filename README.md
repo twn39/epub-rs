@@ -128,12 +128,20 @@ Built on Cloudflare's `lol_html` and `zip-rs`, `epub-rs` processes DOMs in a sin
 
 *(Benchmarks executed on Apple Silicon M-series via `cargo bench`)*
 
+## Code Coverage
+
+Generate code coverage reports locally using `cargo-llvm-cov`:
+
+```bash
+./scripts/coverage.sh
+```
+
+Or run directly:
+
+```bash
+cargo llvm-cov --all-features --html
+```
+
 ## License
 MIT License
-s**: Build, assemble, and compress a full EPUB to memory.
-* **~30 µs**: Find 50 regex text matches and reverse-map them to exact CFI ranges.
 
-*(Benchmarks executed on Apple Silicon M-series via `cargo bench`)*
-
-## License
-MIT License

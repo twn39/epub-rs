@@ -792,4 +792,81 @@ mod tests {
         // Should be correctly escaped in the raw XML
         assert!(opf_content.contains("<dc:title>Me &amp; You &lt;3</dc:title>"));
     }
+
+    #[test]
+    fn test_add_resource_stream_and_theme() {
+        use crate::generator::Theme;
+        use crate::model::{EpubVersion, Metadata};
+        use std::io::Cursor;
+
+        let metadata = Metadata {
+            title: Some("Stream Test".to_string()),
+            identifier: Some("urn:uuid:stream-123".to_string()),
+            language: Some("en".to_string()),
+            ..Default::default()
+        };
+
+        let large_bytes = vec![0xAB; 1024 * 10]; // 10 KB stream
+        let stream = Box::new(Cursor::new(large_bytes));
+
+        let builder = EpubBuilder::new()
+            .version(EpubVersion::V30)
+            .metadata(metadata)
+            .theme(Theme::Modern)
+            .add_chapter("ch1", "text/ch1.xhtml", b"<h1>Title</h1>".to_vec())
+            .add_resource_stream("large_img", "images/large.bin", "application/octet-stream", stream)
+            .add_landmark("cover", "text/ch1.xhtml", "Cover");
+
+        let mut buffer = Cursor::new(Vec::new());
+        builder.generate(&mut buffer).expect("Failed to generate EPUB with stream");
+
+        let data = buffer.into_inner();
+        let reader = Cursor::new(data);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+
+        // Verify streamed resource exists and has exact bytes
+        {
+            let mut stream_file = archive.by_name("OEBPS/images/large.bin").unwrap();
+            let mut stream_read = Vec::new();
+            stream_file.read_to_end(&mut stream_read).unwrap();
+            assert_eq!(stream_read.len(), 1024 * 10);
+            assert_eq!(stream_read[0], 0xAB);
+        }
+
+        // Verify injected modern theme CSS file
+        {
+            let mut css_file = archive.by_name("OEBPS/styles/epub-rs-modern.css").unwrap();
+            let mut css_content = String::new();
+            css_file.read_to_string(&mut css_content).unwrap();
+            assert!(css_content.contains("font-family"), "CSS content: {css_content}");
+        }
+    }
+
+    #[test]
+    fn test_builder_validation_errors() {
+        use crate::error::EpubError;
+        use crate::model::Metadata;
+
+        // 1. Missing title, language, identifier
+        let mut metadata = Metadata::default();
+        metadata.title = None;
+        metadata.language = None;
+        metadata.identifier = None;
+
+        let builder = EpubBuilder::new()
+            .metadata(metadata);
+
+        let res = builder.validate();
+        match res {
+            Err(EpubError::ValidationFailed(errs)) => {
+                let combined = errs.join("\n");
+                assert!(combined.contains("Missing mandatory metadata: <dc:title>"), "{combined}");
+            }
+            other => panic!("Expected ValidationFailed, got {other:?}"),
+        }
+    }
+
+
 }
+
+

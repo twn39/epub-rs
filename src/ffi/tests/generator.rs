@@ -146,3 +146,19 @@ fn test_generator_consumed_errors() {
     unsafe { epub_free_bytes(bytes_ptr, out_len) };
     unsafe { epub_generator_free(handle) };
 }
+
+#[test]
+fn test_generator_null_pointer_guards() {
+    let handle = epub_generator_new();
+    assert!(!handle.is_null());
+
+    let mut out_len = 0;
+    let null_build = unsafe { epub_generator_build(std::ptr::null_mut(), &mut out_len) };
+    assert!(null_build.is_null());
+
+    let null_build_out = unsafe { epub_generator_build(handle, std::ptr::null_mut()) };
+    assert!(null_build_out.is_null());
+
+    unsafe { epub_generator_free(handle) };
+}
+

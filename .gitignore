@@ -26,3 +26,9 @@ pkg
 node_modules
 .codegraph
 AGENTS.md
+
+# Code coverage artifacts
+*.profraw
+lcov.info
+coverage/
+target/llvm-cov
