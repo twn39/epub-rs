@@ -51,3 +51,61 @@ pub unsafe extern "C" fn epub_decrypt_font(
         Ok(into_raw_bytes(decrypted))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ffi::common::epub_free_bytes;
+    use std::ffi::CString;
+
+    #[test]
+    fn decrypt_font_idpf_roundtrip() {
+        let font = [0u8; 64];
+        let id = CString::new("urn:uuid:12345678-1234-1234-1234-123456789abc").unwrap();
+        let mut out_len: usize = 0;
+        let ptr =
+            unsafe { epub_decrypt_font(font.as_ptr(), font.len(), id.as_ptr(), 1, &mut out_len) };
+        assert!(!ptr.is_null());
+        assert_eq!(out_len, 64);
+        unsafe { epub_free_bytes(ptr, out_len) };
+    }
+
+    #[test]
+    fn decrypt_font_adobe_roundtrip() {
+        let font = [0u8; 64];
+        let id = CString::new("urn:uuid:12345678-1234-1234-1234-123456789abc").unwrap();
+        let mut out_len: usize = 0;
+        let ptr =
+            unsafe { epub_decrypt_font(font.as_ptr(), font.len(), id.as_ptr(), 0, &mut out_len) };
+        assert!(!ptr.is_null());
+        assert_eq!(out_len, 64);
+        unsafe { epub_free_bytes(ptr, out_len) };
+    }
+
+    #[test]
+    fn decrypt_font_null_data_returns_null() {
+        let id = CString::new("urn:uuid:test").unwrap();
+        let mut out_len: usize = 0;
+        let ptr = unsafe { epub_decrypt_font(ptr::null(), 64, id.as_ptr(), 1, &mut out_len) };
+        assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn decrypt_font_null_identifier_returns_null() {
+        let font = [0u8; 64];
+        let mut out_len: usize = 0;
+        let ptr =
+            unsafe { epub_decrypt_font(font.as_ptr(), font.len(), ptr::null(), 1, &mut out_len) };
+        assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn decrypt_font_null_out_len_returns_null() {
+        let font = [0u8; 64];
+        let id = CString::new("urn:uuid:test").unwrap();
+        let ptr = unsafe {
+            epub_decrypt_font(font.as_ptr(), font.len(), id.as_ptr(), 1, ptr::null_mut())
+        };
+        assert!(ptr.is_null());
+    }
+}

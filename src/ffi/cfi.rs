@@ -102,3 +102,66 @@ pub unsafe extern "C" fn epub_generate_cfi_range(
         Ok(into_c_string(range))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ffi::common::epub_free_string;
+    use std::ffi::CString;
+
+    #[test]
+    fn resolve_cfi_valid() {
+        let cfi = CString::new("epubcfi(/6/4[ch1]!/4/2/1:0)").unwrap();
+        let ptr = unsafe { epub_resolve_cfi(cfi.as_ptr()) };
+        assert!(!ptr.is_null());
+        let json = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy();
+        assert!(json.contains("spine_index"), "unexpected: {json}");
+        unsafe { epub_free_string(ptr) };
+    }
+
+    #[test]
+    fn resolve_cfi_null_pointer_returns_null() {
+        let ptr = unsafe { epub_resolve_cfi(ptr::null()) };
+        assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn compare_cfi_ordering() {
+        let a = CString::new("epubcfi(/6/4!/4/2:10)").unwrap();
+        let b = CString::new("epubcfi(/6/4!/4/2:20)").unwrap();
+        assert_eq!(unsafe { epub_compare_cfi(a.as_ptr(), b.as_ptr()) }, -1);
+        assert_eq!(unsafe { epub_compare_cfi(b.as_ptr(), a.as_ptr()) }, 1);
+        assert_eq!(unsafe { epub_compare_cfi(a.as_ptr(), a.as_ptr()) }, 0);
+    }
+
+    #[test]
+    fn compare_cfi_null_returns_min() {
+        let a = CString::new("epubcfi(/6/4!/4/2:10)").unwrap();
+        assert_eq!(
+            unsafe { epub_compare_cfi(ptr::null(), a.as_ptr()) },
+            i32::MIN
+        );
+        assert_eq!(
+            unsafe { epub_compare_cfi(a.as_ptr(), ptr::null()) },
+            i32::MIN
+        );
+    }
+
+    #[test]
+    fn generate_cfi_range_valid() {
+        let s = CString::new("epubcfi(/6/4!/4/2:10)").unwrap();
+        let e = CString::new("epubcfi(/6/4!/4/2:50)").unwrap();
+        let ptr = unsafe { epub_generate_cfi_range(s.as_ptr(), e.as_ptr()) };
+        assert!(!ptr.is_null());
+        let range = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy();
+        assert!(range.contains("epubcfi"), "unexpected: {range}");
+        unsafe { epub_free_string(ptr) };
+    }
+
+    #[test]
+    fn generate_cfi_range_null_returns_null() {
+        let s = CString::new("epubcfi(/6/4!/4/2:10)").unwrap();
+        assert!(unsafe { epub_generate_cfi_range(ptr::null(), s.as_ptr()) }.is_null());
+        assert!(unsafe { epub_generate_cfi_range(s.as_ptr(), ptr::null()) }.is_null());
+    }
+}

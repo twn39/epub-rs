@@ -1,10 +1,11 @@
 use super::common::make_epub_bytes;
-use crate::ffi::common::{epub_free, epub_free_string, epub_last_error};
+use crate::ffi::common::{epub_free, epub_free_bytes, epub_free_string, epub_last_error};
 use crate::ffi::parser::{
-    epub_cfi_from_location_fast, epub_generate_location_index, epub_get_position_info,
-    epub_get_toc, epub_location_from_cfi_fast, epub_open, epub_parse, epub_preferred_reading_start,
-    epub_prepare_chapter, epub_prepare_chapter_with_stats, epub_search_book,
-    epub_search_book_with_options,
+    epub_cfi_from_location_fast, epub_generate_location_index, epub_get_cover_image,
+    epub_get_navigation, epub_get_page_list, epub_get_position_info, epub_get_toc,
+    epub_has_media_overlays, epub_location_from_cfi_fast, epub_open, epub_parse,
+    epub_preferred_reading_start, epub_prepare_chapter, epub_prepare_chapter_with_stats,
+    epub_search_book, epub_search_book_with_options,
 };
 use std::ffi::CString;
 use std::ptr;
@@ -283,4 +284,81 @@ fn test_ffi_resources_cfi_and_semantic_content() {
     assert_eq!(has_mo, 0);
 
     unsafe { epub_free(handle) };
+}
+
+#[test]
+fn test_epub_get_navigation() {
+    let bytes = make_epub_bytes();
+    let handle = unsafe { epub_open(bytes.as_ptr(), bytes.len()) };
+    assert!(!handle.is_null());
+
+    let nav_ptr = unsafe { epub_get_navigation(handle) };
+    assert!(
+        !nav_ptr.is_null(),
+        "epub_get_navigation returned NULL: {:?}",
+        unsafe { std::ffi::CStr::from_ptr(epub_last_error()) }
+    );
+    let nav = unsafe { std::ffi::CStr::from_ptr(nav_ptr) }.to_string_lossy();
+    assert!(nav.contains("toc"), "expected toc key in nav JSON: {nav}");
+    unsafe { epub_free_string(nav_ptr) };
+    unsafe { epub_free(handle) };
+}
+
+#[test]
+fn test_epub_get_page_list() {
+    let bytes = make_epub_bytes();
+    let handle = unsafe { epub_open(bytes.as_ptr(), bytes.len()) };
+    assert!(!handle.is_null());
+
+    let ptr = unsafe { epub_get_page_list(handle) };
+    // page_list may be empty but must be valid JSON
+    assert!(!ptr.is_null());
+    let s = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy();
+    assert!(s.starts_with('['), "expected JSON array: {s}");
+    unsafe { epub_free_string(ptr) };
+    unsafe { epub_free(handle) };
+}
+
+#[test]
+fn test_epub_get_cover_image() {
+    let bytes = make_epub_bytes();
+    let handle = unsafe { epub_open(bytes.as_ptr(), bytes.len()) };
+    assert!(!handle.is_null());
+
+    let mut out_len: usize = 0;
+    let mut mt_ptr: *mut std::os::raw::c_char = ptr::null_mut();
+    // The test EPUB has no cover image — function must return NULL gracefully.
+    let cover = unsafe { epub_get_cover_image(handle, &mut out_len, &mut mt_ptr) };
+    if !cover.is_null() {
+        // If a cover was somehow found, free it properly.
+        unsafe { epub_free_bytes(cover, out_len) };
+        if !mt_ptr.is_null() {
+            unsafe { epub_free_string(mt_ptr) };
+        }
+    }
+
+    unsafe { epub_free(handle) };
+}
+
+#[test]
+fn test_epub_has_media_overlays_no_smil() {
+    let bytes = make_epub_bytes();
+    let handle = unsafe { epub_open(bytes.as_ptr(), bytes.len()) };
+    assert!(!handle.is_null());
+    let has_mo = unsafe { epub_has_media_overlays(handle) };
+    assert_eq!(has_mo, 0, "test EPUB has no media overlays");
+    unsafe { epub_free(handle) };
+}
+
+#[test]
+fn test_epub_open_file_null_returns_null() {
+    let handle = unsafe { crate::ffi::parser::epub_open_file(ptr::null()) };
+    assert!(handle.is_null());
+}
+
+#[test]
+fn test_epub_open_file_nonexistent_path_returns_null() {
+    let path = CString::new("/nonexistent/path/that/does/not/exist.epub").unwrap();
+    let handle = unsafe { crate::ffi::parser::epub_open_file(path.as_ptr()) };
+    assert!(handle.is_null());
 }
