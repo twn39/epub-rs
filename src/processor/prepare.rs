@@ -284,7 +284,10 @@ where
     }
 
     let uri_map = Arc::new(uri_map);
-    html = rewrite_resources(&html, chapter_path, {
+    // Do not fail the whole prepare if lol-html cannot rewrite (malformed XHTML).
+    // Host readers (Latte) treat a prepare `Err` as a Swift packaging fallback;
+    // keeping CFI/raw HTML is a better degradation than leaving the engine path.
+    html = match rewrite_resources(&html, chapter_path, {
         let uri_map = Arc::clone(&uri_map);
         move |abs_path| {
             if is_external_url(abs_path) || abs_path.starts_with('#') || abs_path.is_empty() {
@@ -292,7 +295,10 @@ where
             }
             uri_map.get(abs_path).cloned()
         }
-    })?;
+    }) {
+        Ok(rewritten) => rewritten,
+        Err(_) => html,
+    };
 
     // Host readers (Latte) strip `<head>` and only keep body + `<style>` blocks.
     // Convert inlined stylesheet `<link href="data:text/css…">` into `<style>` so
@@ -650,5 +656,34 @@ mod tests {
         assert!(out.contains("data:"), "inlined img must be data URI: {out}");
         // The oversize image src must remain as-is.
         assert!(out.contains("big.png"), "oversize src must remain: {out}");
+    }
+
+    #[test]
+    fn prepare_succeeds_on_unquoted_attributes() {
+        // Unquoted attrs used to surface as HtmlParse and force host Swift fallback.
+        let html = r#"<html><body><img src=a.png alt=x><p>ok</p></body></html>"#;
+        let out = prepare_chapter_html(
+            html,
+            "ch1.xhtml",
+            None,
+            &PrepareChapterOptions {
+                inject_cfi: false,
+                inline_resources: true,
+                max_inline_bytes: 1024,
+            },
+            |path| {
+                if path == "a.png" {
+                    Some(LoadedResource {
+                        bytes: b"\x89PNG".to_vec(),
+                        media_type: Some("image/png".into()),
+                    })
+                } else {
+                    None
+                }
+            },
+        );
+        assert!(out.is_ok(), "prepare must not fail: {out:?}");
+        let html = out.unwrap();
+        assert!(html.contains("ok"));
     }
 }
